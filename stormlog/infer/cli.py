@@ -33,6 +33,7 @@ from .arrivals import (
 )
 from .cache_state import CACHE_STATES, COLD, RESET_RETRY_SECONDS, UNSPECIFIED
 from .config import ProfileConfig, parse_float_list, parse_int_list, resolve_endpoint
+from .diagnosis_cli import add_diagnose_parser, cmd_diagnose
 from .errors import InferInputError, InferUsageError
 from .export_collector import CollectorExport
 from .export_config import (
@@ -104,6 +105,8 @@ def _run_command(
         return cmd_import_execution(args)
     if args.infer_command == "watch":
         return cmd_watch(args, restore_signals=restore_signals)
+    if args.infer_command == "diagnose":
+        return cmd_diagnose(args)
     parser.error(f"Unsupported infer command: {args.infer_command}")
 
 
@@ -447,6 +450,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
     add_watch_parser(subparsers)
+    add_diagnose_parser(subparsers)
     return parser
 
 
