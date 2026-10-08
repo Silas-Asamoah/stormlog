@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 
 from stormlog.infer import diagnosis_loop
+from stormlog.infer.diagnosis_inputs import read_input
+from stormlog.infer.diagnosis_join import join
 from stormlog.infer.diagnosis_loop import (
     ATTRIBUTION_HOST,
     ATTRIBUTION_HOST_OR_GPU,
@@ -32,11 +34,13 @@ from stormlog.infer.diagnosis_loop import (
     stalls_over_limit,
     steps_from_raw,
 )
+from stormlog.infer.diagnosis_steps import loop_steps
 from stormlog.infer.diagnosis_thresholds import (
     LOOP_BASELINE_WINDOW_NS,
     LOOP_STALL_FACTOR,
 )
 from stormlog.infer.vllm_hook.writer import EpochWriter, WriterLimits
+from tests.diagnosis_scenarios import Engine, SimRequest, build_run
 from tests.vllm_execution_helpers import (
     SECOND,
     WALL_OFFSET,
@@ -918,3 +922,35 @@ def test_stalls_over_limit_are_what_the_trigger_would_flag() -> None:
     assert stall.locus == LOCUS_BETWEEN_STEPS and stall.duration_ns >= 200 * MS
     assert limit == pytest.approx(50 * MS)
     assert stalls_over_limit(steps_from_raw(_loop(60))) == []
+
+
+@pytest.mark.parametrize("resumable", [False, True])
+def test_the_offline_steps_find_the_stalls_the_raw_log_does(
+    tmp_path: Path, resumable: bool
+) -> None:
+    """R11: the diagnoser's steps, imported, and the trigger's, raw, give the
+    same stalls, with streaming-input requests too: mid-turn, as here, they
+    are ready in both."""
+    requests = [
+        SimRequest(f"r{n}", SECOND + n * 400 * MS, output=60, resumable=resumable)
+        for n in range(40)
+    ]
+    # The step after the stall admits a request, a size fewer than 20 earlier
+    # steps reached, so only the 500 ms floor can judge it.
+    engine = Engine(max_num_seqs=8, stall=(5 * SECOND, 600 * MS))
+    artifact = build_run(tmp_path, requests, engine)
+    raw = [
+        json.loads(line)
+        for path in sorted((tmp_path / "hook").rglob("engine-*/*.jsonl"))
+        for line in path.read_text().splitlines()
+    ]
+    view = join(read_input(artifact))
+    (producer,) = {execution.producer for execution in view.executions.values()}
+
+    online = stalls_over_limit(steps_from_raw(raw))
+    offline = stalls_over_limit(loop_steps(view, producer))
+
+    assert [(s.locus, s.duration_ns) for s, _ in offline] == [
+        (s.locus, s.duration_ns) for s, _ in online
+    ]
+    assert online
