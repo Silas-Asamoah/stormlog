@@ -1100,13 +1100,16 @@ def test_a_run_without_pulses_signalled_mid_run_is_published(
     assert [injection.episode_type for injection in attempted] == ["N", "N"]
 
 
-def _victims_of(label: str) -> list[psutil.Process]:
-    found = []
-    for process in psutil.process_iter(["cmdline"]):
-        command = " ".join(process.info["cmdline"] or [])
-        if "examples.qualification.victim" in command and label in command:
-            found.append(process)
-    return found
+def _victim_of(harness: subprocess.Popen[bytes]) -> psutil.Process:
+    """The harness's own victim process, from its process tree: found by
+    label across the machine, a victim of the same case run elsewhere (the
+    other interpreter's suite, at once) read as one left behind."""
+    (victim,) = [
+        child
+        for child in psutil.Process(harness.pid).children(recursive=True)
+        if "examples.qualification.victim" in " ".join(child.cmdline())
+    ]
+    return victim
 
 
 @pytest.mark.parametrize(
@@ -1136,6 +1139,7 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
     (tmp_path / "plan.json").write_text(json.dumps(plan))
     label = f"q221-{0xDD00 + 64 * first + second:016x}"  # cases may run at once
     engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
+    victim: psutil.Process | None = None
     try:
         with FakeEngineProcess(engine) as server:
             # fmt: off
@@ -1159,6 +1163,7 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
             assert wait_until(
                 lambda: any(markers.glob("*measured_started*")), timeout=60
             )
+            victim = _victim_of(harness)
             time.sleep(7)  # inside the first episode
             # A held engine: the victim's requests sent from now on can't
             # finish (about ten in the next second), so its drain lasts as
@@ -1170,13 +1175,16 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
             assert harness.poll() is None  # still waiting for the victim
             os.kill(harness.pid, second)
             code = harness.wait(timeout=120)
-            left = [process.pid for process in _victims_of(label)]
+            # close-221-delta, N8: the harness's own victim, by its pid and
+            # start time; matched by label across the machine, the same
+            # case's victim in another suite running at once was "left".
+            left = victim.is_running()
             post(f"{server.base_url}/_fault/resume?target=engine")
     finally:
-        for process in _victims_of(label):
-            process.kill()
+        if victim is not None and victim.is_running():
+            victim.kill()
     assert code == 128 + first  # it exits as the first signal would have
-    assert left == []
+    assert not left
     run = tmp_path / "runs" / label
     assert not partial.exists() and verify(run) == []
     assert load_run(run / "truth" / "run.json").protocol_failure == "interrupted"
