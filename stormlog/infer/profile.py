@@ -525,7 +525,9 @@ class InferenceProfiler:
         if self.export is None:
             return
         error = sys.exc_info()[1]
-        if completed or error is None:
+        if self._ctrl_c.pressed:  # the press may have been lost, not raised
+            outcome, error_type = "interrupted", None
+        elif completed or error is None:
             outcome, error_type = "completed", None
         elif isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
             outcome, error_type = "interrupted", None
