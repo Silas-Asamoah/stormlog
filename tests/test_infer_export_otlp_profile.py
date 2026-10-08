@@ -145,6 +145,29 @@ def test_a_span_file_in_a_directory_not_yet_made_is_written(tmp_path: Path) -> N
     assert capability["metadata"]["summary"]["spans"]["exported"] == len(spans) > 0
 
 
+def test_a_ctrl_c_lost_after_the_cases_marks_the_capture_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A press whose KeyboardInterrupt was lost once the cases had finished
+    # still ends the run as interrupted, so the capture span says so too.
+    profiler = InferenceProfiler(
+        _config(
+            "http://127.0.0.1:9/v1",
+            tmp_path / "infer.jsonl",
+            ExportConfig(otlp_file=tmp_path / "spans.jsonl"),
+        )
+    )
+    assert profiler.export is not None
+    offered: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        profiler.export, "offer_capture", lambda **kw: offered.append(kw)
+    )
+    profiler._ctrl_c.pressed = True
+    profiler._offer_capture_span(completed=True)
+    assert offered[0]["outcome"] == "interrupted"
+    assert offered[0]["error_type"] is None
+
+
 def _closed_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
