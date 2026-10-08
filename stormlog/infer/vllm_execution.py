@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from itertools import count
 from typing import Any, Iterator
@@ -146,6 +147,7 @@ class Execution:
     terminal: dict[str, Any] | None = None
     terminal_seq: int | None = None
     enqueued: dict[str, Any] | None = None  # entering the scheduler's queue
+    enqueued_seq: int | None = None
     reused: bool = False
     seen_final: bool = False
     memberships: list[Member] = field(default_factory=list)
@@ -173,6 +175,9 @@ class Iteration:
     # Every scheduled member's ownership, withheld ones included.
     ownerships: list[str] = field(default_factory=list)
     withheld_members: int = 0
+    # The raw record that made the step final: its completion, the later
+    # completion that superseded it, or the last one read of an ended epoch.
+    final_seq: int | None = None
 
     @property
     def number(self) -> int | None:
@@ -419,6 +424,7 @@ class _EpochReducer:
         )
         if execution.enqueued is None:
             execution.enqueued = record.data
+            execution.enqueued_seq = record.seq
 
     # ------------------------------------------------------------ selection
     def _split_iterations(self) -> tuple[list[Iteration], list[Iteration]]:
@@ -426,30 +432,24 @@ class _EpochReducer:
         # Only a known end finalizes pending steps: an epoch whose liveness
         # could not be judged keeps them for a later import.
         ended = self.epoch.state in (STATE_ENDED, STATE_GONE)
-        latest_completed = self._latest_completed_number()
+        superseded = _Supersession(self.epoch.records)
         final: list[Iteration] = []
         pending: list[Iteration] = []
         for item in sorted(self.iterations.values(), key=lambda i: i.scheduled.seq):
+            at = superseded.at(item.number)
             if item.completed is not None:
-                final.append(item)
+                item.final_seq = item.completed.seq
             elif ended:
                 _mark_incomplete(item, REASON_EPOCH_ENDED)
-                final.append(item)
-            elif _superseded(item, latest_completed):
+                item.final_seq = self.epoch.last_seq if at is None else at
+            elif at is not None:
                 _mark_incomplete(item, REASON_COMPLETED_MISSING)
-                final.append(item)
+                item.final_seq = at
             else:
                 pending.append(item)
+                continue
+            final.append(item)
         return final, pending
-
-    def _latest_completed_number(self) -> int | None:
-        numbers = [
-            _digits(record.data.get("iteration"))
-            for record in self.epoch.records
-            if record.kind == "completed"
-        ]
-        known = [number for number in numbers if number is not None]
-        return max(known) if known else None
 
     def _keep(self, item: Iteration) -> bool:
         ref = EntityRef(self.producer, item.iteration)
@@ -580,11 +580,14 @@ class _EpochReducer:
         wall, mono, wall_after = bracket
         gap = wall_after - wall
         goodbye = self.epoch.goodbye or {}
+        # Its validity ends at the goodbye, when one was read.
+        sources = [self.hello.get("seq"), goodbye.get("seq")]
         return ClockAlignmentEvent(
             context=self._context(),
             event_id=event_id,
             metadata={
                 "epoch": self.epoch.epoch,
+                "source_seq_max": _max_seq(sources),
                 "gap_ns": gap,
                 "ended": bool(goodbye),
                 "alignment_basis": ALIGNMENT_BASIS,
@@ -664,6 +667,14 @@ class _EpochReducer:
             # The admission's identity: a later import that reads this alias
             # again (behind a mark another request held back) reuses the attempt.
             "epoch": self.epoch.epoch,
+            # Written with its first final step: the raw records it needed.
+            "source_seq_max": _max_seq(
+                [
+                    execution.alias_seq,
+                    execution.enqueued_seq,
+                    min(m.iteration.final_seq or 0 for m in execution.memberships),
+                ]
+            ),
             "admission_seq": execution.alias_seq,
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
@@ -858,15 +869,28 @@ def _mark_incomplete(item: Iteration, reason: str) -> None:
     item.reason = reason
 
 
-def _superseded(item: Iteration, latest_completed: int | None) -> bool:
+class _Supersession:
     """vLLM processes outputs in schedule order, so a step whose output is
-    missing while a later step's arrived will never see its own."""
-    number = item.number
-    return (
-        number is not None
-        and latest_completed is not None
-        and number < latest_completed
-    )
+    missing while a later step's arrived will never see its own: it became
+    final at the first completion, in log order, of a later step."""
+
+    def __init__(self, records: list[RawRecord]) -> None:
+        self.seqs: list[int] = []
+        self.highest: list[int] = []  # the highest step completed by each seq
+        for record in records:
+            number = _digits(record.data.get("iteration"))
+            if record.kind != "completed" or number is None:
+                continue
+            self.seqs.append(record.seq)
+            self.highest.append(
+                max(number, self.highest[-1] if self.highest else number)
+            )
+
+    def at(self, number: int | None) -> int | None:
+        if number is None:
+            return None
+        index = bisect_right(self.highest, number)
+        return self.seqs[index] if index < len(self.seqs) else None
 
 
 def _clock_bracket(clock: Any) -> tuple[int, int, int] | None:
@@ -939,6 +963,7 @@ def _iteration_metadata(
         "state": item.state,
         "incomplete_reason": item.reason,
         "epoch": item.scheduled.epoch,
+        "source_seq_max": item.final_seq,
         "start_wall_ns": data.get("start_wall_ns"),
         "schedule_end_wall_ns": data.get("end_wall_ns"),
         "schedule_end_mono_ns": data.get("end_mono_ns"),
@@ -961,7 +986,12 @@ def _iteration_metadata(
 def _membership_metadata(member: Member) -> dict[str, Any]:
     data, outcome = member.data, member.outcome or {}
     kept = outcome.get("outcome") == "kept"
+    sources = [member.iteration.final_seq]
+    if member.finish is not None:
+        sources.append(member.execution.terminal_seq)
     metadata: dict[str, Any] = {
+        "epoch": member.iteration.scheduled.epoch,
+        "source_seq_max": _max_seq(sources),
         "ownership": member.execution.binding.ownership,
         "state": member.iteration.state,
         "sighting": data.get("sighting"),
@@ -1005,6 +1035,13 @@ def _digits(value: Any) -> int | None:
 
 def _integer(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _max_seq(seqs: list[Any]) -> int | None:
+    """The latest raw record a canonical record was derived from: an import
+    whose read reached it could have written the record."""
+    known = [seq for seq in seqs if _integer(seq) is not None]
+    return max(known) if known else None
 
 
 def _flag(value: Any) -> bool | None:

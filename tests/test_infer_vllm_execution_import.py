@@ -198,7 +198,8 @@ def _newer_hook(record: dict[str, Any]) -> dict[str, Any]:
     return newer
 
 
-# What the import reads from a later hook's records, on a request's metadata.
+# What the import takes from a later hook's records: the request's enqueue,
+# and each record's source sequence, which the inserted records shift.
 _LATER_REQUEST_FIELDS = (
     "enqueued_mono_ns",
     "enqueued_wall_ns",
@@ -208,12 +209,13 @@ _LATER_REQUEST_FIELDS = (
 
 
 def _without_later_evidence(record: dict[str, Any]) -> dict[str, Any]:
-    if record["event_type"] != "infer.request" or "metadata" not in record:
-        return record  # not the import's: the client's own v1 request record
+    if "metadata" not in record:
+        return record  # not the import's: the client's own v1 records
+    dropped = ["source_seq_max"]
+    if record["event_type"] == "infer.request":
+        dropped.extend(_LATER_REQUEST_FIELDS)
     metadata = {
-        key: value
-        for key, value in record["metadata"].items()
-        if key not in _LATER_REQUEST_FIELDS
+        key: value for key, value in record["metadata"].items() if key not in dropped
     }
     return {**record, "metadata": metadata}
 
