@@ -419,6 +419,18 @@ from all the heartbeats it read, including ones an earlier import consumed,
 under `basis` `heartbeat_counters/1`. A kind the hello observes is known
 not to have happened in an interval only when a span covers it.
 
+**Liveness.** Beside it, a `liveness` block says when the hook's writer was
+heard from, under `basis` `heartbeat_gaps/1`: the number of heartbeats, the
+`first` and `last` (each a `seq`, `mono_ns` and `wall_ns`), the longest
+interval between two (`max_interval_ns`), and the `gaps` between consecutive
+heartbeats more than `gap_ns` apart, each from the heartbeat before to the
+heartbeat after. The writer beats once a second, but under load its thread
+slips: on real vLLM 0.30.0 runs the longest interval was 2.3 s with nothing
+lost, so `gap_ns` is 5 s. An interval between the first and the last that no
+gap overlaps had a writer beating throughout; whether anything was lost there
+is the coverage's to say. It is computed from every heartbeat read, like the
+coverage.
+
 **Records.** One `infer.iteration` per step on the engine's monotonic clock
 (`<host>/<boot id>/monotonic_ns`, `clock_kind` `monotonic`), whose
 `elapsed_ns` is the scheduler residence from `schedule()` to the processed
