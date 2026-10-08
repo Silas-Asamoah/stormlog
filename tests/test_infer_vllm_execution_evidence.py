@@ -264,7 +264,9 @@ def test_each_record_names_the_last_raw_record_it_needed(tmp_path: Path) -> None
     (request,) = _of(result, RequestEvent)
     assert request.metadata["source_seq_max"] == 4  # its first final step
     (alignment,) = _of(result, ClockAlignmentEvent)
-    assert alignment.metadata["source_seq_max"] == 12  # valid until the goodbye
+    # Known from the hello; valid until the goodbye, which is dated apart.
+    assert alignment.metadata["source_seq_max"] == 0
+    assert alignment.metadata["valid_to_source_seq"] == 12
 
 
 def test_a_finish_read_after_its_step_raises_the_membership_s_source(
@@ -286,6 +288,7 @@ def test_a_finish_read_after_its_step_raises_the_membership_s_source(
     assert membership.metadata["source_seq_max"] == 4
     (alignment,) = _of(result, ClockAlignmentEvent)
     assert alignment.metadata["source_seq_max"] == 0  # the hello alone
+    assert alignment.metadata["valid_to_source_seq"] is None
 
 
 # ---------------------------------------------------------------- coverage

@@ -631,14 +631,15 @@ class _EpochReducer:
         wall, mono, wall_after = bracket
         gap = wall_after - wall
         goodbye = self.epoch.goodbye or {}
-        # Its validity ends at the goodbye, when one was read.
-        sources = [self.hello.get("seq"), goodbye.get("seq")]
         return ClockAlignmentEvent(
             context=self._context(),
             event_id=event_id,
             metadata={
                 "epoch": self.epoch.epoch,
-                "source_seq_max": _max_seq(sources),
+                # The offset needs the hello alone; its validity ends at the
+                # goodbye, when one was read, which is dated apart.
+                "source_seq_max": _integer(self.hello.get("seq")),
+                "valid_to_source_seq": _integer(goodbye.get("seq")),
                 "gap_ns": gap,
                 "ended": bool(goodbye),
                 "alignment_basis": ALIGNMENT_BASIS,
