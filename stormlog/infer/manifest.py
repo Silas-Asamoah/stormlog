@@ -308,8 +308,15 @@ def last_measured_end_ns(records: Iterable[Mapping[str, Any]]) -> int | None:
     return max(ends, default=None)
 
 
-def attach_manifest(artifact: Path, description_path: Path) -> dict[str, Any]:
-    """Append ``description_path`` to ``artifact`` as its ``after`` manifest."""
+def attach_manifest(
+    artifact: Path, description_path: Path, *, run_id: str | None = None
+) -> dict[str, Any]:
+    """Append ``description_path`` to ``artifact`` as its ``after`` manifest.
+
+    ``run_id`` is the run the description must be of: by default the
+    artifact's own. The experiment runner, which names its descriptions and
+    the ``before`` manifest it attaches after its own run, passes that name.
+    """
     description = load_description(description_path)
     records = _read_records(artifact)
     identity = next(
@@ -318,7 +325,9 @@ def attach_manifest(artifact: Path, description_path: Path) -> dict[str, Any]:
     if identity is None:
         raise InferInputError(f"{artifact}: no infer.artifact record")
     context = identity.get("context") or {}
-    run_id, session_id = str(context.get("run_id")), str(context.get("session_id"))
+    session_id = str(context.get("session_id"))
+    if run_id is None:
+        run_id = str(context.get("run_id"))
     refusals = after_refusals(records, description, run_id=run_id)
     if refusals:
         raise InferInputError(
