@@ -588,6 +588,27 @@ def test_a_thin_baseline_never_judges_a_stall() -> None:
     assert not engine_stalled(ctx, 101 * S)
 
 
+def test_the_front_end_chunk_gaps_are_dose_checked_too() -> None:
+    # close-221-delta, H4: the chunk-gap series' dose check was unpinned:
+    # mutants that skipped it, or measured the chunk baseline without the
+    # cap, survived. Healthy 20 ms steps, but the victim's chunks come 5 ms
+    # apart with ten 200 ms gaps in the baseline (0.11%, under the p99):
+    # 2.1 per hold, so F4b's front end can't be judged by cadence. F4a,
+    # which reads the steps alone, can.
+    from stormlog.infer.qualify.recovery import recovery_blocked
+
+    steps = [tick * 20 * MS for tick in range(200 * 50)]
+    chunks = [
+        (index * 5 * MS, 0.2 if index % 900 == 450 else 0.005)
+        for index in range(1, 200 * 200)
+    ]
+    ctx = context(Signals(in_flight=ALWAYS, step_starts=steps, chunk_gaps=chunks))
+    assert ctx.baseline.chunks.too_long_count == 10
+    (reason,) = recovery_blocked("F4b", ctx)
+    assert reason.startswith("dose_check_failed: 10 of ") and "chunk gaps" in reason
+    assert recovery_blocked("F4a", ctx) == ()
+
+
 def test_a_thin_baseline_says_why_recovery_can_never_hold() -> None:
     # fable-design's A2 delta 2, N0: a run whose baseline was too thin
     # timed out with nothing in its truth but recovery_timeout. The rule
@@ -882,6 +903,16 @@ def test_a_long_gap_is_one_over_twice_the_p99() -> None:
     stats = GapStats.of([0.010] * 995 + [0.015] * 3 + [0.030] * 2)
     assert stats.p99 == pytest.approx(0.010)
     assert stats.long_count == 2
+
+
+def test_a_gap_exactly_as_long_as_the_cap_is_not_too_long() -> None:
+    # close-221-delta: whether a gap exactly at never_longer counts as too
+    # long was unpinned (">=" survived). Ten 60 ms gaps among 1,000: twice
+    # the p99.9 is past the 60 ms cap, so the cap is the limit, and a gap
+    # as long as it is tolerated; only a longer one is too long.
+    stats = GapStats.of([0.010] * 990 + [0.060] * 10, 2.0, 0.06)
+    assert stats.too_long_count == 0
+    assert GapStats.of([0.010] * 990 + [0.0601] * 10, 2.0, 0.06).too_long_count == 10
 
 
 def test_a_hold_needs_its_minimum_samples() -> None:
