@@ -366,6 +366,11 @@ class OtlpExport:
     def close(self, deadline: float) -> None:
         self.exporter.close(deadline)
 
+    @property
+    def closed(self) -> bool:
+        """Whether the exporter's close finished every step."""
+        return self.exporter.closed
+
     # ------------------------------------------------------------- reading
     def accounting(self) -> dict[str, Any]:
         accounting = self.exporter.accounting()

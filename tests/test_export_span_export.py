@@ -282,6 +282,78 @@ def test_close_cuts_a_stuck_send_and_counts_it_unknown() -> None:
     assert exporter.summary()["flush_seconds"] < 1.5
 
 
+def _interrupt_the_wait(
+    exporter: SpanExporter[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Ctrl+C that lands while close() first waits for the worker."""
+    worker = exporter._worker
+    assert worker is not None
+    real_join = worker.join
+    presses = [KeyboardInterrupt()]
+
+    def interrupted(timeout: float | None = None) -> None:
+        if presses:
+            raise presses.pop()
+        real_join(timeout)
+
+    monkeypatch.setattr(worker, "join", interrupted)
+
+
+def test_an_interrupt_in_the_close_s_wait_still_finishes_the_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The interrupt ends the wait, not the close: the send in flight is
+    # aborted, the queue drained, the ledger frozen and the sink closed.
+    with running([Reply(action=SILENT)]) as collector:
+        exporter = _exporter(collector.url, attempt_seconds=30.0)
+        _offer(exporter, 5)
+        exporter.start()
+        assert _wait(lambda: bool(collector.received))
+        _offer(exporter, 2, start=5)
+        _interrupt_the_wait(exporter, monkeypatch)
+        with pytest.raises(KeyboardInterrupt):
+            exporter.close(5.0)
+        accounting = exporter.accounting()
+        assert accounting["frozen"] and _balanced(accounting)
+        assert accounting["queued"] == accounting["in_flight"] == 0
+        assert accounting["unknown"] == {"shutdown_in_flight": 5}
+        assert accounting["dropped"] == {"shutdown": 2}
+        exporter.close(5.0)  # already closed: nothing left to do
+
+
+def test_a_close_cut_short_is_finished_by_the_next_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A second Ctrl+C inside the close's own steps: the next close, the
+    # run's fallback, finishes them instead of returning at once.
+    with running([Reply(action=SILENT)]) as collector:
+        exporter = _exporter(collector.url, attempt_seconds=30.0)
+        _offer(exporter, 5)
+        exporter.start()
+        assert _wait(lambda: bool(collector.received))
+        _interrupt_the_wait(exporter, monkeypatch)
+        real_drain = exporter.queue.drain
+        calls = 0
+
+        def drain_interrupted_once() -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise KeyboardInterrupt
+            return real_drain()
+
+        monkeypatch.setattr(exporter.queue, "drain", drain_interrupted_once)
+        with pytest.raises(KeyboardInterrupt):
+            exporter.close(5.0)
+        assert not exporter.accounting()["frozen"]
+        finished = exporter.closed
+        assert not finished
+        exporter.close(0.5)
+        accounting = exporter.accounting()
+        assert exporter.closed and accounting["frozen"] and _balanced(accounting)
+        assert accounting["in_flight"] == 0
+
+
 def _closed_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

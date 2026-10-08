@@ -417,7 +417,8 @@ class ExportPipeline:
         The steps run in order, each once across calls. An interrupt, such as
         a Ctrl+C, inside one ends that step; the steps after it then run
         without waiting, and the interrupt propagates once they are done. A
-        later close finishes any step an interrupt kept from starting.
+        later close finishes any step an interrupt kept from starting, and
+        the span exporter's close if an interrupt cut it short.
         """
         with self._lock:
             self._closed = True
@@ -432,9 +433,15 @@ class ExportPipeline:
             except BaseException as exc:  # KeyboardInterrupt, SystemExit
                 interrupt = interrupt or exc
             finally:
-                self._close_done.add(step)
+                if self._step_finished(step):
+                    self._close_done.add(step)
         if interrupt is not None:
             raise interrupt
+
+    def _step_finished(self, step: str) -> bool:
+        # The span exporter's close can be cut short inside its own steps;
+        # it stays pending then, and the next close finishes it.
+        return step != "_close_otlp" or self.otlp is None or self.otlp.closed
 
     def _close_queue(self, until: float) -> None:
         self.queue.close()

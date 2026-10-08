@@ -231,10 +231,15 @@ class SpanExporter(Generic[T]):
         self.ledger = DeliveryLedger()
         self.stats = _Stats()
         self._closing = threading.Event()
+        # Every step of the close done: sink aborted, queue drained, ledger
+        # frozen, sink closed. Set apart from _closing, which stops admission,
+        # so a close an interrupt cut short can be finished by the next.
+        self._closed = False
         self._until = float("inf")
         self._last_attempt_at: float | None = None
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._finishing = threading.Lock()
 
     def start(self) -> str | None:
         """Open the sink and start the worker; the sink's error, if it failed.
@@ -439,28 +444,51 @@ class SpanExporter(Generic[T]):
         self.stats.errors[entry] += 1
 
     # ------------------------------------------------------------- the end
+    @property
+    def closed(self) -> bool:
+        """Whether every step of the close is done."""
+        return self._closed
+
     def close(self, deadline: float) -> None:
-        """Stop admission, deliver within ``deadline`` seconds, then freeze."""
+        """Stop admission, deliver within ``deadline`` seconds, then freeze.
+
+        An interrupt, such as a Ctrl+C, in the wait ends only the wait: the
+        sink is aborted, the queue drained, the ledger frozen and the sink
+        closed before it propagates. A close cut short inside those steps is
+        finished by the next call, which does not wait again.
+        """
         started = time.monotonic()
         with self._lock:
-            if self._closing.is_set():
+            if self._closed:
                 return
-            self._until = started + max(0.0, deadline)
-            self._closing.set()
+            if self._closing.is_set():
+                self._until = min(self._until, started)
+            else:
+                self._until = started + max(0.0, deadline)
+                self._closing.set()
         self.queue.close()
         worker = self._worker
-        if worker is not None:
-            worker.join(max(0.0, self._until - time.monotonic()))
-        sending = (
-            self.sink.abort() if worker is not None and worker.is_alive() else False
-        )
-        drained = len(self.queue.drain())
-        self.ledger.freeze(drained=drained, sending=lambda: sending)
         try:
-            self.sink.close()
-        except Exception:
-            self._error("close")
-        self.stats.flush_seconds = round(time.monotonic() - started, 3)
+            if worker is not None:
+                worker.join(max(0.0, self._until - time.monotonic()))
+        finally:
+            self._finish_close(worker, started)
+
+    def _finish_close(self, worker: threading.Thread | None, started: float) -> None:
+        with self._finishing:
+            if self._closed:
+                return
+            sending = (
+                self.sink.abort() if worker is not None and worker.is_alive() else False
+            )
+            drained = len(self.queue.drain())
+            self.ledger.freeze(drained=drained, sending=lambda: sending)
+            try:
+                self.sink.close()
+            except Exception:
+                self._error("close")
+            self.stats.flush_seconds = round(time.monotonic() - started, 3)
+            self._closed = True
 
     # ------------------------------------------------------------- reading
     def accounting(self) -> dict[str, Any]:
