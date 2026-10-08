@@ -129,7 +129,12 @@ the flaky benchmark memory gates
   processes, a run's or a prelude's, stops the experiment, and the runs it
   left are indexed `not_run` for a resume, which refuses while a survivor
   still runs, and stops what a killed runner left (each launch is journaled
-  as it starts); a server port already taken stops it too, and `/health`
+  as it starts, with the host's boot, and ends there once its cleanup
+  verified): a group only while its leader is still that process, and
+  otherwise only a process whose readable environment holds the launch's
+  mark exactly, in the same boot. The runner holds `<output>/.lock` for its
+  whole run, so a second runner on the same experiment refuses (exit 2);
+  a server port already taken stops it too, and `/health`
   counts only from the launched server; resumes refuse a changed
   plan or pre-registration, and secrets reach commands without being
   written down. `sanitize_bundle` scans the finished bundle for the plan's
