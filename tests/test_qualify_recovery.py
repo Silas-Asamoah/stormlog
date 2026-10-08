@@ -540,6 +540,31 @@ def test_an_engine_hung_now_is_seen_whatever_recovery_found_earlier() -> None:
     assert not engine_stalled(idle, 101 * S)
 
 
+def test_an_open_gap_just_past_twice_the_p99_is_a_stall() -> None:
+    # Astra's closure of delta 3, H7: the limit is twice the baseline's p99
+    # (40 ms for 20 ms steps), not ten times it. The last step starts at
+    # 99.98 s: 20 ms later is a normal gap, 120 ms later a stall.
+    from stormlog.infer.qualify.recovery import engine_stalled
+
+    steps = [tick * 20 * MS for tick in range(100 * 50)]
+    ctx = context(Signals(in_flight=ALWAYS, step_starts=steps))
+    assert not engine_stalled(ctx, 100 * S)
+    assert engine_stalled(ctx, 100 * S + 100 * MS)
+
+
+def test_a_thin_baseline_never_judges_a_stall() -> None:
+    # H7: with fewer busy baseline gaps than a hold needs (10 of 20), the
+    # p99 is no measure of the engine; a long open gap is no stall then.
+    from stormlog.infer.qualify.recovery import engine_stalled
+
+    early = [tick * 20 * MS for tick in range(11)]  # 10 busy gaps by 0.2 s
+    later = [50 * S + tick * 20 * MS for tick in range(50 * 50)]  # to 100 s
+    sent = [(0, 200 * MS), (99 * S, 300 * S)]
+    ctx = context(Signals(in_flight=sent, step_starts=early + later))
+    assert ctx.baseline.steps.count == 10
+    assert not engine_stalled(ctx, 101 * S)
+
+
 def test_a_thin_baseline_says_why_recovery_can_never_hold() -> None:
     # fable-design's A2 delta 2, N0: a run whose baseline was too thin
     # timed out with nothing in its truth but recovery_timeout. The rule
@@ -824,6 +849,16 @@ def test_the_long_gap_allowance_alone_refuses_too_many_long_gaps() -> None:
             ALWAYS,
         )
         assert cadence.holds(0, steps[-1]) is holds
+
+
+def test_a_long_gap_is_one_over_twice_the_p99() -> None:
+    # Astra's closure of delta 3, H7: the baseline's share of long gaps,
+    # which sets the allowance, counted every gap over the p99 once the
+    # prefill tests moved under the cap, and no test saw it. A gap 1.5x the
+    # p99 (10 ms) is not long; only the two over 20 ms are.
+    stats = GapStats.of([0.010] * 995 + [0.015] * 3 + [0.030] * 2)
+    assert stats.p99 == pytest.approx(0.010)
+    assert stats.long_count == 2
 
 
 def test_a_hold_needs_its_minimum_samples() -> None:

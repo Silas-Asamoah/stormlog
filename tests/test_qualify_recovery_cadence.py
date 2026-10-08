@@ -465,3 +465,17 @@ def test_a_baseline_with_long_pauses_never_widens_the_tolerance() -> None:
     for seed in range(20):
         timing = prefill_run(seed, 0.0, pauses + stalls, decode=0.020)
         assert timing.end_ns is not None and timing.end_ns >= stalls[-1][1], seed
+
+
+def test_stalls_between_the_cap_and_ten_times_it_hold_recovery_off() -> None:
+    # Astra's closure of delta 3, H7: no test told the 60 ms cap from 600 ms.
+    # On G2's baseline with three 1 s pauses (twice its p99.9 is 2 s), a cap
+    # of 600 ms tolerates 300 ms stalls every 4 s by the baseline's share
+    # of long gaps, and the effect ends among them; at 60 ms none is.
+    pauses = [(t * S, t * S + S) for t in (10, 20, 30)]
+    stalls = [
+        (LAST + k * 4 * S + S, LAST + k * 4 * S + S + 300 * MS) for k in range(10)
+    ]
+    for seed in range(4):
+        timing = prefill_run(seed, 0.0, pauses + stalls, decode=0.020)
+        assert timing.end_ns is not None and timing.end_ns >= stalls[-1][1], seed
