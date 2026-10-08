@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, fields
+from dataclasses import replace
 
 import pytest
 
@@ -231,14 +231,6 @@ def test_a_violation_shorter_than_f_minus_w_minus_a_tick_never_fires(
     assert bool(fired) is fires
 
 
-@dataclass(frozen=True)
-class _CompletedScrape(VllmScrapeRecord):
-    """A record as #218's PR1a writes it, with the response's wall-clock
-    time, which window aggregation prefers to the duration."""
-
-    completed_at_ns: int | None = None
-
-
 @pytest.mark.parametrize("wall_step_s", [0.0, 30.0])
 def test_a_record_s_completion_time_moves_to_the_monotonic_clock_too(
     wall_step_s: float,
@@ -250,10 +242,7 @@ def test_a_record_s_completion_time_moves_to_the_monotonic_clock_too(
     for second in range(20):
         wall = second + (wall_step_s if second >= 13 else 0.0)
         plain = scrape(exposition(counters={PREEMPTIONS: 2.0 * second}), wall)
-        record = _CompletedScrape(
-            **{f.name: getattr(plain, f.name) for f in fields(plain)},
-            completed_at_ns=plain.observed_at_ns + 4_000_000,
-        )
+        record = replace(plain, completed_at_ns=plain.observed_at_ns + 4_000_000)
         mono = second * S
         history.append((Stamped(mono, mono + 4_000_000, mono), record))
     spec = TriggerSpec(
@@ -419,10 +408,7 @@ def test_frozen_exporter_fires_on_schedule_across_wall_clock_steps(
         wall = second + (wall_step_s if second >= 8 else 0.0)
         record = scrape(_waiting(4, running=8, tokens=100), wall)
         if completed:
-            record = _CompletedScrape(
-                **{f.name: getattr(record, f.name) for f in fields(record)},
-                completed_at_ns=record.observed_at_ns + 4_000_000,
-            )
+            record = replace(record, completed_at_ns=record.observed_at_ns + 4_000_000)
         mono = second * S
         history.append((Stamped(mono, mono + 4_000_000, round(wall * S)), record))
     spec = TriggerSpec(

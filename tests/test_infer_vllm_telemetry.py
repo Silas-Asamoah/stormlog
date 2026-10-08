@@ -141,6 +141,8 @@ class TestScrapeRecord:
             {"case_id": ""},
             {"http_status": -1},
             {"clock_domain": ""},
+            {"completed_at_ns": 1},
+            {"completed_at_ns": -1},
         ],
     )
     def test_invalid_scrape_records_are_rejected(self, changes: dict[str, Any]) -> None:

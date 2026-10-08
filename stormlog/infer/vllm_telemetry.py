@@ -90,6 +90,10 @@ class VllmScrapeRecord:
     content_bytes: int | None = None
     scrape: CompactScrape | None = None
     discovery: Discovery | None = None
+    # When the response (or the failure) came back to the scraper, on the
+    # client clock: the server was sampled between observed_at_ns and this.
+    # None in records written before the field existed.
+    completed_at_ns: int | None = None
 
     def __post_init__(self) -> None:
         for name in ("session_id", "run_id", "source_url", "clock_domain"):
@@ -106,6 +110,12 @@ class VllmScrapeRecord:
         _optional_nonempty(self.content_digest, "content_digest")
         _optional_nonnegative_int(self.http_status, "http_status")
         _optional_nonnegative_int(self.content_bytes, "content_bytes")
+        _optional_nonnegative_int(self.completed_at_ns, "completed_at_ns")
+        if (
+            self.completed_at_ns is not None
+            and self.completed_at_ns < self.observed_at_ns
+        ):
+            raise ValueError("completed_at_ns must not precede observed_at_ns")
         self._validate_duration()
         self._validate_outcome()
 
@@ -150,6 +160,7 @@ class VllmScrapeRecord:
             "error": self.error,
             "content_digest": self.content_digest,
             "content_bytes": self.content_bytes,
+            "completed_at_ns": self.completed_at_ns,
             "scrape": self.scrape.to_record() if self.scrape is not None else None,
             "discovery": (
                 self.discovery.to_record() if self.discovery is not None else None
@@ -179,6 +190,7 @@ class VllmScrapeRecord:
             error=record.get("error"),
             content_digest=record.get("content_digest"),
             content_bytes=record.get("content_bytes"),
+            completed_at_ns=record.get("completed_at_ns"),
             scrape=CompactScrape.from_record(scrape) if scrape is not None else None,
             discovery=(
                 _discovery_from_record(discovery) if discovery is not None else None
