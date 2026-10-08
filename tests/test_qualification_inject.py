@@ -406,14 +406,20 @@ def test_the_next_episode_waits_while_the_engine_looks_hung(
 
 
 @pytest.mark.parametrize(
-    ("late_ms", "measured_ms", "decision"),
-    [(15, 15, "start"), (1500, 1500, "start"), (1500, None, "timeout")],
+    ("late_ms", "measured_ms", "hung", "decision"),
+    [
+        (15, 15, False, "start"),
+        (1500, 1500, False, "start"),
+        (1500, None, False, "timeout"),
+        (0, 60_000, True, "timeout"),
+    ],
 )
 def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     late_ms: int,
     measured_ms: int | None,
+    hung: bool,
     decision: str,
 ) -> None:
     # Astra's closure of delta 3, H5: engine_stalled compared the gap open
@@ -422,7 +428,10 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     # hung at most polls and every episode ran into the recovery timeout.
     # The run allows at least a poll period, or the baseline's measured lag
     # if longer; a lag past both still reads as a hang. Which it used, and
-    # why, is logged in probes/record-lag.json.
+    # why, is logged in probes/record-lag.json. close-221-delta, N3: a
+    # measured p99 of a minute let an engine hung since 80 s start the next
+    # episode; the allowance is capped at 10 s (a tenth of the 150 s
+    # timeout at most), and the hang times out.
     from types import SimpleNamespace
     from typing import cast
 
@@ -434,6 +443,7 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
 
     second, step = 1_000_000_000, 20_000_000
     record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    record["timeline"]["recovery_timeout"] = 150
     plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
     now = [100 * second]
 
@@ -455,18 +465,22 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     # The lag used, and where it came from, is on record.
     used = json.loads((run.directory.probes / "record-lag.json").read_text())
     assert used["measured_p99_ns"] == lag
-    assert used["lag_ns"] == max(second, lag or 0)
+    assert used["cap_ns"] == 10 * second
+    assert used["lag_ns"] == min(max(second, lag or 0), 10 * second)
     assert (
         used["source"]
         == {
             15: "poll_period: longer than the measured lag",
             1500: "measured",
+            60_000: "cap: the measured lag was longer",
             None: "poll_period: no step record in the baseline to measure",
         }[measured_ms]
     )
 
     def seen() -> Signals:
         visible = now[0] - late_ms * 1_000_000
+        if hung:
+            visible = min(visible, 80 * second)
         steps = list(range(0, visible + 1, step))
         return Signals(in_flight=[(0, 10**18)], step_starts=steps)
 

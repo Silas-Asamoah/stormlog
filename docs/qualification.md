@@ -223,8 +223,12 @@ earlier: on a 5 ms engine, records 15 ms late read as a hang at most polls
 without it. The harness passes the baseline's lag (the p99 of the time from
 a step's start to the poll that first saw its record, the first-seen time
 `probes/hook-firstseen.jsonl` notes), and never less than a poll period,
-which also stands when the baseline had no step record to measure. The
-lag used and where it came from are in `probes/record-lag.json`.
+which also stands when the baseline had no step record to measure. Nor
+more than 10 s, or a tenth of the recovery timeout if that is shorter: a
+p99 of a minute (a buffered hook, a stalled poll) would otherwise let a
+hung engine start the next episode. The lag used, the measurement, the
+floor, the cap and where the lag came from are in
+`probes/record-lag.json`.
 
 **A baseline too thin to compare with never recovers.** A criterion whose
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,
