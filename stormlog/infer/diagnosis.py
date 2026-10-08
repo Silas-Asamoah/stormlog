@@ -31,7 +31,7 @@ from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
 from .diagnosis_kv import assess_kv
 from .diagnosis_memory import memory_ledger
-from .diagnosis_model import SECONDARY, UPSTREAM, Finding, rank_findings
+from .diagnosis_model import Finding, rank_findings
 from .diagnosis_prefix import assess_prefix
 from .diagnosis_queue import assess_queue
 from .diagnosis_report import envelope_finding, finding_detail, inputs_block
@@ -181,7 +181,6 @@ def _report(
 ) -> dict[str, Any]:
     view = context.view
     findings: list[Finding] = [f for a in assessments for f in a.findings]
-    link_edges(findings, view.run_id)
     ranked = rank_findings(findings, view.run_id)
     details = {}
     for rank, (finding_id, finding) in enumerate(ranked, start=1):
@@ -226,38 +225,6 @@ def _report(
     )
     validate_report(report)
     return report
-
-
-# Causes that come before another kind's mechanism: (upstream, downstream).
-# KV preemption leaves requests waiting to resume and keeps new ones out, so
-# a queue on the same subject is its consequence.
-EDGES: tuple[tuple[str, str], ...] = ((KV_PREEMPTION_PRESSURE, QUEUE_SATURATION),)
-
-
-def link_edges(findings: Sequence[Finding], run_id: str | None) -> None:
-    """Make a finding secondary to the fault upstream of it on the same
-    subject: the downstream finding names the upstream kind as `upstream`
-    among its competitors, and the upstream one is a warning. A secondary
-    claims a condition, never the fault."""
-    for upstream_kind, downstream_kind in EDGES:
-        faults = {
-            str(f.subject.get("key")): f.identity(run_id)
-            for f in findings
-            if f.kind == upstream_kind and f.severity == "warning"
-        }
-        for finding in findings:
-            key = str(finding.subject.get("key"))
-            if (
-                finding.kind == downstream_kind
-                and key in faults
-                and _names_upstream(finding, upstream_kind)
-            ):
-                finding.role = SECONDARY
-                finding.secondary_to = [faults[key]]
-
-
-def _names_upstream(finding: Finding, kind: str) -> bool:
-    return any(a.kind == kind and a.status == UPSTREAM for a in finding.alternatives)
 
 
 def _diagnoser(
@@ -448,8 +415,6 @@ __all__ = [
     "PAYLOAD_FORMAT",
     "PAYLOAD_VERSION",
     "REPORT_KIND",
-    "EDGES",
     "DiagnoseOptions",
     "diagnose_artifact",
-    "link_edges",
 ]
