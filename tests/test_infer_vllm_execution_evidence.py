@@ -375,6 +375,27 @@ def test_a_span_is_not_whole_until_its_pending_records_are_read(
     assert _spans(_coverage(tmp_path, records)) == []
 
 
+def test_a_heartbeat_written_among_pending_records_does_not_take_their_place(
+    tmp_path: Path,
+) -> None:
+    """Heartbeat 2 counts a pause reserved before its stamp, but the writer
+    thread writes heartbeats 3 and 4 before the pause comes: the pause takes
+    seq 5, not 3, so a live read that ends at heartbeat 4 has not read it
+    and must not vouch that no pause happened before 2's stamp."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=1),  # 2
+        heartbeat(T0 + 2 * SECOND, 2, pending=1),  # 3
+        heartbeat(T0 + 3 * SECOND, 3, pending=1),  # 4
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND - 5),  # 5: stamped before 2
+        heartbeat(T0 + 4 * SECOND, 5, pending=0),  # 6
+    ]
+
+    assert _spans(_coverage(tmp_path / "live", records[:5])) == []
+    assert _spans(_coverage(tmp_path / "whole", records)) == [(1, 6)]
+
+
 def test_a_pending_record_lost_at_write_breaks_the_span(tmp_path: Path) -> None:
     """A record lost while being written counts only in a later heartbeat."""
     records, _ = _backlog(dropped_after=True)

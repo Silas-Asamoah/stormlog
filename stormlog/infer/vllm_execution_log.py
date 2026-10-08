@@ -211,7 +211,7 @@ class EpochRead:
         beats = self.heartbeats
         joined: int | None = None
         for index, (before, after) in enumerate(zip(beats, beats[1:])):
-            close = after.seq + _pending(after.data)
+            close = _close(after, beats[index + 2 :])
             if not self._whole_between(before, after, close, beats[index + 2 :]):
                 continue
             if spans and joined == before.seq:
@@ -528,6 +528,19 @@ def _losses(heartbeat: dict[str, Any]) -> tuple[Any, ...] | None:
         return None
     counts = {str(kind): count for kind, count in dropped.items() if count}
     return tuple(sorted(counts.items())), errors
+
+
+def _close(heartbeat: RawRecord, later: Sequence[RawRecord]) -> int:
+    """The sequence by which the records a heartbeat was written ahead of
+    are all written. They take the next sequences but the writer thread's
+    own heartbeats, which it may write before them, as when a record was
+    reserved before its stamp and is emitted later."""
+    close = heartbeat.seq + _pending(heartbeat.data)
+    for beat in later:
+        if beat.seq > close:
+            break
+        close += 1
+    return close
 
 
 def _pending(heartbeat: dict[str, Any]) -> int:
