@@ -393,11 +393,16 @@ requests of that group, never a length derived from a tokenizer. The
 finding is the subject's warm requests falling short of it: a difference of
 medians of the shortfall, with an interval.
 
-Two competitors are indispensable: a prefix-cache reset between the group
-warming and the requests entering (ruled out only where the hook records
-resets and lost nothing), and `prefix_sharing_drop`, ruled out when the
+Three competitors are indispensable: a prefix-cache reset between the
+group warming and the requests entering (ruled out only where the hook
+records resets and lost nothing); `prefix_sharing_drop`, ruled out when the
 share of requests declaring a shared prefix and the median shared length
-both stayed within 10% of the reference's. Fewer than 3 warm requests is
+both stayed within 10% of the reference's; and
+`prefix_working_set_growth`, ruled out when the distinct shared prefixes
+the subject's requests declared (in tokens) are at most 1.1 times those of
+as many of the latest reference requests. A cache that evicts the least
+recently used loses old prefixes to a larger working set without any
+fault. Fewer than 3 warm requests is
 `too_few_warm_requests`; requests that declare no sharing are
 `unsupported/no_declared_sharing`, and without engine records
 `unsupported/no_per_request_cache_evidence`.
@@ -503,6 +508,7 @@ The values are provisional until they are read from real runs.
 | `kv_preemption_pressure.preemptions` | 1 | preemptions counted in the window |
 | `prefix_cache_loss.hit_ratio_drop` | 0.2 | fall of the prefix-cache hit ratio below the caller's reference |
 | `prefix_cache_loss.min_queried_tokens` | 2048 | tokens the window must have queried the prefix cache for before its ratio decides |
+| `prefix_cache_loss.working_set_ratio` | 1.1 | how much larger the subject's declared working set of shared prefixes may be than the reference's before it can explain the loss |
 | `host_stall.stall_factor` | 10 | an engine-loop stall is at least this many times the median completion cadence before it |
 | `host_stall.stall_floor_ns` | 50 ms | and at least this long |
 | `host_stall.no_baseline_floor_ns` | 500 ms | or, with no earlier busy steps to compare with, at least this long |
