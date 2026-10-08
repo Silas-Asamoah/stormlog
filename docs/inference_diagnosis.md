@@ -497,7 +497,9 @@ longer to reach the engine, in `send_to_ingress`, while the engine kept
 stepping, so the time went in HTTP, the API server or its IPC. Its gates are
 engine progress (a step completed inside at least half of the stalled
 requests' send-to-admission intervals) and a bounded placement of
-`send_to_ingress`. Two competitors are indispensable: a scheduler paused for
+`send_to_ingress` for at least half the subject's requests; the metrics say
+how many were placed (`send_to_ingress_placed` of `subject_requests`), since
+an unplaced one, across a wall clock step say, is left out of the excess. Two competitors are indispensable: a scheduler paused for
 new requests, which looks the same from the client and is ruled out only by
 pause records with nothing lost over every stalled request's interval (each
 placed on the engine's clock, ending at its admission), and a capture
