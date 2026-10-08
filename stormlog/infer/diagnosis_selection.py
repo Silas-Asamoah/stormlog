@@ -47,6 +47,7 @@ DECLARED = "declared"  # a declared subject has no detection time
 DETECTION_BASIS = "selection_sustained/1"
 INSUFFICIENT_REFERENCE = "insufficient_reference"
 TOO_FEW_REQUESTS = "too_few_requests"
+NOT_YET_EVALUABLE = "not_yet_evaluable"
 LEGACY_NO_DISPATCH = "legacy_no_dispatch_records"
 
 
@@ -345,6 +346,7 @@ def _evaluate_case(
     floor = int(resolve_threshold(SELECTION_REFERENCE_MIN, overrides)[0])
     minimum = int(resolve_threshold(SELECTION_MIN_REQUESTS, overrides)[0])
     censoring = _Censoring(view)
+    now = _now(view)
     for index, window in enumerate(windows):
         following = windows[index + 1] if index + 1 < len(windows) else window
         window.evaluated_at_ns = following.end_ns
@@ -354,15 +356,49 @@ def _evaluate_case(
             if not earlier.flagged
             for rid in earlier.requests
         ]
-        if len(window.requests) < minimum:
-            window.status = TOO_FEW_REQUESTS
-        elif len(window.reference) < floor:
-            window.status = INSUFFICIENT_REFERENCE
-        else:
+        window.status = _untestable(view, window, now, minimum, floor)
+        if window.status is None:
             window.tests = {
                 metric: _test(view, window, metric, censoring, overrides)
                 for metric in METRICS
             }
+
+
+def _untestable(
+    view: RunView, window: Window, now: int, minimum: int, floor: int
+) -> str | None:
+    """Why a window is not tested, if it is not."""
+    if window.evaluated_at_ns > now and not _all_ended(view, window):
+        # Its evaluation time has not come: judging it now would read the
+        # requests still running as if that time had passed.
+        return NOT_YET_EVALUABLE
+    if len(window.requests) < minimum:
+        return TOO_FEW_REQUESTS
+    if len(window.reference) < floor:
+        return INSUFFICIENT_REFERENCE
+    return None
+
+
+def _now(view: RunView) -> int:
+    """The latest instant the client's records reach: a growing artifact's
+    present."""
+    stamps = [
+        stamp
+        for request in view.client.values()
+        for stamp in (
+            request.sent_at_ns,
+            request.first_content_recorded_ns,
+            request.ended_at_ns,
+        )
+        if stamp is not None
+    ]
+    return max(stamps, default=0)
+
+
+def _all_ended(view: RunView, window: Window) -> bool:
+    """Whether every request of the window has ended: then no later instant
+    can judge it differently."""
+    return all(view.client[r].ended_at_ns is not None for r in window.requests)
 
 
 # A failed request is beyond any latency threshold.
@@ -669,6 +705,7 @@ __all__ = [
     "E2E",
     "INSUFFICIENT_REFERENCE",
     "LEGACY_NO_DISPATCH",
+    "NOT_YET_EVALUABLE",
     "METRICS",
     "TTFT",
     "FisherTest",

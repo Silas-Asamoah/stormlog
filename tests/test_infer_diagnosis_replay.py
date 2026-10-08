@@ -59,6 +59,11 @@ def _prefix(full: Path, into: Path, at_wall: int) -> Path:
 
 
 def test_a_finding_reappears_in_a_genuine_prefix_import(tmp_path: Path) -> None:
+    """The run as it stood at first_detectable_ns selects the same incident,
+    detected at the same instant, and assesses the queue on it; a moment
+    earlier there is no incident. The class's own evidence can come later:
+    the hook vouches for its records only up to its last heartbeat, and
+    two seconds on the queue is the fault it is on the whole run."""
     calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
     burst = poisson_free(300, 90 * SECOND, 5 * MS, prefix="b")
     full = build_run(tmp_path / "full", calm + burst, Engine(max_num_seqs=4))
@@ -66,11 +71,13 @@ def test_a_finding_reappears_in_a_genuine_prefix_import(tmp_path: Path) -> None:
     (subject,) = report["payload"]["selection"]["subjects"]
     detected = subject["first_detectable_ns"]
 
-    replayed = diagnose_artifact(_prefix(full, tmp_path / "prefix", detected))
+    replayed = diagnose_artifact(_prefix(full, tmp_path / "at", detected))
+    earlier = diagnose_artifact(_prefix(full, tmp_path / "before", detected - 1))
+    later = diagnose_artifact(_prefix(full, tmp_path / "later", detected + 2 * SECOND))
 
-    kinds = {f["kind"]: f for f in replayed["findings"]}
-    assert "queue_saturation" in kinds
     (again,) = replayed["payload"]["selection"]["subjects"]
-    assert again["first_detectable_ns"] is not None
-    assert again["first_detectable_ns"] <= detected
+    assert (again["key"], again["first_detectable_ns"]) == (subject["key"], detected)
+    assert "queue_saturation" in {f["kind"] for f in replayed["findings"]}
+    assert earlier["payload"]["selection"]["subjects"] == []
+    kinds = {f["kind"]: f for f in later["findings"]}
     assert kinds["queue_saturation"]["severity"] == "warning"
