@@ -73,6 +73,14 @@ class ClientRequest:
         return None
 
     @property
+    def first_content_recorded_ns(self) -> int | None:
+        """The first content's time from its own record, written when it
+        arrived; None before then, or in a run without such records."""
+        if self.first_content is None:
+            return None
+        return _integer((self.first_content.raw or {}).get("first_content_at_ns"))
+
+    @property
     def first_content_at_ns(self) -> int | None:
         if self.first_content is not None:
             return _integer((self.first_content.raw or {}).get("first_content_at_ns"))

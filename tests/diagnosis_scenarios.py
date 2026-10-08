@@ -12,6 +12,7 @@ client's wall clock is the engine's: wall = mono + WALL_OFFSET.
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -155,19 +156,23 @@ class Engine:
     def _steps(
         self, requests: list[SimRequest]
     ) -> list[tuple[int, int, dict[str, Any]]]:
-        waiting = sorted(requests, key=lambda r: r.enqueued_ns)
+        waiting = deque(sorted(requests, key=lambda r: r.enqueued_ns))
         running: dict[str, tuple[SimRequest, int]] = {}  # internal -> (request, tokens)
         out: list[tuple[int, int, dict[str, Any]]] = []
         now = waiting[0].enqueued_ns if waiting else 0
         iteration = 0
         while waiting or running:
-            arrived = [r for r in waiting if r.enqueued_ns <= now]
-            if not running and not arrived:
+            if not running and waiting[0].enqueued_ns > now:
                 now = waiting[0].enqueued_ns
                 continue
-            admitted = arrived[: self.max_num_seqs - len(running)]
+            admitted: list[SimRequest] = []
+            while (
+                waiting
+                and waiting[0].enqueued_ns <= now
+                and len(running) + len(admitted) < self.max_num_seqs
+            ):
+                admitted.append(waiting.popleft())
             for request in admitted:
-                waiting.remove(request)
                 request.first_step = iteration
             members = [_member(r, first=True) for r in admitted]
             members += [_member(r, first=False, done=n) for r, n in running.values()]
