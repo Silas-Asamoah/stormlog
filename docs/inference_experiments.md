@@ -350,7 +350,17 @@ exactly them. The plan's `server.model` says how:
   `blob_id` otherwise, as `HfApi().model_info(repo, revision=commit,
   files_metadata=True).siblings` lists them). The snapshot must then hold
   exactly those files, each linked to that blob, so a link re-pointed at
-  another commit's blob fails. The evidence says which:
+  another commit's blob fails, and so does a listed file the snapshot lacks.
+  vLLM downloads only what a load reads, so a cache it filled lacks the
+  commit's `.gitattributes`, `README.md` or `LICENSE`: either download the
+  whole commit before pinning (`huggingface-cli download <repo> --revision
+  <commit>`), or list only the files the snapshot holds, for example
+  `{s.rfilename: (s.lfs.sha256 if s.lfs else s.blob_id) for s in siblings
+  if (snapshot / s.rfilename).exists()}`. A listed file that is missing is
+  refused rather than passed over: a file a load reads when it is there
+  (`generation_config.json`, a chat template) changes what the server does
+  when it is not, so the list must say what was served. The evidence says
+  which:
   `pinned_commit_verified` when the pin's file list was checked, and
   `pinned_snapshot_verified` without one,
   which says every file present is the commit's and nothing a load reads is
