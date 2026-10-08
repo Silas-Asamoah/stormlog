@@ -585,6 +585,12 @@ clock scope, never a sum:
    calls before the first serving step (`startup_unranged`) are shown apart:
    they never have a range, so they are not loss.
 
+The `requests` part counts the imported executions by ownership, the
+run's requests bound to one (`run_requests_bound`), and the run's requests
+(`run_requests_total`): each with an `infer.request` or `infer.dispatch`
+record, so a request a crashed client sent but never recorded the end of
+still counts.
+
 A case's figure covers every step one of its requests shared, so a case
 that shared a batch with another case or with other clients is labelled
 `non_additive`. No per-request GPU cost is computed.
