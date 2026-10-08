@@ -1282,7 +1282,9 @@ class _Run:
             return
         for path in self._infer_artifacts():
             try:
-                attach_manifest(path, after)
+                # Named after this run, as the before manifest is, whatever
+                # run ID the workload gave its artifact.
+                attach_manifest(path, after, run_id=self.label)
             except InferInputError as exc:
                 self.record.notes.append(
                     f"after description not attached to {path.name}: {exc}"
