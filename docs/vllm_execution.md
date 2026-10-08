@@ -352,7 +352,9 @@ record writing had stopped counts under its kind, whatever its size. `queued`
 is the number of records waiting to be written. `pending` is the number
 accepted before the heartbeat's stamp and not yet written, the batch being
 written included: under a backlog the heartbeat is written ahead of them, and
-they take the next sequences after it.
+they take the next sequences after it. A record counts from the moment it is
+handed to the writer, while it is still being serialized, since its stamps
+were taken before that.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture

@@ -93,6 +93,9 @@ class EpochWriter:
         # Records taken from the queue and not yet written: with the queue,
         # what a heartbeat says is still to come.
         self._in_flight = 0
+        # Records emit is still serializing: their stamps were taken before
+        # the call, so a heartbeat stamped meanwhile must count them too.
+        self._sizing = 0
         self._condition = threading.Condition()
         self._closing = False
         # Set once goodbye is written; no heartbeat record may follow it.
@@ -115,27 +118,48 @@ class EpochWriter:
         backlog nor a client's long request IDs cost the caller an encoding.
         The rest are serialized now. ``fields`` must not reuse the common
         fields' names, which the writer thread adds with the sequence number.
+
+        The record is pending from the call on, while it is serialized, since
+        its stamps are already taken; it stops being so in the same hold of
+        the lock that queues or drops it, so no heartbeat falls between.
         """
-        if self._dropped_unserialized(kind, _floor(fields)):
-            return
-        body = self._body(fields)
-        if body is None:
-            return
-        size = len(body)
         with self._condition:
-            if size > self.limits.record_bytes:
-                self._counters.dropped[f"{kind}_oversized"] += 1
-                return
-            full = (
-                len(self._queue) >= self.limits.queue_records
-                or self._queued_bytes + size > self.limits.queue_bytes
-            )
-            if full or self._closing:
-                self._counters.dropped[kind] += 1
-                return
-            self._queue.append((kind, body))
-            self._queued_bytes += size
-            self._condition.notify()
+            self._sizing += 1
+        try:
+            body = self._serialized(kind, fields)
+        except BaseException:
+            with self._condition:
+                self._sizing -= 1
+            raise
+        with self._condition:
+            self._sizing -= 1
+            if body is not None:
+                self._enqueue(kind, body)
+
+    def _serialized(self, kind: str, fields: dict[str, Any]) -> str | None:
+        """The record's JSON object, or None when it was dropped unserialized
+        or could not be encoded (each counted)."""
+        if self._dropped_unserialized(kind, _floor(fields)):
+            return None
+        return self._body(fields)
+
+    def _enqueue(self, kind: str, body: str) -> None:
+        """Queue a serialized record, or drop and count it; the caller holds
+        the lock."""
+        size = len(body)
+        if size > self.limits.record_bytes:
+            self._counters.dropped[f"{kind}_oversized"] += 1
+            return
+        full = (
+            len(self._queue) >= self.limits.queue_records
+            or self._queued_bytes + size > self.limits.queue_bytes
+        )
+        if full or self._closing:
+            self._counters.dropped[kind] += 1
+            return
+        self._queue.append((kind, body))
+        self._queued_bytes += size
+        self._condition.notify()
 
     def count_error(self) -> None:
         with self._condition:
@@ -275,7 +299,7 @@ class EpochWriter:
                 "queued": len(self._queue),
                 # Accepted before this stamp and not yet written: they take
                 # the next sequences, after this record.
-                "pending": len(self._queue) + self._in_flight,
+                "pending": len(self._queue) + self._in_flight + self._sizing,
             }
         try:
             status.update(self._status_fields())
