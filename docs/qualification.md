@@ -218,7 +218,9 @@ than twice the baseline's p99. The harness says START only while it isn't.
 A step's record reaches the channel a little after the step starts, so
 `engine_stalled(context, now, lag_ns)` judges the gap as it stood `lag_ns`
 earlier: on a 5 ms engine, records 15 ms late read as a hang at most polls
-without it.
+without it. The harness passes the baseline's lag (the p99 of the time from
+a step's start to the poll that first saw its record), and never less than
+a poll period.
 
 **A baseline too thin to compare with never recovers.** A criterion whose
 baseline has fewer samples than it needs in a hold (20 busy gaps, 20 waits,

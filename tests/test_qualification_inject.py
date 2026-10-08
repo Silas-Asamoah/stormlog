@@ -404,6 +404,69 @@ def test_the_next_episode_waits_while_the_engine_looks_hung(
     assert decision == (TIMEOUT if hung else START)
 
 
+@pytest.mark.parametrize(
+    ("late_ms", "measured_ms", "decision"),
+    [(15, None, "start"), (1500, 1500, "start"), (1500, None, "timeout")],
+)
+def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    late_ms: int,
+    measured_ms: int | None,
+    decision: str,
+) -> None:
+    # Astra's closure of delta 3, H5: engine_stalled compared the gap open
+    # at the poll with twice the baseline's p99 (40 ms here), but the hook's
+    # records arrive after their steps start, so a healthy engine read as
+    # hung at most polls and every episode ran into the recovery timeout.
+    # The run allows at least a poll period, or the baseline's measured lag
+    # if longer; a lag past both still reads as a hang.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from examples.qualification import inject as module
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+    from stormlog.infer.qualify.recovery import Actions, Baseline, Signals, Timing
+
+    second, step = 1_000_000_000, 20_000_000
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    now = [100 * second]
+
+    def clock() -> int:
+        now[0] += second // 4
+        return now[0]
+
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-y"), Server("", "m", tmp_path, {}),
+        clock=clock,
+    )  # fmt: skip
+    if measured_ms is not None:
+        lag = measured_ms * 1_000_000
+        run.channel = cast(Any, SimpleNamespace(record_lag_ns=lambda *_: lag))
+        run._measure_record_lag(0, 45 * second)
+
+    def seen() -> Signals:
+        visible = now[0] - late_ms * 1_000_000
+        steps = list(range(0, visible + 1, step))
+        return Signals(in_flight=[(0, 10**18)], step_starts=steps)
+
+    baseline = Baseline.measure(seen(), 0, 45 * second)
+    monkeypatch.setattr(run, "_signals", seen)
+    monkeypatch.setattr(
+        run,
+        "_timing",
+        lambda *_args: Timing(90 * second, "test", 90 * second, 95 * second),
+    )
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    found, _timing = run._recover(
+        plan.episodes[0], baseline, Actions(), 90 * second, 95 * second
+    )
+    assert found == decision
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 
