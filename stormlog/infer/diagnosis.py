@@ -191,7 +191,7 @@ def _report(
 ) -> dict[str, Any]:
     view = context.view
     findings: list[Finding] = [f for a in assessments for f in a.findings]
-    link_roles(findings)
+    link_roles(findings, view.run_id)
     ranked = rank_findings(findings, view.run_id)
     details = {}
     for rank, (finding_id, finding) in enumerate(ranked, start=1):

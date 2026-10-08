@@ -68,6 +68,15 @@ def _heading(detail: dict[str, Any], finding: dict[str, Any]) -> list[str]:
         f"    confidence {confidence.get('level')} (condition {condition}, "
         f"contribution {contribution})",
     ]
+    return lines + _standing(detail)
+
+
+def _standing(detail: dict[str, Any]) -> list[str]:
+    """What the finding stands behind, and why it claims no fault."""
+    lines = []
+    upstream = detail.get("secondary_to") or []
+    if upstream:
+        lines.append(f"    secondary to {', '.join(upstream)}")
     failed = (detail.get("eligibility") or {}).get("failed") or []
     if failed:
         lines.append(f"    not eligible for a fault claim: {', '.join(failed)}")
