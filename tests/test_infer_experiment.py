@@ -658,6 +658,14 @@ def test_the_runner_binds_the_weights_it_verified_to_the_server_it_launched(
         assert (shown["start_ticks"], bound["boot_id"]) == (4242, "boot-test")
     assert bound["model"]["identity_evidence"] == "staged_snapshot_verified"
     assert bound["run_id"] == record["label"]
+    # The workload passed no --run-id: the runner attaches both descriptions
+    # under its run's name (close-213-pr24-cloud's F7: the after one was
+    # refused, as describing another run than the artifact's own).
+    manifests = [r for r in lines if r.get("event_type") == "infer.manifest"]
+    assert [(m["role"], m["run_id"]) for m in manifests] == [
+        ("before", record["label"]),
+        ("after", record["label"]),
+    ]
     # The runner attached its before description, so the comparison binds
     # the verified weights to the server that description shows.
     fields = summarize_run(artifact).fields
