@@ -2,13 +2,55 @@
 
 # Inference diagnosis
 
-Stormlog is building a diagnoser that explains a slow request or a slow
-window of an inference run from the evidence the run captured: client
-latency, vLLM's own metrics and spans, the scheduler steps of the
-[execution hook](vllm_execution.md), and imported GPU traces. This page
-documents the parts that exist today: the vocabulary every diagnosis uses, the
-threshold table, and the cheap signals an online trigger evaluates over a
-window of `/metrics` scrapes.
+Stormlog's diagnoser explains a slow request or a slow window of an
+inference run from the evidence the run captured: client latency, vLLM's own
+metrics and spans, the scheduler steps of the
+[execution hook](vllm_execution.md), and imported GPU traces. Each finding
+names a mechanism with the observations and records behind it, how far it
+can be trusted, the competing mechanisms and what became of each, and an
+experiment that would confirm it; a class that cannot be checked says so,
+with a reason. This version assesses queue saturation; the other kinds are
+reported as not assessed yet. The page also documents the threshold table
+and the cheap signals an online trigger evaluates over a window of
+`/metrics` scrapes.
+
+## Diagnose an artifact
+
+```python
+from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
+
+report = diagnose_artifact("infer.jsonl")  # automatic incident selection
+report = diagnose_artifact("infer.jsonl", windows=[(start_ns, end_ns)])
+report = diagnose_artifact(
+    "infer.jsonl", options=DiagnoseOptions(request_ids=("c1_in8_out4_measured_0_7",))
+)
+```
+
+`diagnose_artifact` reads only the artifact it is given, once, and returns a
+validated [`stormlog.report` v1](report_contract.md) report with
+`report_kind: inference_diagnosis`. Its exit code is 3 when any finding is a
+`warning`, else 0. The same artifact and options give the same report; the
+generation time can be fixed with `DiagnoseOptions(generated_at_ns=...)`.
+Thresholds can be overridden by key (`DiagnoseOptions(thresholds=...)`); an
+unknown key is refused.
+
+The payload, `stormlog.inference_diagnosis` v1
+([schema](schemas/inference_diagnosis_v1.schema.json)), holds:
+
+| Block | What it says |
+| --- | --- |
+| `diagnoser` | the version, a SHA-256 over the thresholds and options that decide the result, and the generation time |
+| `inputs` | the artifact's path, size, SHA-256 and line count, so a reader can tell whether it changed |
+| `outcome` | `findings`, `no_findings`, or `inconclusive` when an incident has no eligible explanation |
+| `join` | what was joined: client requests, dispatch and first-content records, engine executions, engines and their clocks |
+| `selection` | every analysis window with its tests, and the subjects |
+| `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
+| `findings_detail` | per finding ID: its claim, cause, eligibility, confidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
+| `thresholds` | the table version, the overridden keys and every value used |
+
+The envelope's findings carry the verdict, flat metrics and up to 8
+evidence pointers: `path` (relative to the report's directory when the
+report is written to a file), `pointer` `/<line>`, and `record_id`.
 
 ## Finding kinds
 
