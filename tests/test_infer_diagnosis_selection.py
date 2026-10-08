@@ -124,6 +124,31 @@ def test_a_burst_inside_one_base_window_is_still_an_incident(tmp_path: Path) -> 
     assert incident.first_detectable_ns == incident.windows[1].evaluated_at_ns
 
 
+def test_declared_requests_are_compared_with_earlier_ones_of_their_case(
+    burst_view: RunView,
+) -> None:
+    declared = tuple(f"b{i}" for i in range(100, 130))
+
+    (subject,) = select(burst_view, SelectionOptions(request_ids=declared)).subjects
+
+    assert subject.kind == "requests" and subject.requests == list(declared)
+    # The calm requests, not the burst's first hundred, which were flagged.
+    assert len(subject.reference) == 240
+    assert all(rid.startswith("a") for rid in subject.reference)
+
+
+def test_a_declared_case_keeps_selection_to_its_incidents(tmp_path: Path) -> None:
+    calm = poisson_free(240, 10 * SECOND, 500 * MS, prefix="a")
+    burst = poisson_free(600, 130 * SECOND, 5 * MS, prefix="b")
+    other = poisson_free(240, 10 * SECOND, 500 * MS, prefix="o", case_id="c2")
+    requests = calm + burst + other
+    view = join(read_input(build_run(tmp_path, requests, Engine(max_num_seqs=64))))
+
+    assert [s.case_id for s in select(view).subjects] == ["c1"]
+    only = select(view, SelectionOptions(case_ids=("c2",)))
+    assert only.subjects == [] and {w.case_id for w in only.windows} == {"c2"}
+
+
 def test_without_dispatch_records_no_detection_time_is_given(tmp_path: Path) -> None:
     path = build_run(
         tmp_path,

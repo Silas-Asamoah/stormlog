@@ -115,7 +115,7 @@ class Subject:
     compared with."""
 
     key: str
-    kind: str  # window, requests or case
+    kind: str  # window or requests
     case_id: str | None
     start_ns: int | None
     end_ns: int | None
@@ -189,12 +189,15 @@ class Selection:
 
 
 def select(view: RunView, options: SelectionOptions | None = None) -> Selection:
-    """Declared subjects, else the incidents automatic selection finds."""
+    """Declared subjects, else the incidents automatic selection finds, of
+    the declared cases when there are any."""
     options = options or SelectionOptions()
     windows = _all_windows(view, options)
     declared = _declared(view, options, windows)
     if declared:
         return Selection(declared, windows, tested=False)
+    if options.case_ids:
+        windows = [w for w in windows if w.case_id in options.case_ids]
     return Selection(_incidents(view, windows), windows, tested=True)
 
 
@@ -518,24 +521,29 @@ def _declared(
                 start_ns=None,
                 end_ns=None,
                 requests=known,
-                reference=[],
-                declared_by=DECLARED_BY_CALLER,
-            )
-        )
-    for case_id in options.case_ids:
-        subjects.append(
-            Subject(
-                key=f"case:{case_id}",
-                kind="case",
-                case_id=case_id,
-                start_ns=None,
-                end_ns=None,
-                requests=[r.request_id for r in by_case.get(case_id, [])],
-                reference=[],
+                reference=_earlier(by_case, flagged, known),
                 declared_by=DECLARED_BY_CALLER,
             )
         )
     return subjects
+
+
+def _earlier(
+    by_case: dict[str, list[ClientRequest]], flagged: set[str], declared: list[str]
+) -> list[str]:
+    """Declared requests' reference: the unflagged requests of their cases
+    that arrived before the first of them, as a declared window's."""
+    chosen = set(declared)
+    reference: list[str] = []
+    for requests in by_case.values():
+        mine = [_at(r) for r in requests if r.request_id in chosen]
+        if mine:
+            reference.extend(
+                r.request_id
+                for r in requests
+                if _at(r) < min(mine) and r.request_id not in flagged
+            )
+    return reference
 
 
 def _engine_side(view: RunView, subject: Subject) -> Subject:
