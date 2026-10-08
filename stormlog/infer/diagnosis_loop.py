@@ -697,6 +697,23 @@ def _limit(
     return max(factor * baseline, floor), kind, baseline
 
 
+def stalls_over_limit(
+    steps: Sequence[Step],
+    blocked: Sequence[Interval] = (),
+    config: LoopGapConfig | None = None,
+) -> list[tuple[Stall, float]]:
+    """Every stall with ready work at or over its own limit, with the limit:
+    what the offline diagnosis calls a stall, by the online rules."""
+    config = config or LoopGapConfig()
+    table = cadence_table(steps)
+    found = []
+    for stall in find_stalls(steps, blocked, config.now_wall_ns):
+        limit, _kind, _baseline = _limit(stall, table, config)
+        if stall.duration_ns >= limit:
+            found.append((stall, limit))
+    return found
+
+
 def _verdict(
     steps: Sequence[Step],
     stalls: Sequence[Stall],
@@ -855,5 +872,6 @@ __all__ = [
     "find_stalls",
     "pause_intervals",
     "record_reasons",
+    "stalls_over_limit",
     "steps_from_raw",
 ]
