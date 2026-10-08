@@ -565,7 +565,8 @@ def build_run(
                 (r["timestamp_ns"], r) for r in client_records(request, engine)
             )
     for window in windows or []:
-        events.append((window["timestamp_ns"], window))
+        # #219's incident windows carry no timestamp_ns: place them at start.
+        events.append((window.get("timestamp_ns", window.get("start_ns", 0)), window))
     events.sort(key=lambda item: item[0])
     lines.extend(record for _, record in events)
     artifact = tmp_path / "infer.jsonl"
