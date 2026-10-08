@@ -493,7 +493,32 @@ def test_a_pulse_ends_no_later_than_its_sigcont(
     # The pulse reads its start just after SIGSTOP went, so measured from
     # the SIGSTOP its end can only come later than the pulse says.
     stop, cont = sent[signal.SIGSTOP][0], sent[signal.SIGCONT][0]
-    assert stop + pulse.held_ns <= cont
+    assert stop + (pulse.continue_sent_ns - pulse.stop_sent_ns) <= cont
+
+
+def test_a_pulse_holds_as_long_as_its_sigcont_took_to_go(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-delta, N2: with the continue's time read before SIGCONT, a
+    # harness held up 200 ms just before sending it under-reported the
+    # stop: held_ns read 100 ms against 300 ms stopped. The clock is read on
+    # both sides now; the pulse's end for realization stays the earlier
+    # reading, and held_ns runs to the later one.
+    from examples.qualification import pulser as pulser_module
+
+    real_kill = os.kill
+
+    def slow_before_sigcont(pid: int, signum: int) -> None:
+        if signum == signal.SIGCONT:
+            time.sleep(0.2)
+        real_kill(pid, signum)
+
+    monkeypatch.setattr(pulser_module.os, "kill", slow_before_sigcont)
+    with Pulser(Target.of(loop.pid), watchdog=False) as pulser:
+        pulse = pulser.pulse(0.1)
+    assert pulse.held_ns >= 290_000_000
+    assert pulse.continue_sent_ns - pulse.stop_sent_ns < pulse.held_ns - 190_000_000
+    assert pulse.to_record()["continued_ns"] == pulse.continued_ns
 
 
 def test_a_schedule_that_falls_behind_keeps_the_duty_cap(

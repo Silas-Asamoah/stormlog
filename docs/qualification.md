@@ -610,9 +610,11 @@ reference hook's records: `in_schedule` (inside a step's `schedule()` call),
 `in_step` (after it, before the step completed: execution or a GPU wait) or
 `between_steps`; so do the pulses of an episode that failed or was
 interrupted, the one cut short included. Each pulse's stop, confirmation
-and continue times are kept (the continue's is read just before `SIGCONT`
-goes, so a step the target began after it can't fall inside the pulse),
-with `held_ns`, the measured time from `SIGSTOP` to `SIGCONT`
+and continue times are kept. The clock is read on both sides of `SIGCONT`:
+`continue_sent_ns` just before it goes, so a step the target began after
+it can't fall inside the pulse, and `continued_ns` once it has gone.
+`held_ns` runs from `SIGSTOP` to `continued_ns`, the most the target was
+stopped, however long the harness took to send `SIGCONT`
 (`continued_by_other` when the target was already running, continued by the
 watchdog's limit or an operator, so it was stopped for less), so effect
 timing can start from the first confirmed stop.
