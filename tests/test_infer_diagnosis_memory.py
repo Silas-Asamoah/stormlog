@@ -12,7 +12,7 @@ from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.telemetry import ServerIdentity, TelemetrySample
 from tests.diagnosis_scenarios import MS, Engine, build_run, poisson_free
 from tests.vllm_execution_helpers import SECOND
-from tests.vllm_scrape_helpers import exposition, scrape
+from tests.vllm_scrape_helpers import START, exposition, scrape
 
 
 def _ledger(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -58,6 +58,37 @@ def test_kv_blocks_are_bound_to_the_engine_only_by_assertion(artifact: Path) -> 
     assert (asserted["status"], asserted["binding"]) == ("observed", "asserted")
     assert asserted["peak"] == {"scope": "sampled_max", "value": 750}
     assert asserted["unit"] == "blocks"
+
+
+def test_a_kv_peak_across_an_exporter_restart_is_insufficient(tmp_path: Path) -> None:
+    """The second exporter's 0.99 is no peak of the first's: samples from
+    both sides of a restart are not one gauge."""
+    engine = Engine(config={"num_gpu_blocks": 1000})
+    path = build_run(tmp_path, poisson_free(20, 10 * SECOND, 100 * MS), engine)
+    scrapes = [
+        scrape(
+            exposition(
+                gauges={"vllm:kv_cache_usage_perc": value},
+                start=START + (1000.0 if restarted else 0.0),
+            ),
+            10 + i,
+        )
+        for i, (value, restarted) in enumerate(
+            ((0.25, False), (0.5, False), (0.99, True))
+        )
+    ]
+    with path.open("a", encoding="utf-8") as handle:
+        handle.writelines(json.dumps(s.to_record()) + "\n" for s in scrapes)
+
+    kv = _ledger(
+        diagnose_artifact(path, options=DiagnoseOptions(metrics_from_engine=True))
+    )["kv_blocks_allocated"]
+
+    assert (kv["status"], kv["reason"], kv["peak"]) == (
+        "insufficient",
+        "engine_restart",
+        None,
+    )
 
 
 def test_collector_samples_are_observed_with_their_peak(
