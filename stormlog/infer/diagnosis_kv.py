@@ -33,6 +33,7 @@ from .diagnosis_model import (
 )
 from .diagnosis_selection import Subject
 from .diagnosis_stats import Difference
+from .diagnosis_steps import merge_intervals
 from .diagnosis_vocabulary import COMPONENT_KV_CACHE, KV_PREEMPTION_PRESSURE
 
 NOT_OBSERVED = "not_observed"
@@ -109,14 +110,30 @@ def _stages(
     ]
 
 
+def held_admissions(
+    context: Context, subject: Subject, producer: str
+) -> list[tuple[int, int]]:
+    """Where the subject's own allocation preemptions held the queue, on the
+    engine's clock: from each preempting step to the step that resumed the
+    request. vLLM puts a preempted request back at the head of the waiting
+    queue, so nobody behind it is admitted until it resumes. Preemptions of
+    other clients' requests, and those a reset made, are not counted."""
+    stages = _stages(context, producer, _span(context, subject))
+    by_attempt = _preempted_at([(line, s) for line, s in stages if s.name == PREEMPTED])
+    held = []
+    for execution in context.subject_executions(subject):
+        attempt = execution.attempt.id if execution.attempt else None
+        for at in by_attempt.get(attempt or "", []):
+            resume = _resume(_starts(context, execution), at)
+            if resume is not None:
+                held.append((at, resume))
+    return merge_intervals(held)
+
+
 def _costs(
     context: Context, subject: Subject, preemptions: list[tuple[Line, StageEvent]]
 ) -> list[_Cost]:
-    by_attempt: dict[str, list[int]] = {}
-    for _, stage in preemptions:
-        attempt = stage.metadata.get("attempt")
-        if isinstance(attempt, str) and stage.start_ns is not None:
-            by_attempt.setdefault(attempt, []).append(stage.start_ns)
+    by_attempt = _preempted_at(preemptions)
     costs = []
     for execution in context.subject_executions(subject):
         attempt = execution.attempt.id if execution.attempt else None
@@ -125,16 +142,38 @@ def _costs(
     return costs
 
 
-def _cost(context: Context, execution: Execution, preempted_at: list[int]) -> _Cost:
-    starts = [
+def _preempted_at(
+    preemptions: list[tuple[Line, StageEvent]],
+) -> dict[str, list[int]]:
+    """Each preempted attempt's preemption times."""
+    by_attempt: dict[str, list[int]] = {}
+    for _, stage in preemptions:
+        attempt = stage.metadata.get("attempt")
+        if isinstance(attempt, str) and stage.start_ns is not None:
+            by_attempt.setdefault(attempt, []).append(stage.start_ns)
+    return by_attempt
+
+
+def _starts(context: Context, execution: Execution) -> list[int]:
+    """The start of every step the execution ran in."""
+    return [
         step[1].start_ns
         for _, membership in execution.memberships
         if (step := context.view.iterations.get(membership.iteration_ref)) is not None
         and step[1].start_ns is not None
     ]
+
+
+def _resume(starts: list[int], at: int) -> int | None:
+    """The first step after a preemption that ran the request again."""
+    return next((start for start in starts if start > at), None)
+
+
+def _cost(context: Context, execution: Execution, preempted_at: list[int]) -> _Cost:
+    starts = _starts(context, execution)
     waits = []
     for at in sorted(preempted_at):
-        resume = next((start for start in starts if start > at), None)
+        resume = _resume(starts, at)
         if resume is not None:
             waits.append(resume - at)
     request_id = execution.event.request_ref.id
@@ -281,4 +320,4 @@ def _observations(
     return out
 
 
-__all__ = ["assess_kv"]
+__all__ = ["assess_kv", "held_admissions"]

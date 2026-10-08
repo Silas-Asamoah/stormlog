@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.diagnosis_context import Assessment, Context
 from stormlog.infer.diagnosis_inputs import Line, read_input
 from stormlog.infer.diagnosis_join import join
@@ -91,22 +92,74 @@ def test_a_queue_that_explains_little_of_the_ttft_rise_is_no_warning(
     )
 
 
-def test_kv_preemption_upstream_leaves_the_queue_no_fault(tmp_path: Path) -> None:
-    """The burst into a KV budget of 55 tokens: the waits are real, but the
-    steps run while requests waited preempted some of them, so the queue may
-    be KV's consequence and claims no fault."""
-    assessment = _assess(
-        tmp_path, _requests(output=8), Engine(max_num_seqs=4, kv_tokens=55)
-    )
+class _OneForeignPreemption(Engine):
+    """The toy engine, plus one burst step that preempted another client's
+    request: no request of the subject's was preempted."""
+
+    def run(self, requests: list[SimRequest]) -> list[dict[str, Any]]:
+        records = super().run(requests)
+        burst = [
+            r
+            for r in records
+            if r["kind"] == "scheduled" and r["start_mono_ns"] >= BURST_AT + 300 * MS
+        ]
+        burst[0]["preempted"] = ["chatcmpl-other-tenant-0f3a9c1d"]
+        return records
+
+
+def test_another_client_s_preemption_leaves_the_queue_its_fault(
+    tmp_path: Path,
+) -> None:
+    """One preemption of another tenant's request in one of ~600 burst
+    steps is no KV pressure of the subject's, upstream of nothing."""
+    assessment = _assess(tmp_path, _requests(), _OneForeignPreemption(max_num_seqs=4))
 
     (finding,) = assessment.findings
-    assert _alternatives(finding)["kv_preemption_pressure"] == "upstream"
-    assert finding.contested == ["competitor:kv_preemption_pressure:upstream"]
-    assert (finding.severity, finding.claim, finding.role) == (
-        "info",
-        "condition",
-        "primary",
+    assert _alternatives(finding)["kv_preemption_pressure"] == "ruled_out"
+    assert (finding.severity, finding.claim) == ("warning", "fault")
+
+
+def _kv_held(tmp_path: Path, **engine: Any) -> dict[str, dict[str, Any]]:
+    """The KV class's own scenario: a burst into a KV budget of 120 tokens
+    with slots to spare, so preempted requests at the head of the queue
+    hold the others back."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a", output=16)
+    heavy = poisson_free(200, BURST_AT, 10 * MS, prefix="b", output=16)
+    artifact = build_run(
+        tmp_path, calm + heavy, Engine(max_num_seqs=8, kv_tokens=120, **engine)
     )
+    report = diagnose_artifact(artifact, options=DiagnoseOptions(generated_at_ns=1))
+    details = report["payload"]["findings_detail"].values()
+    return {detail["kind"]: detail for detail in details}
+
+
+def _kv_status(queue: dict[str, Any]) -> str:
+    (status,) = [
+        a["status"]
+        for a in queue["alternatives"]
+        if a["kind"] == "kv_preemption_pressure"
+    ]
+    return str(status)
+
+
+def test_preemptions_holding_the_queue_are_upstream_of_an_eligible_kv_finding(
+    tmp_path: Path,
+) -> None:
+    by_kind = _kv_held(tmp_path)
+
+    assert by_kind["kv_preemption_pressure"]["eligibility"]["eligible"]
+    assert _kv_status(by_kind["queue_saturation"]) == "upstream"
+
+
+def test_preemptions_of_unknown_cause_are_not_upstream(tmp_path: Path) -> None:
+    """Without reset records the preemptions' cause is unknown, so the KV
+    finding is an observation, which establishes nothing upstream."""
+    by_kind = _kv_held(tmp_path, observes=None)
+
+    assert not by_kind["kv_preemption_pressure"]["eligibility"]["eligible"]
+    queue = by_kind["queue_saturation"]
+    assert _kv_status(queue) == "not_ruled_out"
+    assert not queue["eligibility"]["contested"]
 
 
 @pytest.mark.parametrize(
