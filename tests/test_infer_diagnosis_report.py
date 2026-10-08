@@ -51,7 +51,9 @@ def test_a_queue_incident_is_a_warning_report(burst: Path) -> None:
     assert report["report_kind"] == "inference_diagnosis"
     assert report["verdict"]["exit_code"] == 3
     assert report["verdict"]["status"] == "findings"
-    (finding,) = report["findings"]
+    kinds = [f["kind"] for f in report["findings"]]
+    assert kinds[0] == "queue_saturation" and "load_increase" in kinds
+    finding = report["findings"][0]
     payload = report["payload"]
     detail = payload["findings_detail"][finding["id"]]
     assert (finding["kind"], finding["severity"]) == ("queue_saturation", "warning")
@@ -128,8 +130,7 @@ def test_an_incident_without_an_eligible_explanation_is_inconclusive(
     _validate(report)
     assert report["payload"]["outcome"] == "inconclusive"
     assert report["verdict"]["exit_code"] == 0  # an observation is not a warning
-    (finding,) = report["findings"]
-    assert finding["severity"] == "info"
+    assert {f["severity"] for f in report["findings"]} == {"info"}
 
 
 @pytest.mark.parametrize(
