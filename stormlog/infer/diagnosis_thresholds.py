@@ -27,7 +27,7 @@ LOOP_MATCHED_BIN_MIN_STEPS = "host_stall.matched_bin_min_steps"
 LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
 QUEUE_WITNESS_SHARE = "queue_saturation.witness_step_share"
 QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
-QUEUE_STALL_COVERAGE = "queue_saturation.stall_wait_share"
+QUEUE_STALL_SHARE = "queue_saturation.stall_excess_share"
 QUEUE_FRONT_SHARE = "queue_saturation.front_excess_share"
 QUEUE_COMPETITOR_FLOOR = "queue_saturation.competitor_floor_share"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
@@ -76,9 +76,10 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # The queue explains the incident when its wait excess is at least
         # this share of the TTFT excess.
         QUEUE_CONTRIBUTION: 0.5,
-        # Engine stalls explain the waits instead when they cover this share
-        # of the waiting time.
-        QUEUE_STALL_COVERAGE: 0.5,
+        # Engine stalls during or just before the waits explain them instead
+        # when they last this share of the wait excess: a stall holds a
+        # request back by no more than its own length.
+        QUEUE_STALL_SHARE: 0.5,
         # Time before the queue (engine ingress, the API server) explains the
         # excess instead when its own excess is this share of the wait's.
         QUEUE_FRONT_SHARE: 0.25,
@@ -138,7 +139,7 @@ __all__ = [
     "QUEUE_CONTRIBUTION",
     "QUEUE_FRONT_SHARE",
     "QUEUE_MEDIAN_WAITING",
-    "QUEUE_STALL_COVERAGE",
+    "QUEUE_STALL_SHARE",
     "QUEUE_WITNESS_SHARE",
     "SELECTION_ALPHA",
     "SELECTION_MIN_ABOVE",
