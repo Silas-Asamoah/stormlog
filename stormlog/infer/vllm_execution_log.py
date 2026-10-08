@@ -37,6 +37,7 @@ STATE_ALIVE = "alive"
 # Not judged: the reader runs elsewhere, so an epoch without goodbye may be
 # alive or gone, and its pending steps are left for a later import.
 STATE_UNKNOWN = "unknown"
+COVERAGE_BASIS = "heartbeat_counters/1"
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,8 @@ class EpochRead:
     pid: int
     start_ns: int
     records: list[RawRecord] = field(default_factory=list)
+    # Every heartbeat read, including those an earlier import consumed.
+    heartbeats: list[RawRecord] = field(default_factory=list)
     hello: dict[str, Any] | None = None
     goodbye: dict[str, Any] | None = None
     status: dict[str, Any] | None = None
@@ -155,7 +158,37 @@ class EpochRead:
             "startup_unranged": status.get("startup_unranged"),
             "pending_samples": status.get("pending_samples"),
             "errors": list(self.errors),
+            "coverage": self.coverage(),
         }
+
+    def coverage(self) -> dict[str, Any]:
+        """Where the log is known to be whole: spans between two heartbeats
+        with every sequence between them read, every ``dropped`` count and
+        ``errors`` unchanged, and the writer not capped. Only there does a
+        kind the hello ``observes`` prove absent by having no record."""
+        observes = (self.hello or {}).get("observes")
+        spans: list[dict[str, int]] = []
+        for before, after in zip(self.heartbeats, self.heartbeats[1:]):
+            if not self._whole_between(before, after):
+                continue
+            if spans and spans[-1]["end_seq"] == before.seq:
+                spans[-1].update(_span_end(after))
+            else:
+                spans.append({**_span_start(before), **_span_end(after)})
+        return {
+            "basis": COVERAGE_BASIS,
+            "observes": sorted(observes) if isinstance(observes, list) else None,
+            "heartbeats": len(self.heartbeats),
+            "spans": spans,
+        }
+
+    def _whole_between(self, before: RawRecord, after: RawRecord) -> bool:
+        read = self.contiguous_seq is not None and after.seq <= self.contiguous_seq
+        return (
+            read
+            and _losses(before.data) is not None
+            and _losses(before.data) == _losses(after.data)
+        )
 
 
 @dataclass
@@ -382,6 +415,9 @@ def _settle(
     epoch.records = [
         record for seq, record in sorted(seen.items()) if mark is None or seq > mark
     ]
+    epoch.heartbeats = [
+        record for _seq, record in sorted(seen.items()) if record.kind == "heartbeat"
+    ]
     for record in seen.values():
         if record.kind == "hello":
             epoch.hello = record.data
@@ -428,6 +464,32 @@ def _stamp(record: RawRecord, clock: str) -> int | None:
     return None
 
 
+def _losses(heartbeat: dict[str, Any]) -> tuple[Any, ...] | None:
+    """What a heartbeat says was lost so far; None when it cannot say, or the
+    writer is capped and stops writing records."""
+    dropped, errors = heartbeat.get("dropped"), _integer(heartbeat.get("errors"))
+    if not isinstance(dropped, dict) or errors is None or heartbeat.get("capped"):
+        return None
+    counts = {str(kind): count for kind, count in dropped.items() if count}
+    return tuple(sorted(counts.items())), errors
+
+
+def _span_start(record: RawRecord) -> dict[str, int]:
+    return {
+        "start_seq": record.seq,
+        "start_mono_ns": _integer(record.data.get("mono_ns")) or 0,
+        "start_wall_ns": _integer(record.data.get("wall_ns")) or 0,
+    }
+
+
+def _span_end(record: RawRecord) -> dict[str, int]:
+    return {
+        "end_seq": record.seq,
+        "end_mono_ns": _integer(record.data.get("mono_ns")) or 0,
+        "end_wall_ns": _integer(record.data.get("wall_ns")) or 0,
+    }
+
+
 def _integer(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
@@ -460,6 +522,7 @@ def _state(
 
 
 __all__ = [
+    "COVERAGE_BASIS",
     "FORMAT",
     "RECORD_KINDS",
     "SILENCE_NS",
