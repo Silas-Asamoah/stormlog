@@ -171,6 +171,34 @@ it), and an experiment that would confirm it.
 Differences of medians come with a percentile bootstrap 95% interval
 (B = 2000, fixed seed), and need at least 20 values in each arm.
 
+## Queue saturation
+
+Requests waited to be scheduled because the engine was full. For one
+subject, the class compares the median `scheduler_wait` of the subject's
+requests with its reference's (a difference of medians with a bootstrap
+interval); with no excess it reports `not_observed`.
+
+| Gate | Holds when |
+| --- | --- |
+| `capacity_witness` | at least half of the busy steps spanning the waits ran at the hello's `max_num_seqs`, or scheduled `max_num_batched_tokens` |
+| `usable_timing` | the wait is `scheduler_wait`; on a log without `enqueued` records it is `engine_ingress_to_schedule`, labelled, and the gate fails |
+
+| Competitor | Indispensable | Ruled out when |
+| --- | --- | --- |
+| `engine_stall` | yes | engine-loop stalls, found by the same rules as the online `engine_loop_gap`, cover less than half of the waiting time |
+| `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms) |
+| `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
+| `engine_ingress` | yes | the `engine_ingress` excess is under a quarter of the wait excess (untestable on a log without `enqueued` records) |
+| `kv_preemption_pressure` | no | the steps spanning the waits preempted nobody; otherwise it is `upstream` |
+| `client_admission` | no | no request was held at the client |
+| `host_stall@api_server` | no | the `send_to_ingress` excess is under a quarter of the wait excess |
+
+The contribution claim also asks that the wait excess be at least half the
+TTFT excess. Without engine records the class is
+`unsupported/no_server_queue_signal`; without a witness it is
+`partial/no_capacity_witness`; with requests on several engines,
+`unsupported/several_engines`.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
@@ -194,6 +222,9 @@ The values are provisional until they are read from real runs.
 | `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 | `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
+| `queue_saturation.witness_step_share` | 0.5 | share of the steps spanning the waits at capacity for a witness |
+| `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
+| `queue_saturation.stall_wait_share` | 0.5 | share of the waiting time engine stalls must cover to explain it instead |
 | `selection.window_seconds` | 1 | base window of incident selection |
 | `selection.span_cap_seconds` | 30 | longest a joined window may span |
 | `selection.min_requests` | 20 | requests a window is joined until it holds |

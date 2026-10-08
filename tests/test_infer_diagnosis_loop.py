@@ -29,6 +29,8 @@ from stormlog.infer.diagnosis_loop import (
     Stall,
     engine_loop_gap,
     pause_intervals,
+    stalls_over_limit,
+    steps_from_raw,
 )
 from stormlog.infer.diagnosis_thresholds import (
     LOOP_BASELINE_WINDOW_NS,
@@ -905,3 +907,14 @@ def test_writer_errors_rising_between_heartbeats_give_no_verdict() -> None:
     signal = engine_loop_gap(_sequenced(records))
     assert signal.reason == REASON_WRITER_ERRORS
     assert signal.exceeds is None
+
+
+def test_stalls_over_limit_are_what_the_trigger_would_flag() -> None:
+    records = _loop(60, stall_after=40, stall_ns=200 * MS)
+
+    found = stalls_over_limit(steps_from_raw(records))
+
+    ((stall, limit),) = found
+    assert stall.locus == LOCUS_BETWEEN_STEPS and stall.duration_ns >= 200 * MS
+    assert limit == pytest.approx(50 * MS)
+    assert stalls_over_limit(steps_from_raw(_loop(60))) == []
