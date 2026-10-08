@@ -93,9 +93,10 @@ class EpochWriter:
         # Records taken from the queue and not yet written: with the queue,
         # what a heartbeat says is still to come.
         self._in_flight = 0
-        # Records emit is still serializing: their stamps were taken before
-        # the call, so a heartbeat stamped meanwhile must count them too.
-        self._sizing = 0
+        # Records reserved and not yet queued or dropped: their last stamps
+        # are taken after the reservation, so a heartbeat stamped meanwhile
+        # must count them too.
+        self._reserved = 0
         self._condition = threading.Condition()
         self._closing = False
         # Set once goodbye is written; no heartbeat record may follow it.
@@ -119,22 +120,37 @@ class EpochWriter:
         The rest are serialized now. ``fields`` must not reuse the common
         fields' names, which the writer thread adds with the sequence number.
 
-        The record is pending from the call on, while it is serialized, since
-        its stamps are already taken; it stops being so in the same hold of
-        the lock that queues or drops it, so no heartbeat falls between.
+        The record is pending from the call on, while it is serialized; a
+        caller that stamps it before the call reserves it first (``reserve``)
+        so that it is pending from before its stamps.
         """
+        with self.reserve() as reservation:
+            reservation.emit(kind, fields)
+
+    def reserve(self) -> Reservation:
+        """Count one record as pending from now, before its stamps are
+        taken, so a heartbeat stamped after them is written knowing it is to
+        come. It stops being pending in the same hold of the lock that
+        queues or drops it, so no heartbeat falls between; a reservation
+        left without its record stops when it is closed."""
         with self._condition:
-            self._sizing += 1
+            self._reserved += 1
+        return Reservation(self)
+
+    def _emit_reserved(self, kind: str, fields: dict[str, Any]) -> None:
         try:
             body = self._serialized(kind, fields)
         except BaseException:
-            with self._condition:
-                self._sizing -= 1
+            self._release()
             raise
         with self._condition:
-            self._sizing -= 1
+            self._reserved -= 1
             if body is not None:
                 self._enqueue(kind, body)
+
+    def _release(self) -> None:
+        with self._condition:
+            self._reserved -= 1
 
     def _serialized(self, kind: str, fields: dict[str, Any]) -> str | None:
         """The record's JSON object, or None when it was dropped unserialized
@@ -299,7 +315,7 @@ class EpochWriter:
                 "queued": len(self._queue),
                 # Accepted before this stamp and not yet written: they take
                 # the next sequences, after this record.
-                "pending": len(self._queue) + self._in_flight + self._sizing,
+                "pending": len(self._queue) + self._in_flight + self._reserved,
             }
         try:
             status.update(self._status_fields())
@@ -329,6 +345,33 @@ class EpochWriter:
             return True
         self.count_error()
         return False
+
+
+class Reservation:
+    """One record counted as pending until it is emitted, or until the
+    reservation is closed without it."""
+
+    def __init__(self, writer: EpochWriter) -> None:
+        self._writer = writer
+        self._open = True
+
+    def __enter__(self) -> Reservation:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    def emit(self, kind: str, fields: dict[str, Any]) -> None:
+        """Emit the reserved record, as ``EpochWriter.emit`` does."""
+        if not self._open:
+            raise RuntimeError("a reservation is for one record")
+        self._open = False
+        self._writer._emit_reserved(kind, fields)
+
+    def close(self) -> None:
+        if self._open:
+            self._open = False
+            self._writer._release()
 
 
 class _Segment:
@@ -491,4 +534,11 @@ def _unlink(path: Path) -> None:
         pass
 
 
-__all__ = ["FORMAT", "EpochWriter", "WriterLimits", "remove_old_epochs", "stamp"]
+__all__ = [
+    "FORMAT",
+    "EpochWriter",
+    "Reservation",
+    "WriterLimits",
+    "remove_old_epochs",
+    "stamp",
+]

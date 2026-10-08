@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .writer import EpochWriter, stamp
+from .writer import EpochWriter, Reservation, stamp
 
 ITERATION_ATTRIBUTE = "_stormlog_iteration"
 # vLLM keeps at most a few steps in flight; more pending means outputs were
@@ -37,7 +37,9 @@ class _Pending:
 
 @dataclass
 class EngineRecorder:
-    """Records for one scheduler instance."""
+    """Records for one scheduler instance. Each record is reserved before
+    its last stamp is taken (``EpochWriter.reserve``), so a heartbeat stamped
+    after that stamp counts it as pending."""
 
     writer: EpochWriter
     producer: str
@@ -51,19 +53,24 @@ class EngineRecorder:
     # ------------------------------------------------------------ admission
 
     def on_admit(self, request: Any) -> None:
-        self.writer.emit(
-            "alias",
-            {
-                "internal": str(request.request_id),
-                "external": _optional_str(getattr(request, "external_req_id", None)),
-                **stamp(),
-            },
-        )
+        with self.writer.reserve() as reservation:
+            reservation.emit(
+                "alias",
+                {
+                    "internal": str(request.request_id),
+                    "external": _optional_str(
+                        getattr(request, "external_req_id", None)
+                    ),
+                    **stamp(),
+                },
+            )
 
-    def on_enqueue(self, request: Any, at: dict[str, int]) -> None:
+    def on_enqueue(
+        self, request: Any, at: dict[str, int], reservation: Reservation
+    ) -> None:
         """A request entering the scheduler's waiting queue, stamped just
-        before ``add_request`` ran."""
-        self.writer.emit(
+        before ``add_request`` ran, under a reservation taken before that."""
+        reservation.emit(
             "enqueued",
             {
                 "internal": str(request.request_id),
@@ -90,20 +97,23 @@ class EngineRecorder:
         )
         while len(self.pending) > MAX_PENDING:
             self.pending.pop(next(iter(self.pending)))
-        end = stamp()
-        self.writer.emit(
-            "scheduled",
-            {
-                "iteration": iteration,
-                **{f"start_{name}": value for name, value in start.items()},
-                **{f"end_{name}": value for name, value in end.items()},
-                "total_tokens": int(output.total_num_scheduled_tokens),
-                "zero_token": int(output.total_num_scheduled_tokens) == 0,
-                "preempted": sorted(getattr(output, "preempted_req_ids", None) or ()),
-                "pause_state": _state_name(getattr(scheduler, "pause_state", None)),
-                "members": [fields for _, fields in members],
-            },
-        )
+        with self.writer.reserve() as reservation:
+            end = stamp()
+            reservation.emit(
+                "scheduled",
+                {
+                    "iteration": iteration,
+                    **{f"start_{name}": value for name, value in start.items()},
+                    **{f"end_{name}": value for name, value in end.items()},
+                    "total_tokens": int(output.total_num_scheduled_tokens),
+                    "zero_token": int(output.total_num_scheduled_tokens) == 0,
+                    "preempted": sorted(
+                        getattr(output, "preempted_req_ids", None) or ()
+                    ),
+                    "pause_state": _state_name(getattr(scheduler, "pause_state", None)),
+                    "members": [fields for _, fields in members],
+                },
+            )
 
     def _new_members(
         self, scheduler: Any, output: Any
@@ -240,11 +250,12 @@ class EngineRecorder:
             )
             for name, member in (pending.members.items() if pending else ())
         ]
-        fields: dict[str, Any] = {"iteration": identity[1], **stamp()}
-        if failed:
-            fields["update_failed"] = True
-        fields["members"] = members
-        self.writer.emit("completed", fields)
+        with self.writer.reserve() as reservation:
+            fields: dict[str, Any] = {"iteration": identity[1], **stamp()}
+            if failed:
+                fields["update_failed"] = True
+            fields["members"] = members
+            reservation.emit("completed", fields)
 
     def _completed_member(
         self,
@@ -292,7 +303,8 @@ class EngineRecorder:
         was, now = _state_name(before), _state_name(after)
         if was is not None and was == now:
             return
-        self.writer.emit("pause", {"from": was, "to": now, **stamp()})
+        with self.writer.reserve() as reservation:
+            reservation.emit("pause", {"from": was, "to": now, **stamp()})
 
     # ------------------------------------------------------------ cache resets
 
@@ -316,15 +328,16 @@ class EngineRecorder:
         """The call's outcome: its return value, or null when it raised."""
         if call is None:
             return
-        self.writer.emit(
-            "cache_reset",
-            {
-                **call,
-                "succeeded": succeeded,
-                "raised": succeeded is None,
-                **{f"end_{name}": value for name, value in stamp().items()},
-            },
-        )
+        with self.writer.reserve() as reservation:
+            reservation.emit(
+                "cache_reset",
+                {
+                    **call,
+                    "succeeded": succeeded,
+                    "raised": succeeded is None,
+                    **{f"end_{name}": value for name, value in stamp().items()},
+                },
+            )
 
     # ------------------------------------------------------------ exit
 
@@ -339,16 +352,17 @@ class EngineRecorder:
             if hasattr(request, "get_finished_reason")
             else None
         )
-        self.writer.emit(
-            "terminal",
-            {
-                "internal": internal,
-                "status": getattr(status, "name", None) or _optional_str(status),
-                "finish_reason": _optional_str(reason),
-                "output_tokens": output_tokens,
-                **stamp(),
-            },
-        )
+        with self.writer.reserve() as reservation:
+            reservation.emit(
+                "terminal",
+                {
+                    "internal": internal,
+                    "status": getattr(status, "name", None) or _optional_str(status),
+                    "finish_reason": _optional_str(reason),
+                    "output_tokens": output_tokens,
+                    **stamp(),
+                },
+            )
 
 
 def _emitted(result: Any) -> dict[str, tuple[int, str | None]] | None:

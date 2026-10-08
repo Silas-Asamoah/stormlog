@@ -352,9 +352,11 @@ record writing had stopped counts under its kind, whatever its size. `queued`
 is the number of records waiting to be written. `pending` is the number
 accepted before the heartbeat's stamp and not yet written, the batch being
 written included: under a backlog the heartbeat is written ahead of them, and
-they take the next sequences after it. A record counts from the moment it is
-handed to the writer, while it is still being serialized, since its stamps
-were taken before that.
+they take the next sequences after it. A record counts from just before its
+last stamp is taken, while it is serialized, until it is queued or dropped:
+the hook reserves it first, so a heartbeat stamped after a record's stamp
+counts it even when vLLM's own call (an enqueue's `add_request`) or a thread
+switch comes between the stamp and the record.
 
 A worker's heartbeat adds `range_misses` (serving calls that ran without an
 iteration range), `startup_unranged` (warm-up, dummy and CUDA-graph capture
