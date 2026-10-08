@@ -90,6 +90,26 @@ def test_the_witness_counts_steps_while_someone_waited(tmp_path: Path) -> None:
     assert finding.metrics["steps_at_capacity_share"] == pytest.approx(1.0, abs=0.02)
 
 
+def test_admissions_rule_out_a_pause_only_while_requests_waited(
+    tmp_path: Path,
+) -> None:
+    """Without pause records, admissions that never stop for 500 ms while a
+    request waits rule out a paused scheduler. A window that begins in calm
+    traffic has seconds between admissions with nobody waiting: those gaps
+    say nothing about a pause."""
+    engine = Engine(max_num_seqs=4, wake_ns=20_000, observes=None)
+    view = join(read_input(build_run(tmp_path, _requests(), engine)))
+    start = BURST_AT + WALL_OFFSET - 30 * SECOND
+    context = Context(
+        view, select(view, SelectionOptions(windows=((start, start + 40 * SECOND),)))
+    )
+    (subject,) = context.subjects()
+
+    (finding,) = assess_queue(context, subject).findings
+
+    assert _alternatives(finding)["scheduler_paused"] == "ruled_out"
+
+
 def test_an_older_log_cannot_tell_ingress_from_the_queue(tmp_path: Path) -> None:
     engine = Engine(max_num_seqs=4, enqueued_records=False, observes=None)
     assessment = _assess(tmp_path, _requests(), engine)

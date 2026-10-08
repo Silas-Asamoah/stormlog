@@ -35,7 +35,7 @@ from .diagnosis_model import (
 from .diagnosis_segments import MERGED_INGRESS
 from .diagnosis_selection import Subject
 from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
-from .diagnosis_steps import Step, Steps, loop_steps
+from .diagnosis_steps import Step, Steps, loop_steps, merge_intervals
 from .diagnosis_thresholds import (
     LOOP_NO_BASELINE_FLOOR_NS,
     QUEUE_CONTRIBUTION,
@@ -143,7 +143,9 @@ def _finding(
     ttft = _ttft_excess(context, subject)
     alternatives = [
         _engine_stall(context, producer, waiting),
-        _scheduler_paused(context, producer, steps, span),
+        _scheduler_paused(
+            context, producer, steps, merge_intervals(_wait_intervals(context, waiting))
+        ),
         _blocked_waiting(waiting),
         _engine_ingress(context, subject, waits, excess),
         _preemption(spanning),
@@ -301,25 +303,22 @@ def _covered_by(interval: tuple[int, int], stalls: list[tuple[int, int]]) -> int
 
 
 def _scheduler_paused(
-    context: Context, producer: str, steps: Steps, span: tuple[int, int] | None
+    context: Context, producer: str, steps: Steps, waits: list[tuple[int, int]]
 ) -> Alternative:
     """Ruled out by the hook's pause records where nothing was lost, else by
-    admissions continuing throughout the waits."""
+    admissions continuing throughout the waits. Each is judged over the
+    stretches in which a subject's request waited, not between them."""
     kind = "scheduler_paused"
-    if span is None:
-        return Alternative(kind, UNTESTABLE, "no step spans the waits", True)
-    paused = [s for s in steps.paused_intervals(span[1]) if _overlap(s[:2], span)]
-    if paused:
-        return Alternative(
-            kind, NOT_RULED_OUT, f"{paused[0][2]} overlaps the waits", True
-        )
-    epoch = context.epoch_of(producer)
-    observes = epoch.observes if epoch is not None else None
-    if observes is not None and "pause" in observes and _covered(epoch, span):
+    if not waits:
+        return Alternative(kind, UNTESTABLE, "no wait was placed", True)
+    paused = _pause_over(steps, waits)
+    if paused is not None:
+        return Alternative(kind, NOT_RULED_OUT, f"{paused} overlaps the waits", True)
+    if _pauses_recorded_whole(context.epoch_of(producer), waits):
         return Alternative(
             kind, RULED_OUT, "no pause transition, and nothing lost", True
         )
-    if _admissions_continue(context, steps, span):
+    if all(_admissions_continue(context, steps, wait) for wait in waits):
         return Alternative(
             kind, RULED_OUT, "admissions continued throughout the waits", True
         )
@@ -328,12 +327,26 @@ def _scheduler_paused(
     )
 
 
+def _pause_over(steps: Steps, waits: list[tuple[int, int]]) -> str | None:
+    """The first pause that overlaps a wait, as its state."""
+    for start, end, state in steps.paused_intervals(waits[-1][1]):
+        if any(_overlap((start, end), wait) for wait in waits):
+            return str(state)
+    return None
+
+
+def _pauses_recorded_whole(epoch: Any, waits: list[tuple[int, int]]) -> bool:
+    """The hook records pauses, and lost nothing over any wait."""
+    observes = epoch.observes if epoch is not None else None
+    if observes is None or "pause" not in observes:
+        return False
+    return all(_covered(epoch, wait) for wait in waits)
+
+
 def _admissions_continue(context: Context, steps: Steps, span: tuple[int, int]) -> bool:
     """Whether some request was admitted at least every stall floor
     throughout the span: a paused scheduler admits nobody."""
     admissions = [step.start_ns for step in steps.between(*span) if step.admitted]
-    if not admissions:
-        return False
     floor = resolve_threshold(LOOP_NO_BASELINE_FLOOR_NS, context.thresholds)[0]
     edges = [span[0], *admissions, span[1]]
     return max(b - a for a, b in zip(edges, edges[1:])) < floor
