@@ -269,14 +269,24 @@ Twice the p99.9 rests on a baseline's few largest gaps. Without the cap,
 three 1 s pauses in a 20 ms engine's baseline let 1–1.5 s stalls every
 10 s recover early in 16 of 20; with it, in none.
 
-An engine whose prefill steps are longer than the cap falls back to the
-strict rule, where each prefill step ends a hold. In rev-220-b's probe,
-0.8% prefill steps of 250 ms recover at the `SIGCONT` in 3 of 20. G0
-rules this out by checking every dose against the measured step times. If
-G0 fails that check, step kinds go into `Signals`, and prefill steps are
-left out of the hold instead. Where twice the p99 exceeds 300 ms (2%
-prefill steps of 250 ms), 300 ms stalls every 2 s pass in 15 of 20, as
-they did before the tolerance.
+An engine whose prefill steps are longer than the cap would fall back to
+the strict rule, where each prefill step ends a hold: in rev-220-b's
+probe, 0.8% prefill steps of 250 ms recovered at the `SIGCONT` in 3 of 20,
+and timed out in 8. Recovery checks G0's dose check itself, on every run:
+a series whose baseline gaps too long for a hold (past twice its p99 and
+past the cap) recur at one or more per cadence hold, at the baseline's
+rate, never recovers, and `recovery_blocked` says so (`dose_check_failed:
+16 of 2021 busy step gaps in the baseline are too long for a hold, …: 3.6
+per 10 s hold`). With 250 ms prefill steps at 0.4% every seed of 20 is
+refused; at 0.8%, 19, and the one whose p99 is itself a prefill step
+recovers at once. G2's baseline with three 1 s pauses has 0.67 such gaps
+per hold, and passes.
+If G0 fails the check, step kinds go into `Signals`, and prefill steps
+are left out of the hold instead. Where twice the p99 exceeds 300 ms (2%
+prefill steps of 250 ms), no gap is too long for a hold, the check
+passes, and 300 ms stalls every 2 s pass in 15 of 20, as they did before
+the tolerance: G0's step times still have to show every dose longer than
+a typical prefill step.
 
 **Cadence is blind while the victim is idle.** Only busy gaps count, so a
 stall that falls wholly in victim idle time (about a fifth of the time at

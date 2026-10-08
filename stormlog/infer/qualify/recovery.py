@@ -58,8 +58,9 @@ class Thresholds:
     # as a dosed pulse is never tolerated, however long the baseline's own
     # long gaps were (three 1 s pauses in a baseline let 1.5 s stalls
     # through). Where 2x the p99 is longer still, nothing is tolerated
-    # beyond it. G0 checks that every dose is longer than a typical prefill
-    # step; refrozen with the doses.
+    # beyond it. A baseline whose gaps this long would recur in a hold
+    # fails G0's dose check, and its cadence never recovers (Never says
+    # why); refrozen with the doses.
     long_gap_tolerance_cap_s: float = 0.06
     # ...and no more gaps may lie above the baseline's p95 than chance
     # allows: this quantile of Binomial(n, exceedance_share).
@@ -399,11 +400,12 @@ class CadenceWithin:
         self.longest = thresholds.long_gap_factor * baseline.p99
         self.long = _prefix(float(value > self.longest) for value in values)
         self.long_share = baseline.long_count / baseline.count if baseline.count else 0
-        tolerated = min(
-            thresholds.long_gap_factor * baseline.p999,
+        never = never_longer(
+            baseline.p99,
+            baseline.p999,
+            thresholds.long_gap_factor,
             thresholds.long_gap_tolerance_cap_s,
         )
-        never = max(self.longest, tolerated)
         self.too_long = _prefix(float(value > never) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
@@ -511,8 +513,9 @@ def held_from(
 @dataclass(frozen=True)
 class GapStats:
     """A gap series in the baseline: how many gaps, their mean, p95, p99
-    and p99.9, in seconds, and how many were long (over ``long_gap_factor``
-    times the p99). With no gaps nothing can be compared with it."""
+    and p99.9, in seconds, how many were long (over ``long_gap_factor``
+    times the p99), and how many were too long for a hold to hold (over
+    ``never_longer``). With no gaps nothing can be compared with it."""
 
     count: int = 0
     mean: float = math.inf
@@ -520,20 +523,41 @@ class GapStats:
     p99: float = math.inf
     long_count: int = 0
     p999: float = math.inf
+    too_long_count: int = 0
 
     @classmethod
-    def of(cls, values: Sequence[float], long_gap_factor: float = 2.0) -> GapStats:
+    def of(
+        cls,
+        values: Sequence[float],
+        long_gap_factor: float = 2.0,
+        cap_s: float = math.inf,
+    ) -> GapStats:
         if not values:
             return cls()
         p99 = quantile(values, 0.99) or math.inf
+        p999 = quantile(values, 0.999) or math.inf
+        never = never_longer(p99, p999, long_gap_factor, cap_s)
         return cls(
             count=len(values),
             mean=statistics.fmean(values),
             p95=_q95(values),
             p99=p99,
             long_count=sum(1 for value in values if value > long_gap_factor * p99),
-            p999=quantile(values, 0.999) or math.inf,
+            p999=p999,
+            too_long_count=sum(1 for value in values if value > never),
         )
+
+    def too_long_per(self, seconds: float) -> float:
+        """How many gaps too long for a hold ``seconds`` of the series'
+        time holds, at the baseline's rate."""
+        total = self.count * self.mean
+        return self.too_long_count * seconds / total if total > 0 else 0.0
+
+
+def never_longer(p99: float, p999: float, factor: float, cap_s: float) -> float:
+    """The longest gap a cadence hold may hold: ``factor`` times the p99,
+    or longer, up to ``factor`` times the p99.9, but not past ``cap_s``."""
+    return max(factor * p99, min(factor * p999, cap_s))
 
 
 @dataclass(frozen=True)
@@ -565,7 +589,8 @@ class Baseline:
         end_ns: int,
         thresholds: Thresholds | None = None,
     ) -> Baseline:
-        factor = (thresholds or Thresholds()).long_gap_factor
+        thresholds = thresholds or Thresholds()
+        factor, cap = thresholds.long_gap_factor, thresholds.long_gap_tolerance_cap_s
         waits = between(signals.waits, start_ns, end_ns)
         gauge = between(signals.waiting, start_ns, end_ns)
         ratios = between(signals.engine_hit_ratio, start_ns, end_ns)
@@ -577,9 +602,11 @@ class Baseline:
             waiting_high=max(waiting),
             kv_max=max(between(signals.kv_usage, start_ns, end_ns) or [0.0]),
             steps=GapStats.of(
-                between(signals.busy_step_gaps(), start_ns, end_ns), factor
+                between(signals.busy_step_gaps(), start_ns, end_ns), factor, cap
             ),
-            chunks=GapStats.of(between(signals.chunk_gaps, start_ns, end_ns), factor),
+            chunks=GapStats.of(
+                between(signals.chunk_gaps, start_ns, end_ns), factor, cap
+            ),
             cached_median=_median(between(signals.cached_fraction, start_ns, end_ns)),
             hit_ratio_median=_median(ratios),
             wait_count=len(waits),
@@ -699,20 +726,40 @@ def _cadence_criteria(context: Context, *, chunks: bool) -> list[Criterion]:
     ]
     if chunks:
         series.append(("chunk gaps", signals.chunk_gaps, baseline.chunks))
-    needed = context.thresholds.min_cadence_samples
+    thresholds = context.thresholds
+    needed = thresholds.min_cadence_samples
     criteria: list[Criterion] = []
     for name, points, stats in series:
         if stats.count < needed:
             criteria.append(_thin(name, stats.count, needed))
+        elif (failed := _dose_check(name, stats, thresholds)) is not None:
+            criteria.append(failed)
         else:
-            criteria.append(
-                CadenceWithin(points, stats, context.thresholds, signals.in_flight)
-            )
+            criteria.append(CadenceWithin(points, stats, thresholds, signals.in_flight))
     return criteria
 
 
 def _thin(name: str, count: int, needed: int) -> Never:
     return Never(f"baseline_too_thin: {count} {name} of the {needed} a hold needs")
+
+
+def _dose_check(name: str, stats: GapStats, thresholds: Thresholds) -> Never | None:
+    """G0's dose check, on every run. A hold may hold no gap longer than
+    ``never_longer``, which the smallest dose caps; an engine whose healthy
+    gaps that long recur at one or more per hold, at the baseline's rate
+    (prefill steps longer than a dose), would end nearly every hold, and
+    recovery would time out by chance (E5). Its cadence can't be judged
+    then: the rule never holds, and says why."""
+    hold_s = thresholds.cadence_hold_ns / SECOND
+    per_hold = stats.too_long_per(hold_s)
+    if per_hold < 1:
+        return None
+    return Never(
+        f"dose_check_failed: {stats.too_long_count} of {stats.count} {name} in "
+        f"the baseline are too long for a hold, past twice the p99 and the "
+        f"smallest dose ({thresholds.long_gap_tolerance_cap_s * 1000:g} ms): "
+        f"{per_hold:.1f} per {hold_s:g} s hold"
+    )
 
 
 def _queue_onset(context: Context) -> tuple[int | None, str]:
