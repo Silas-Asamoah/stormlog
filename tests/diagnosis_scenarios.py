@@ -1,0 +1,430 @@
+"""Synthetic runs for diagnosis tests: a client and a toy vLLM engine.
+
+The engine steps at a fixed cadence, admits waiting requests first come first
+served up to ``max_num_seqs``, prefills a new request in one step and decodes
+one token per step. It writes the hook log (``docs/vllm_execution.md``) the
+way the hook would, and the client writes its records the way ``infer
+profile`` does; the artifact is then imported through the real
+``import_execution_into_artifact``. Engine and client share one host, so the
+client's wall clock is the engine's: wall = mono + WALL_OFFSET.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from stormlog.infer.correlation_events import (
+    ArtifactIdentityEvent,
+    CorrelationContext,
+)
+from stormlog.infer.vllm_execution_import import import_execution_into_artifact
+from tests.vllm_execution_helpers import (
+    BOOT,
+    HOST,
+    SECOND,
+    WALL_OFFSET,
+    importer,
+    stamp,
+    write_epoch,
+)
+
+MS = 1_000_000
+RUN = "run-1"
+SESSION = "session-1"
+PID, START = 2600, 1_790_000_000_000_000_000
+EPOCH = f"engine-{PID}-{START}"
+OBSERVES = ["cache_reset", "enqueued", "pause"]
+
+
+@dataclass
+class SimRequest:
+    """One client request; times are on the engine's monotonic clock."""
+
+    request_id: str
+    sent_ns: int
+    case_id: str = "c1"
+    phase: str = "measured"
+    prompt: int = 8
+    output: int = 4
+    intended_ns: int | None = None
+    ingress_ns: int = 1 * MS  # send to the engine's alias
+    enqueue_ns: int = 100_000  # alias to entering the scheduler
+    delivery_ns: int = 500_000  # a step's completion to the client
+    structured_output: bool = False
+    held_for_slot: bool = False
+    shared_prefix_tokens: int | None = None
+    prefix_group: int | None = None
+    cached: int = 0  # prefix-cache hit at its first step
+    # Filled by the engine.
+    first_step: int | None = None
+    first_done_ns: int | None = None
+    last_done_ns: int | None = None
+
+    @property
+    def x_request_id(self) -> str:
+        return f"stormlog-{RUN}-{self.request_id}"
+
+    @property
+    def internal(self) -> str:
+        return f"chatcmpl-{self.x_request_id}-0f3a9c1d"
+
+    @property
+    def admitted_ns(self) -> int:
+        return self.sent_ns + self.ingress_ns
+
+    @property
+    def enqueued_ns(self) -> int:
+        return self.admitted_ns + self.enqueue_ns
+
+
+@dataclass
+class Engine:
+    max_num_seqs: int = 8
+    step_ns: int = 10 * MS
+    gap_ns: int = 100_000
+    observes: list[str] | None = field(default_factory=lambda: list(OBSERVES))
+    max_num_batched_tokens: int = 2048
+    # Extra raw records to interleave by time, e.g. pauses and resets.
+    extra: list[tuple[int, dict[str, Any]]] = field(default_factory=list)
+
+    def run(self, requests: list[SimRequest]) -> list[dict[str, Any]]:
+        """Serve ``requests``; return the epoch's raw records after the hello."""
+        timed: list[tuple[int, int, dict[str, Any]]] = []
+        for request in requests:
+            timed.append(
+                (
+                    request.admitted_ns,
+                    0,
+                    {
+                        "kind": "alias",
+                        "internal": request.internal,
+                        "external": f"chatcmpl-{request.x_request_id}",
+                        **stamp(request.admitted_ns),
+                    },
+                )
+            )
+            timed.append(
+                (
+                    request.enqueued_ns,
+                    0,
+                    {
+                        "kind": "enqueued",
+                        "internal": request.internal,
+                        "structured_output": request.structured_output,
+                        "resumable": False,
+                        **stamp(request.enqueued_ns),
+                    },
+                )
+            )
+        timed.extend((at, 0, record) for at, record in self.extra)
+        timed.extend(self._steps(requests))
+        timed.sort(key=lambda item: (item[0], item[1]))
+        end = max(at for at, _, _ in timed) + SECOND
+        records = [record for _, _, record in timed]
+        records.append({"kind": "goodbye", **stamp(end), "last_seq": len(records) + 1})
+        return _with_heartbeats(records)
+
+    def _steps(
+        self, requests: list[SimRequest]
+    ) -> list[tuple[int, int, dict[str, Any]]]:
+        waiting = sorted(requests, key=lambda r: r.enqueued_ns)
+        running: dict[str, tuple[SimRequest, int]] = {}  # internal -> (request, tokens)
+        out: list[tuple[int, int, dict[str, Any]]] = []
+        now = waiting[0].enqueued_ns if waiting else 0
+        iteration = 0
+        while waiting or running:
+            arrived = [r for r in waiting if r.enqueued_ns <= now]
+            if not running and not arrived:
+                now = waiting[0].enqueued_ns
+                continue
+            admitted = arrived[: self.max_num_seqs - len(running)]
+            for request in admitted:
+                waiting.remove(request)
+                request.first_step = iteration
+            members = [_member(r, first=True) for r in admitted]
+            members += [_member(r, first=False, done=n) for r, n in running.values()]
+            total = sum(m["scheduled"] for m in members)
+            out.append((now, 1, _scheduled(iteration, now, members, total)))
+            finished_at = now + self.step_ns
+            for request in admitted:
+                running[request.internal] = (request, 0)
+            done, freed = [], []
+            for internal, (request, tokens) in list(running.items()):
+                tokens += 1
+                if tokens == 1:
+                    request.first_done_ns = finished_at
+                finish = "length" if tokens >= request.output else None
+                done.append(_done(internal, tokens, request, finish))
+                running[internal] = (request, tokens)
+                if finish is not None:
+                    request.last_done_ns = finished_at
+                    freed.append(request)
+            for request in freed:
+                del running[request.internal]
+                out.append(
+                    (
+                        finished_at - 1,
+                        2,
+                        {
+                            "kind": "terminal",
+                            "internal": request.internal,
+                            "status": "FINISHED_LENGTH_CAPPED",
+                            "finish_reason": "length",
+                            "output_tokens": request.output,
+                            **stamp(finished_at - 1),
+                        },
+                    )
+                )
+            out.append(
+                (
+                    finished_at,
+                    3,
+                    {
+                        "kind": "completed",
+                        "iteration": str(iteration),
+                        **stamp(finished_at),
+                        "members": done,
+                    },
+                )
+            )
+            iteration += 1
+            now = finished_at + self.gap_ns
+        return out
+
+
+def _member(request: SimRequest, *, first: bool, done: int = 0) -> dict[str, Any]:
+    computed = 0 if first else request.prompt + done - 1
+    scheduled = request.prompt - request.cached if first else 1
+    return {
+        "internal": request.internal,
+        "sighting": "first" if first else "repeat",
+        "phase": "context" if first else "generation",
+        "scheduled": scheduled,
+        "computed_before": request.cached if first else computed,
+        "prompt_tokens": request.prompt,
+        "prefill_scheduled": scheduled if first else 0,
+        "past_prompt_scheduled": 0 if first else 1,
+        "drafts_scheduled": 0,
+        "cached_at_admission": request.cached if first else None,
+        "recompute": False,
+        "output_before": 0 if first else done,
+        "resumable": False,
+    }
+
+
+def _done(
+    internal: str, tokens: int, request: SimRequest, finish: str | None
+) -> dict[str, Any]:
+    return {
+        "internal": internal,
+        "outcome": "kept",
+        "stale": False,
+        "sampled": 1,
+        "accepted_drafts": 0,
+        "retained": 1,
+        "finish_reason": finish,
+        "computed_after": request.prompt + tokens - 1,
+    }
+
+
+def _scheduled(
+    iteration: int, now: int, members: list[dict[str, Any]], total: int
+) -> dict[str, Any]:
+    return {
+        "kind": "scheduled",
+        "iteration": str(iteration),
+        **stamp(now, "start_"),
+        **stamp(now + 50_000, "end_"),
+        "total_tokens": total,
+        "zero_token": total == 0,
+        "preempted": [],
+        "pause_state": "UNPAUSED",
+        "members": members,
+    }
+
+
+def _with_heartbeats(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Insert a heartbeat every second of engine time, counters clean."""
+    out: list[dict[str, Any]] = []
+    next_beat: int | None = None
+    for record in records:
+        at = record.get("mono_ns", record.get("start_mono_ns"))
+        if isinstance(at, int):
+            if next_beat is None:
+                next_beat = at
+            while at >= next_beat:
+                out.append(
+                    {
+                        "kind": "heartbeat",
+                        **stamp(next_beat),
+                        "last_seq": len(out),
+                        "dropped": {},
+                        "errors": 0,
+                        "bytes": 1024,
+                        "capped": False,
+                        "queued": 0,
+                    }
+                )
+                next_beat += SECOND
+        out.append(record)
+    return out
+
+
+def hello_record(engine: Engine) -> dict[str, Any]:
+    first = {
+        "kind": "hello",
+        "role": "engine",
+        "host": HOST,
+        "boot_id": BOOT,
+        "pid": PID,
+        "start_ns": START,
+        "vllm_version": "0.30.0",
+        "enabled": True,
+        "refused": None,
+        "producer": f"vllm:{HOST}:{BOOT}:{PID}:{START}",
+        "config": {
+            "executor": "uni",
+            "tp": 1,
+            "max_num_seqs": engine.max_num_seqs,
+            "max_num_batched_tokens": engine.max_num_batched_tokens,
+            "request_id_randomization": True,
+        },
+        "clock": {**stamp(0), "gap_ns": 800},
+    }
+    if engine.observes is not None:
+        first["observes"] = engine.observes
+    return first
+
+
+def client_records(request: SimRequest) -> list[dict[str, Any]]:
+    """What ``infer profile`` writes for one request, in append order."""
+    sent = request.sent_ns + WALL_OFFSET
+    common = {
+        "schema_version": 1,
+        "session_id": SESSION,
+        "request_id": request.request_id,
+        "x_request_id": request.x_request_id,
+        "case_id": request.case_id,
+        "phase": request.phase,
+    }
+    intended = (
+        request.intended_ns if request.intended_ns is not None else request.sent_ns
+    ) + WALL_OFFSET
+    records = [
+        {
+            **common,
+            "event_type": "infer.dispatch",
+            "intended_at_ns": intended,
+            "started_at_ns": sent,
+            "timestamp_ns": sent,
+        }
+    ]
+    if request.first_done_ns is None or request.last_done_ns is None:
+        return records
+    first = request.first_done_ns + request.delivery_ns + WALL_OFFSET
+    ended = request.last_done_ns + request.delivery_ns + WALL_OFFSET
+    records.append(
+        {
+            **common,
+            "event_type": "infer.first_content",
+            "first_content_at_ns": first,
+            "timestamp_ns": first,
+        }
+    )
+    records.append(
+        {
+            **common,
+            "event_type": "infer.request",
+            "started_at_ns": sent,
+            "ended_at_ns": ended,
+            "timestamp_ns": sent,
+            "status": "ok",
+            "ttft_ms": (first - sent) / MS,
+            "e2e_latency_ms": (ended - sent) / MS,
+            "prompt_tokens": request.prompt,
+            "output_tokens": request.output,
+            "target_input_tokens": request.prompt,
+            "target_output_tokens": request.output,
+            "arrival_mode": "poisson",
+            "intended_at_ns": intended,
+            "dispatch_lag_ms": (sent - intended) / MS,
+            "held_for_slot": request.held_for_slot,
+            "shared_prefix_tokens": request.shared_prefix_tokens,
+            "prefix_group": request.prefix_group,
+        }
+    )
+    return records
+
+
+def identity_record() -> dict[str, Any]:
+    return ArtifactIdentityEvent(
+        context=CorrelationContext(
+            run_id=RUN,
+            session_id=SESSION,
+            producer_id="stormlog.infer.profile",
+            source="stormlog.infer.profile",
+            clock_domain=f"{HOST}/{BOOT}/unix_epoch_ns",
+            clock_kind="wall",
+            collection_mode="active",
+            provenance="observed",
+        ),
+        event_id="artifact",
+        artifact_kind="inference_jsonl",
+        created_at_ns=WALL_OFFSET,
+    ).to_record()
+
+
+def build_run(
+    tmp_path: Path,
+    requests: list[SimRequest],
+    engine: Engine | None = None,
+    *,
+    windows: list[dict[str, Any]] | None = None,
+) -> Path:
+    """Serve ``requests``, write the client artifact, import the hook log."""
+    engine = engine or Engine()
+    raw = engine.run(requests)
+    write_epoch(tmp_path / "hook", "engine", PID, START, [hello_record(engine), *raw])
+    lines = [identity_record()]
+    events: list[tuple[int, dict[str, Any]]] = []
+    for request in requests:
+        events.extend((r["timestamp_ns"], r) for r in client_records(request))
+    for window in windows or []:
+        events.append((window["timestamp_ns"], window))
+    events.sort(key=lambda item: item[0])
+    lines.extend(record for _, record in events)
+    artifact = tmp_path / "infer.jsonl"
+    artifact.write_text("".join(json.dumps(r) + "\n" for r in lines), encoding="utf-8")
+    end = max(r.get("mono_ns", 0) for r in raw)
+    import_execution_into_artifact(
+        artifact, tmp_path / "hook", importer=importer(end + SECOND)
+    )
+    return artifact
+
+
+def poisson_free(
+    count: int, start_ns: int, gap_ns: int, **fields: Any
+) -> list[SimRequest]:
+    """``count`` requests sent every ``gap_ns`` from ``start_ns``."""
+    prefix = fields.pop("prefix", "r")
+    return [
+        SimRequest(f"{prefix}{index}", start_ns + index * gap_ns, **fields)
+        for index in range(count)
+    ]
+
+
+__all__ = [
+    "EPOCH",
+    "MS",
+    "OBSERVES",
+    "RUN",
+    "SESSION",
+    "Engine",
+    "SimRequest",
+    "build_run",
+    "client_records",
+    "poisson_free",
+]
