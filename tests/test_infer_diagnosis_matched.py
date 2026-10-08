@@ -426,9 +426,11 @@ def arm(
     running: int = 8,
     prompts: tuple[int, ...] = (),
     every: int = 10,
+    spread: float = 0.0,
 ) -> list[Unit]:
     """Steps at ``cadence_ms`` with a little noise; every ``every``-th one
-    also prefills ``prompts``, one member each, 1 ms more."""
+    also prefills ``prompts``, one member each, 1 ms more. Decode context
+    is 100, or uniform within ``spread`` of it."""
     units: list[Unit] = []
     at = start_s * 1000
     while at < (start_s + seconds) * 1000:
@@ -445,7 +447,7 @@ def arm(
                 drafts=0,
                 refill=False,
                 after_refill=False,
-                context=100.0,
+                context=100.0 + float(rng.uniform(-spread, spread)),
                 decoders=tuple(f"d{k}" for k in range(running - len(prompts))),
                 prefills=prefills if treated else (),
             )
@@ -482,6 +484,18 @@ def test_a_slower_engine_at_the_same_batch_shows_it() -> None:
     assert found.ratio is not None and found.screened is None
     assert found.ratio.estimate == pytest.approx(1.3, abs=0.02)
     assert found.ratio.above(1.10)
+
+
+def test_the_reference_is_matched_by_work_not_by_nearness_to_the_subject() -> None:
+    """The engine slowed 5 s before the subject's requests arrived, inside
+    the reference's span: its last steps are the incident's beginning. The
+    subject is still compared with the reference at large."""
+    rng = np.random.default_rng(12)
+    reference = arm(rng, 0, 25, spread=10) + arm(rng, 25, 5, cadence_ms=3.9, spread=10)
+
+    found = ratio(arm(rng, 30, 10, cadence_ms=3.9, spread=10), reference)
+
+    assert found.ratio is not None and found.ratio.above(1.10)
 
 
 def test_more_decodes_per_step_is_no_match_for_fewer() -> None:

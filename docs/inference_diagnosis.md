@@ -666,8 +666,10 @@ the hook's steps alone.
   once (0.5%; 2.5% nominal).
 - **Subject against reference.** A subject's units are also compared with
   its reference's, unit for unit: each subject unit with the 32 reference
-  units nearest in time that share its key and bands (at least 5), its
-  ratio its cadence over their median. The statistic is the median ratio,
+  units nearest in decode context that share its key and bands (at least
+  5), its ratio its cadence over their median. Nearest in context, not in
+  time: the reference's last steps abut the subject, and may be the
+  incident's own beginning. The statistic is the median ratio,
   its interval from the subject's and the reference's spans resampled
   together, drawn only with the support the comparison needs and a point
   estimate above its floor. Decode-only units compare the engine's pace at

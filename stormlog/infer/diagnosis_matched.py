@@ -35,9 +35,11 @@ with the Monte Carlo error of the interval's 2.5% quantile reported; the
 bootstrap runs only where an interval could decide the gate.
 
 A subject's units are also compared with its reference's, unit for unit:
-each subject unit with the 32 reference units nearest in time that share
-its key and bands, its ratio the cadence over their median, the statistic
-the median ratio, its interval from both spans resampled together. Decode
+each subject unit with the 32 reference units nearest in decode context
+that share its key and bands, its ratio the cadence over their median, the
+statistic the median ratio, its interval from both spans resampled
+together. Nearest in context, not time: the reference's last steps abut
+the subject, and may be the incident's own beginning. Decode
 units compare the engine's pace at the same batch (the driver's capacity);
 treated units, matched also on their dose bin and prefill member count,
 dose, cached prefix and longest prefill, compare its cost of mixing the
@@ -856,11 +858,14 @@ def _ratios(
     sides = []
     for columns, key in zip((arm.subject, arm.reference), keys):
         if rng is None:
-            picked, times = np.arange(len(columns)), columns.time
+            picked = np.arange(len(columns))
         else:
-            picked, times = circular_resample(columns.time, design.block_ns, rng)
-        mine = np.flatnonzero(columns.treated[picked] == comparison.treated)
-        sides.append(Side.of(columns, key, comparison.match, picked[mine], times[mine]))
+            picked, _ = circular_resample(columns.time, design.block_ns, rng)
+        rows = picked[columns.treated[picked] == comparison.treated]
+        # Ordered by decode context, not time: the reference's last steps
+        # abut the subject, and may be the incident's own beginning.
+        order = np.round(columns.banded["context"][rows] * 1000).astype(np.int64)
+        sides.append(Side.of(columns, key, comparison.match, rows, order))
     medians, _ = nearest_medians(
         sides[0],
         sides[1],
