@@ -427,14 +427,17 @@ judged itself; this holds only until the check sees a survivor or a
 start clears nothing, and a poll that finds nothing left verifies only when
 the next poll, which starts after anything that left during it, finds
 nothing either), or
-when its parent is not `init` (a launch's
-process that left its group and session is an orphan, adopted by `init`;
-any other parent shows whose it is). Start times are
-compared in the processes' own clock (ticks since boot, or `psutil`'s
-creation time), so a wall-clock step does not matter. An orphan adopted by a
-subreaper other than `init` is missed, and so is a descendant that exec'd
-with a fresh, non-empty environment and left the group, the session and the
-remembered tree. vLLM, `pip` and `nvidia-smi` keep their environment. On a
+when its parent is neither `init` nor, on Linux, one of the runner's own
+ancestors (a launch's process that left its group and session is an
+orphan, adopted by `init` or by a subreaper among those ancestors, such as
+`systemd --user` for a desktop session; any other parent shows whose it
+is). Start times are compared in the processes' own clock (ticks since
+boot, or `psutil`'s creation time), so a wall-clock step does not matter.
+Missed are a process of the launch left as the child of a long-lived
+process that predates the launch (a `tmux` server it asked to run
+something, an older shell), and a descendant that exec'd with a fresh,
+non-empty environment and left the group, the session and the remembered
+tree. vLLM, `pip` and `nvidia-smi` keep their environment. On a
 shared Mac, any orphaned platform binary of the same user started during a
 run makes that run's cleanup unverified.
 

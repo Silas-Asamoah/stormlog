@@ -668,12 +668,28 @@ def _blind(
 ) -> tuple[dict[str, Any], ...]:
     if since is None:
         return ()
+    adopters = _adopters(proc, method)
     found = sorted(
         pid
         for pid in unclear
-        if _may_be_launched(pid, since, proc, method, lasted_s=lasted_s)
+        if _may_be_launched(
+            pid, since, proc, method, lasted_s=lasted_s, adopters=adopters
+        )
     )
     return tuple(identify(pid, proc=proc) for pid in found)
+
+
+def _adopters(proc: Path, method: str) -> frozenset[int]:
+    """What adopts an orphan of a launch: ``init``, or on Linux any of the
+    runner's ancestors, since one may be a subreaper (``systemd --user``
+    is, for a desktop session). macOS has no subreapers."""
+    found = {1}
+    pid = os.getppid() if method == "proc" else 1
+    while pid > 1 and pid not in found:
+        found.add(pid)
+        parent = _view(pid, proc, method)
+        pid = parent.ppid if parent is not None and parent.ppid is not None else 0
+    return frozenset(found)
 
 
 def _may_be_launched(
@@ -683,6 +699,7 @@ def _may_be_launched(
     method: str,
     *,
     lasted_s: float | None = None,
+    adopters: frozenset[int] = frozenset({1}),
 ) -> bool:
     """Whether a live process may be the launch's, by what is readable
     without its environment.
@@ -692,11 +709,13 @@ def _may_be_launched(
     launch or after its leader had exited (``lasted_s``, given only while
     nothing of the launch has been seen to outlive the leader: nothing of
     the launch was left to start it, but another orphan, itself judged), or
-    when its parent is not ``init``: a launch's process that
-    left its group and session is an orphan, adopted by ``init``, and any
-    other parent shows whose it is (a launch's own processes are found by
-    their group, session and remembered tree). An orphan adopted by a
-    subreaper other than ``init`` is missed.
+    when its parent is none of ``adopters`` (``_adopters``): a launch's
+    process that left its group and session is an orphan, adopted by
+    ``init`` or a subreaper among the runner's ancestors, and any other
+    parent shows whose it is (a launch's own processes are found by their
+    group, session and remembered tree). A process of the launch left as
+    the child of a long-lived process that predates the launch (a ``tmux``
+    server it asked to run something, an older shell) is missed.
     """
     seen = _view(pid, proc, method)
     if seen is None:
@@ -705,7 +724,7 @@ def _may_be_launched(
         return False
     if _older(seen.start, since, method) or _later(seen.start, since, method, lasted_s):
         return False
-    return seen.ppid == 1
+    return seen.ppid in adopters
 
 
 def _older(start: float | None, since: Mapping[str, Any], method: str) -> bool:
