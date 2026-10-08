@@ -46,7 +46,7 @@ The payload, `stormlog.inference_diagnosis` v1
 | --- | --- |
 | `diagnoser` | the version, a SHA-256 over the thresholds and options that decide the result, and the generation time |
 | `inputs` | the artifact's path, size, SHA-256 and line count, so a reader can tell whether it changed |
-| `outcome` | `findings`, `no_findings`, or `inconclusive` when an incident has no eligible explanation |
+| `outcome` | `findings`, `no_findings`, or `inconclusive` when an incident has no eligible explanation or automatic selection could test no window |
 | `join` | what was joined: client requests, dispatch and first-content records, engine executions, engines and their clocks |
 | `selection` | every analysis window with its tests, and the subjects |
 | `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
@@ -205,6 +205,12 @@ the measured phase:
   failed request is above any threshold.
 - **Incident.** At least two consecutive flagged windows of a case, joined
   into one subject. One bad window alone is not an incident.
+- **Abstention.** A window with fewer than 20 requests of its own
+  (`too_few_requests`) or too small a reference (`insufficient_reference`)
+  is not tested, and the summary counts such windows as untested. When no
+  window could be tested, as in a run too short to build a reference, no
+  incident was ruled out either, so the outcome is `inconclusive`, not
+  `no_findings`; the exit code stays 0.
 
 Every judgement is causal: a window is judged at its evaluation time, the
 end of the window after it, from what the artifact held by then. A request
