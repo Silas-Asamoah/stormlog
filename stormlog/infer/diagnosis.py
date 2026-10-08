@@ -351,15 +351,35 @@ def _overall(statuses: set[str]) -> str:
 
 def _unexplained(context: Context, ranked: list[tuple[str, Finding]]) -> list[Subject]:
     """Incident subjects with no eligible mechanism or instrumentation
-    finding: a change in demand alone says what drove it, not what slowed."""
+    finding: a change in demand alone says what drove it, not what slowed.
+    A declared subject that was no slower than its reference is no incident
+    to explain."""
     explained = {
         str(f.subject.get("key"))
         for _, f in ranked
         if f.eligible and f.kind not in WORKLOAD_KINDS
     }
+    calm = {s.key for s in _without_excess(context)}
     return [
-        s for s in context.selection.subjects if s.incident and s.key not in explained
+        s
+        for s in context.selection.subjects
+        if s.incident and s.key not in explained and s.key not in calm
     ]
+
+
+def _without_excess(context: Context) -> list[Subject]:
+    """Declared subjects whose requests were no slower than their reference:
+    every latency excess measured (TTFT, end to end) has an interval that
+    reaches zero."""
+    calm = []
+    for subject in context.selection.subjects:
+        if subject.declared_by is None or not subject.requests:
+            continue
+        found = [context.total_excess(subject, kind) for kind in ("ttft", "e2e")]
+        measured = [excess for excess in found if excess is not None]
+        if measured and all(excess.low <= 0 for excess in measured):
+            calm.append(subject)
+    return calm
 
 
 def _untested(context: Context) -> int:
@@ -400,7 +420,12 @@ def _summary(
         ),
         (_untested(context), "window untested"),
     )
-    return f"{outcome}: " + "; ".join(_plural(n, noun) for n, noun in counts)
+    summary = f"{outcome}: " + "; ".join(_plural(n, noun) for n, noun in counts)
+    calm = len(_without_excess(context))
+    if calm:
+        where = "the declared window" if calm == 1 else f"{calm} declared subjects"
+        summary += f"; no excess in {where}"
+    return summary
 
 
 def _plural(count: int, noun: str) -> str:
