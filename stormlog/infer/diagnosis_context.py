@@ -117,5 +117,18 @@ class Context:
     def subjects(self) -> list[Subject]:
         return self.selection.subjects
 
+    def window(self, subject: Subject) -> dict[str, Any] | None:
+        """A finding's window: its subject's, on the artifact's clock."""
+        if subject.start_ns is None or subject.end_ns is None:
+            return None
+        return {
+            "start_ns": subject.start_ns,
+            "end_ns": subject.end_ns,
+            "clock_domain": self.view.clock_domain,
+            "uncertainty_ns": 0,
+            "resolution_ns": 1_000_000_000,
+            "placement": "client_clock",
+        }
+
 
 __all__ = ["ASSESSED", "PARTIAL", "UNSUPPORTED", "Assessment", "Context"]

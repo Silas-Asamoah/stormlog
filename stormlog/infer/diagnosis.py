@@ -28,6 +28,7 @@ from .diagnosis_client import (
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
+from .diagnosis_kv import assess_kv
 from .diagnosis_model import Finding, rank_findings
 from .diagnosis_queue import assess_queue
 from .diagnosis_report import envelope_finding, finding_detail, inputs_block
@@ -38,6 +39,7 @@ from .diagnosis_vocabulary import (
     CLIENT_ADMISSION,
     HOST_STALL,
     KINDS,
+    KV_PREEMPTION_PRESSURE,
     QUEUE_SATURATION,
 )
 
@@ -52,6 +54,7 @@ Assess = Callable[[Context, Subject], Assessment]
 # The classes this version assesses, per kind.
 CLASSES: dict[str, tuple[Assess, ...]] = {
     QUEUE_SATURATION: (assess_queue,),
+    KV_PREEMPTION_PRESSURE: (assess_kv,),
     CLIENT_ADMISSION: (assess_client_admission,),
     HOST_STALL: (assess_api_server,),
     CAPTURE_PAUSE: (assess_capture_pause,),

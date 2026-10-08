@@ -28,6 +28,7 @@ from .diagnosis_model import (
     Criteria,
     Finding,
     Observation,
+    met,
 )
 from .diagnosis_segments import MERGED_INGRESS
 from .diagnosis_selection import Subject
@@ -137,7 +138,7 @@ def _finding(
             "engine_producer": producer,
             **_iterations(spanning),
         },
-        window=_window(context, subject),
+        window=context.window(subject),
         first_detectable_ns=subject.first_detectable_ns,
         incident=subject.incident,
         contribution_lower=excess.low / 1e6,
@@ -436,7 +437,7 @@ def _criteria(
 ) -> tuple[Criteria, Criteria]:
     epoch = context.epoch_of(producer)
     covered = span is not None and _covered(epoch, span)
-    condition = _met(
+    condition = met(
         direct_evidence=True,
         sufficient_samples=excess.n >= 20 and excess.n_ref >= 20,
         robust_to_clock=True,  # engine-clock segments are exact
@@ -447,7 +448,7 @@ def _criteria(
         and excess.estimate / ttft.estimate
         >= resolve_threshold(QUEUE_CONTRIBUTION, context.thresholds)[0]
     )
-    contribution = _met(
+    contribution = met(
         excess_ci_excludes_zero=excess.excludes_zero,
         explains_ttft_excess=contribution_share,
         competitors_excluded=all(
@@ -458,13 +459,6 @@ def _criteria(
     return (
         Criteria(condition.met, condition.unmet, coverage_unknown=not covered),
         contribution,
-    )
-
-
-def _met(**criteria: bool) -> Criteria:
-    return Criteria(
-        met=tuple(name for name, held in criteria.items() if held),
-        unmet=tuple(name for name, held in criteria.items() if not held),
     )
 
 
@@ -532,19 +526,6 @@ def _experiment(excess: Difference) -> dict[str, Any]:
     return {
         "change": "rerun at a lower offered load, or with a larger max_num_seqs, same seed",
         "prediction": f"median scheduler_wait falls by at least {excess.low / 1e6:.1f} ms",
-    }
-
-
-def _window(context: Context, subject: Subject) -> dict[str, Any] | None:
-    if subject.start_ns is None or subject.end_ns is None:
-        return None
-    return {
-        "start_ns": subject.start_ns,
-        "end_ns": subject.end_ns,
-        "clock_domain": context.view.clock_domain,
-        "uncertainty_ns": 0,
-        "resolution_ns": 1_000_000_000,
-        "placement": "client_clock",
     }
 
 
