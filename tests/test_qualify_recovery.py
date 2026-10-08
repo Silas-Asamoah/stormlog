@@ -540,6 +540,29 @@ def test_an_engine_hung_now_is_seen_whatever_recovery_found_earlier() -> None:
     assert not engine_stalled(idle, 101 * S)
 
 
+def test_records_that_arrive_late_are_no_stall_once_their_lag_is_allowed() -> None:
+    # Astra's closure of delta 3, H5: the hook's records reach the channel
+    # a little after their steps start. On a 5 ms engine (twice the p99 is
+    # 10 ms) records 15 ms late read as a hang at 81% of polls, holding
+    # every episode at WAIT until it timed out. The gap is now judged as it
+    # stood the record lag ago; a hang is still seen once it outlasts both.
+    from stormlog.infer.qualify.recovery import engine_stalled
+
+    lag = 15 * MS
+    steps = [tick * 5 * MS for tick in range(150 * 200 + 1)]  # to 150 s
+
+    def seen_at(now: int) -> Context:
+        return context(
+            Signals(in_flight=ALWAYS, step_starts=[t for t in steps if t <= now - lag])
+        )
+
+    healthy = 140 * S + 2 * MS
+    assert engine_stalled(seen_at(healthy), healthy)
+    assert not engine_stalled(seen_at(healthy), healthy, lag_ns=lag)
+    hung = 150 * S + 40 * MS  # no step since 150 s
+    assert engine_stalled(seen_at(hung), hung, lag_ns=lag)
+
+
 def test_an_open_gap_just_past_twice_the_p99_is_a_stall() -> None:
     # Astra's closure of delta 3, H7: the limit is twice the baseline's p99
     # (40 ms for 20 ms steps), not ten times it. The last step starts at

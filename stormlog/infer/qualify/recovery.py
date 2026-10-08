@@ -1160,13 +1160,18 @@ def priming_check(
     return median >= thresholds.priming_cached_at_least, median
 
 
-def engine_stalled(context: Context, now_ns: int) -> bool:
+def engine_stalled(context: Context, now_ns: int, lag_ns: int = 0) -> bool:
     """Whether the engine looks hung at ``now_ns``: the busy part of the
     step gap still open then is longer than ``long_gap_factor`` times the
     baseline's p99. A recovery found in an earlier stretch can be complete
     while a victim request sent since has been stuck; a live loop holds the
     next episode back while this is true. False with too thin a baseline to
-    judge, or no steps yet."""
+    judge, or no steps yet.
+
+    A step's record reaches the reference channel up to ``lag_ns`` after
+    the step starts, so the gap is judged as it stood ``lag_ns`` before
+    ``now_ns``: a step begun since may not be on record yet, and a healthy
+    engine's records arriving late must not read as a hang."""
     signals, baseline = context.signals, context.baseline
     thresholds = context.thresholds
     index = bisect.bisect_right(signals.step_starts, now_ns)
@@ -1175,7 +1180,8 @@ def engine_stalled(context: Context, now_ns: int) -> bool:
     cadence = CadenceWithin(
         signals.busy_step_gaps(), baseline.steps, thresholds, signals.in_flight
     )
-    return cadence.open_gap(signals.step_starts[index - 1], now_ns) > cadence.longest
+    last = signals.step_starts[index - 1]
+    return cadence.open_gap(last, now_ns - lag_ns) > cadence.longest
 
 
 def recovery_blocked(episode_type: str, context: Context) -> tuple[str, ...]:
