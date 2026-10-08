@@ -1530,6 +1530,40 @@ def test_a_heartbeat_counts_the_records_it_is_written_ahead_of(
         assert beat["seq"] + beat["pending"] >= pause["seq"]
 
 
+def test_a_heartbeat_counts_a_record_still_being_serialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A record's stamps are taken before emit, which serializes it outside
+    the lock (milliseconds for a large step): a heartbeat stamped meanwhile
+    is written ahead of it and must count it as pending."""
+    dumps = writer_module._dumps
+    sizing, release = threading.Event(), threading.Event()
+
+    def slow(value: Any) -> str:
+        if isinstance(value, dict) and value.get("to") == "PAUSED_ALL":
+            sizing.set()
+            release.wait(5)
+        return dumps(value)
+
+    monkeypatch.setattr(writer_module, "_dumps", slow)
+    writer = EpochWriter(tmp_path, "engine")
+    accepted = writer_module.stamp()
+    emitting = threading.Thread(
+        target=writer.emit,
+        args=("pause", {"from": "UNPAUSED", "to": "PAUSED_ALL", **accepted}),
+    )
+    emitting.start()
+    assert sizing.wait(5)
+    try:
+        assert writer._status()["pending"] == 1
+    finally:
+        release.set()
+        emitting.join(5)
+    writer.close()
+
+    assert [r["kind"] for r in _epoch_records(writer.directory)].count("pause") == 1
+
+
 def test_a_short_write_leaves_only_whole_lines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
