@@ -482,8 +482,9 @@ that is the record that made it final (its `completed` record, the first
 completion of a later step when its own output never came, or the last
 record of an ended epoch); a membership adds the `terminal` record of a
 finish it carries; a request takes its first final step, its alias and its
-`enqueued` record; a clock alignment takes the hello, or the goodbye that
-bounds it; a preemption stage, written only with its request, takes the
+`enqueued` record; a clock alignment takes the hello, and names the
+goodbye that ends its validity apart, in `valid_to_source_seq` (null until
+one is read); a preemption stage, written only with its request, takes the
 later of its own record and its request's.
 
 **Binding.** A request is the run's when its alias `external` is
