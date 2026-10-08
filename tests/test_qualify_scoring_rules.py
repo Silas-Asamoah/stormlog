@@ -521,6 +521,17 @@ def test_a_window_that_ends_before_the_onset_is_never_correct(
     assert score.episodes[0].correct(TOP1, 2) and score.problems == ()
 
 
+def test_a_window_that_ends_exactly_at_the_onset_reaches_it() -> None:
+    # close-221-delta, N7: the end rule's boundary was unpinned (a "<=" in
+    # place of "<" survived). A coarse window ending exactly at the onset,
+    # with no uncertainty, reaches it; one ending 1 ns before doesn't.
+    at = finding("q", KV, 1, window=(70, 100), resolution=30)
+    assert score_episode(episode(), diagnosis(at), CONFIG).correct(TOP1, 2)
+    before = finding("q", KV, 1, window=(70, 100), resolution=30)
+    before["window"]["end_ns"] -= 1
+    assert not score_episode(episode(), diagnosis(before), CONFIG).correct(TOP1, 2)
+
+
 def test_a_window_may_reach_the_onset_within_its_uncertainty() -> None:
     # Uncertainty, unlike resolution, says where the window lies: one that
     # ends 3 s before the onset with 5 s of it may still cover the effect;
