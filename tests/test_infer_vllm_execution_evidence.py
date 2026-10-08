@@ -15,6 +15,8 @@ from stormlog.infer.correlation_events import (
     ClockAlignmentEvent,
     CorrelationContext,
     CorrelationEvent,
+    IterationEvent,
+    MembershipEvent,
     RequestEvent,
 )
 from stormlog.infer.vllm_execution import (
@@ -34,6 +36,7 @@ from tests.vllm_execution_helpers import (
     completed,
     done,
     enqueued,
+    goodbye,
     heartbeat,
     hello,
     importer,
@@ -211,3 +214,69 @@ def test_each_admission_of_a_reused_id_keeps_its_own_enqueue(tmp_path: Path) -> 
         for r in _of(result, RequestEvent)
     )
     assert enqueues == [(T0 - 20, False), (T0 + 2 * SECOND + 10, True)]
+
+
+# ---------------------------------------------------------------- sources
+
+
+def test_each_record_names_the_last_raw_record_it_needed(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        _run(
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+            enqueued(OWN0, T0 - 20),  # 2
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),  # 3
+            completed(0, T0 + SECOND, [done(OWN0)]),  # 4
+            scheduled(1, T0 + SECOND + 10, [member(OWN0, scheduled=1)]),  # 5
+            # Step 2's output never came; step 3's did, which makes 2 final.
+            scheduled(2, T0 + SECOND + 20, [member(OWN0, scheduled=1)]),  # 6
+            terminal(OWN0, T0 + SECOND + 30),  # 7: freed in step 1's update
+            completed(1, T0 + SECOND + 40, [done(OWN0)]),  # 8
+            scheduled(3, T0 + SECOND + 50, [member(OTHER, scheduled=1)]),  # 9
+            completed(3, T0 + SECOND + 60, [done(OTHER)]),  # 10
+            scheduled(4, T0 + SECOND + 70, [member(OWN0, scheduled=1)]),  # 11
+            goodbye(T0 + 2 * SECOND, 12),  # 12: the epoch ends with step 4 open
+        ),
+    )
+
+    iterations = {
+        i.iteration_ref.id: i.metadata["source_seq_max"]
+        for i in _of(result, IterationEvent)
+    }
+    assert iterations == {"0": 4, "1": 8, "2": 10, "4": 12}
+    memberships = {
+        m.iteration_ref.id: (m.metadata["epoch"], m.metadata["source_seq_max"])
+        for m in _of(result, MembershipEvent)
+    }
+    # Step 1's membership carries the finish read at seq 7, before its output.
+    assert memberships == {
+        "0": (EPOCH, 4),
+        "1": (EPOCH, 8),
+        "2": (EPOCH, 10),
+        "4": (EPOCH, 12),
+    }
+    (request,) = _of(result, RequestEvent)
+    assert request.metadata["source_seq_max"] == 4  # its first final step
+    (alignment,) = _of(result, ClockAlignmentEvent)
+    assert alignment.metadata["source_seq_max"] == 12  # valid until the goodbye
+
+
+def test_a_finish_read_after_its_step_raises_the_membership_s_source(
+    tmp_path: Path,
+) -> None:
+    result = _reduce(
+        tmp_path,
+        _run(
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+            scheduled(0, T0, [member(OWN0, scheduled=8)]),  # 2
+            completed(0, T0 + SECOND, [done(OWN0)]),  # 3
+            terminal(OWN0, T0 + 2 * SECOND),  # 4: aborted between steps
+            heartbeat(T0 + 3 * SECOND, 4),  # 5
+        ),
+    )
+
+    (membership,) = _of(result, MembershipEvent)
+    assert membership.metadata["finish"]["in_step"] is False
+    assert membership.metadata["source_seq_max"] == 4
+    (alignment,) = _of(result, ClockAlignmentEvent)
+    assert alignment.metadata["source_seq_max"] == 0  # the hello alone
