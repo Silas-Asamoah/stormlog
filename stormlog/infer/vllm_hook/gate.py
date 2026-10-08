@@ -38,8 +38,13 @@ SUPPORTED_SPECULATION = frozenset({"ngram"})
 PROFILER_FIELDS = (
     "profiler",
     "torch_profiler_dir",
+    "torch_profiler_use_gzip",
     "torch_profiler_with_stack",
+    "torch_profiler_record_shapes",
+    "torch_profiler_with_memory",
+    "torch_profiler_with_flops",
     "torch_profiler_dump_cuda_time_total",
+    "capture_torch_profiler",
     "ignore_frontend",
     "max_iterations",
     "delay_iterations",

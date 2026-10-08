@@ -157,8 +157,13 @@ stated bound.
             "gpu_memory_utilization": 0.9, "enable_cumem_allocator": false,
             "enable_sleep_mode": false,
             "profiler": {"profiler": "torch", "torch_profiler_dir": "/traces",
+                         "torch_profiler_use_gzip": true,
                          "torch_profiler_with_stack": false,
+                         "torch_profiler_record_shapes": false,
+                         "torch_profiler_with_memory": false,
+                         "torch_profiler_with_flops": false,
                          "torch_profiler_dump_cuda_time_total": false,
+                         "capture_torch_profiler": false,
                          "ignore_frontend": true, "max_iterations": 40,
                          "delay_iterations": 0, "warmup_iterations": 0,
                          "active_iterations": 5, "wait_iterations": 0}},
@@ -188,9 +193,12 @@ null when vLLM does not have it. `max_num_seqs`, `num_gpu_blocks`,
 `gpu_memory_utilization`, `enable_cumem_allocator` and `enable_sleep_mode`
 describe capacity and memory; an engine's are what its scheduler was built
 with, after vLLM sized the KV cache, while a worker records the configured
-values before that. `profiler` holds ten of vLLM's profiler settings, which
-decide how long a profiler stop pauses the server and whether a window stops
-by itself, or is null without a profiler configuration.
+values before that. `profiler` holds fifteen of vLLM's profiler settings, or
+is null without a profiler configuration. They decide what a profiler window
+records and costs (stacks, shapes, memory, FLOPs), how long its stop pauses
+the server, whether it stops by itself, and whether the trace is written as
+a streamed `.gz` file (`torch_profiler_use_gzip`), which decides how a trace
+cut short can be read.
 
 `refused` is null when enabled, else a short reason.
 `config.request_id_randomization` is false when vLLM was told not to add a random
