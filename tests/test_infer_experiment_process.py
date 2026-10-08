@@ -200,16 +200,20 @@ def test_a_survivor_recorded_in_another_boot_is_gone(
 
 
 STUBBORN = (
-    "import signal, time; "
+    "import pathlib, signal, sys, time; "
     "signal.signal(signal.SIGINT, signal.SIG_IGN); "
-    "signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "pathlib.Path(sys.argv[1]).touch(); time.sleep(60)"
 )
 
 
-def test_a_group_that_ignores_its_signals_is_killed() -> None:
+def test_a_group_that_ignores_its_signals_is_killed(tmp_path: Path) -> None:
     # rev-213-a's mutant r6: nothing failed without the SIGKILL escalation.
-    launched = launch("server", [sys.executable, "-c", STUBBORN])
-    time.sleep(0.5)
+    # It is signalled once it says its handlers are in place: under -n 4 a
+    # fixed sleep let SIGINT arrive first (close-213-pr24-cloud's F6).
+    ready = tmp_path / "ready"
+    launched = launch("server", [sys.executable, "-c", STUBBORN, str(ready)])
+    assert wait_for_file(ready, 10, launched)
     code = stop(launched, signals=(2, 15), timeout_s=0.5)
     assert (code, launched.stopped_by) == (-9, "SIGKILL")
 
