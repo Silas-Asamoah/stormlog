@@ -29,6 +29,7 @@ from .diagnosis_client import (
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_edges import EDGES_VERSION
 from .diagnosis_edges import table as edge_table
+from .diagnosis_host import assess_engine_core
 from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
 from .diagnosis_kv import assess_kv
@@ -79,7 +80,7 @@ CLASSES: dict[str, tuple[Assess, ...]] = {
     KV_PREEMPTION_PRESSURE: (assess_kv,),
     PREFIX_CACHE_LOSS: (assess_prefix,),
     CLIENT_ADMISSION: (assess_client_admission,),
-    HOST_STALL: (assess_api_server,),
+    HOST_STALL: (assess_api_server, assess_engine_core),
     CAPTURE_PAUSE: (assess_capture_pause,),
     LOAD_INCREASE: (assess_load,),
     LONGER_INPUTS: (assess_inputs,),
@@ -88,13 +89,18 @@ CLASSES: dict[str, tuple[Assess, ...]] = {
 }
 # Parts of a kind this version does not assess yet.
 NOT_YET: dict[str, str] = {
-    HOST_STALL: "engine_core_and_worker_not_assessed_by_this_version",
+    HOST_STALL: "worker_not_assessed_by_this_version",
 }
 # For a kind spanning components: those this version assesses, and those
 # it does not, so a reader can tell "assessed, nothing found" at one from
 # a gap at another without parsing a reason.
 COMPONENTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    HOST_STALL: ((COMPONENT_API_SERVER,), (COMPONENT_ENGINE_CORE, COMPONENT_WORKER)),
+    HOST_STALL: ((COMPONENT_API_SERVER, COMPONENT_ENGINE_CORE), (COMPONENT_WORKER,)),
+}
+# The component each class of a multi-component kind assesses.
+CLASS_COMPONENT: dict[Assess, str] = {
+    assess_api_server: COMPONENT_API_SERVER,
+    assess_engine_core: COMPONENT_ENGINE_CORE,
 }
 
 
@@ -163,12 +169,18 @@ def diagnose_artifact(
         metrics_from_engine=options.metrics_from_engine,
     )
     assessments = [
-        assess(context, subject)
+        _assess(assess, context, subject)
         for subject in selection.subjects
         for assessors in CLASSES.values()
         for assess in assessors
     ]
     return _report(context, assessments, options, windows or (), telemetry)
+
+
+def _assess(assess: Assess, context: Context, subject: Subject) -> Assessment:
+    assessment = assess(context, subject)
+    assessment.component = CLASS_COMPONENT.get(assess)
+    return assessment
 
 
 def _check(options: DiagnoseOptions, windows: Sequence[tuple[int, int]] | None) -> None:
@@ -320,15 +332,39 @@ def _kind_coverage(kind: str, mine: list[Assessment]) -> dict[str, Any]:
     coverage: dict[str, Any] = {
         "status": _overall(statuses),
         "reasons": sorted(reasons),
-        "by_subject": {a.subject_key: a.as_dict() for a in mine},
+        "by_subject": _by_subject(mine),
     }
     if kind in COMPONENTS:
         done, not_yet = COMPONENTS[kind]
         coverage["components"] = {
-            **{component: assessed for component in done},
+            **{c: _component_status(c, mine, assessed) for c in done},
             **{component: UNSUPPORTED for component in not_yet},
         }
     return coverage
+
+
+def _component_status(component: str, mine: list[Assessment], assessed: str) -> str:
+    statuses = {a.status for a in mine if a.component == component}
+    return _overall(statuses) if statuses else assessed
+
+
+def _by_subject(mine: list[Assessment]) -> dict[str, Any]:
+    """Each subject's verdict; a kind assessed per component gives each."""
+    grouped: dict[str, list[Assessment]] = {}
+    for assessment in mine:
+        grouped.setdefault(assessment.subject_key, []).append(assessment)
+    out: dict[str, Any] = {}
+    for key, verdicts in grouped.items():
+        if len(verdicts) == 1:
+            out[key] = verdicts[0].as_dict()
+            continue
+        out[key] = {
+            "status": _overall({v.status for v in verdicts}),
+            "reasons": sorted({r for v in verdicts for r in v.reasons}),
+            "findings": sum(len(v.findings) for v in verdicts),
+            "components": {str(v.component): v.as_dict() for v in verdicts},
+        }
+    return out
 
 
 def _overall(statuses: set[str]) -> str:

@@ -116,6 +116,16 @@ class Engine:
     stall: tuple[int, int] | None = None
     # More such stops, each as ``stall`` is.
     stalls: list[tuple[int, int]] = field(default_factory=list)
+    # (mono_ns, duration_ns, is_start): after the first step that completes at
+    # or after mono_ns (and any stall then), EngineCore.profile holds the loop
+    # for duration, written as an engine_profile record.
+    profiles: list[tuple[int, int, bool]] = field(default_factory=list)
+    # The loop stays stopped this long after each profiler call returns: a
+    # capture's tail, which the call's own bracket does not cover.
+    profile_tail_ns: int = 0
+    # (mono_ns, extra_ns): the first step scheduled at or after mono_ns runs
+    # that much longer than step_ns.
+    slow_steps: list[tuple[int, int]] = field(default_factory=list)
     # How long an idle engine takes from a request's entry to its schedule()
     # call; vLLM 0.30.0's loop took 20 us and more on an A30.
     wake_ns: int = 0
@@ -200,12 +210,36 @@ class Engine:
                 running[request.internal] = (request, tokens)
             total = sum(m["scheduled"] for m in members)
             out.append((now, 1, _scheduled(iteration, now, members, total, preempted)))
-            finished_at = now + self.step_ns
+            finished_at = now + self.step_ns + self._slowed(now)
             out.extend(self._complete(iteration, finished_at, running))
             iteration += 1
             now = finished_at + self.gap_ns
             now += self._stalled(finished_at)
+            now = self._profiled(finished_at, now, out)
         return out
+
+    def _slowed(self, start: int) -> int:
+        due = [slow for slow in self.slow_steps if start >= slow[0]]
+        self.slow_steps = [slow for slow in self.slow_steps if slow not in due]
+        return sum(extra for _, extra in due)
+
+    def _profiled(
+        self, finished_at: int, now: int, out: list[tuple[int, int, dict[str, Any]]]
+    ) -> int:
+        """Run the profiler calls due after a step, each holding the loop."""
+        due = [call for call in self.profiles if finished_at >= call[0]]
+        self.profiles = [call for call in self.profiles if call not in due]
+        for _, duration, is_start in due:
+            record = {
+                "kind": "engine_profile",
+                "is_start": is_start,
+                "raised": False,
+                **stamp(now, "start_"),
+                **stamp(now + duration, "end_"),
+            }
+            out.append((now, 2, record))
+            now += duration + self.profile_tail_ns
+        return now
 
     def _stalled(self, finished_at: int) -> int:
         """How long the loop stops after a step completing at finished_at:

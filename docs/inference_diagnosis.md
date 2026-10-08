@@ -11,10 +11,11 @@ can be trusted, the competing mechanisms and what became of each, and an
 experiment that would confirm it; a class that cannot be checked says so,
 with a reason. This version assesses queue saturation, KV preemption
 pressure, prefix-cache loss, client admission, host stalls at the API
-server, capture pauses and the four workload kinds. Mixed-prefill
-interference, rank delay and transfer degradation are `unsupported` in the
-coverage with the reason `not_assessed_by_this_version`, and `host_stall` is
-`partial` because its engine-loop and worker forms are not assessed yet.
+server and in the engine loop, capture pauses and the four workload kinds.
+Mixed-prefill interference, rank delay and transfer degradation are
+`unsupported` in the coverage with the reason
+`not_assessed_by_this_version`, and `host_stall` is `partial` because its
+worker form is not assessed yet.
 The page also documents the threshold table, the cheap signals an online
 trigger evaluates over a window of `/metrics` scrapes, and engine-loop
 stalls in the hook's raw records.
@@ -542,9 +543,9 @@ placed on the engine's clock, ending at its admission), and a capture
 pause, ruled out when no profiler window overlaps the stalls. Without engine records it is
 `unsupported/no_engine_progress_evidence`; without a placed
 `send_to_ingress`, `unsupported/clock_alignment_required`. Host stalls in
-the engine loop and the workers are not assessed yet, so `host_stall` is
-`partial` in the coverage, whose `components` say so per component:
-`api_server` as assessed, `engine_core` and `worker` `unsupported`.
+the workers are not assessed yet, so `host_stall` is `partial` in the
+coverage, whose `components` give each component's own status:
+`api_server` and `engine_core` from their classes, `worker` `unsupported`.
 
 **`capture_pause`** (cause `instrumentation`): a profiler stop, which
 blocks the server while it writes the trace, lay across requests waiting for
@@ -557,6 +558,50 @@ long queue explains 2 ms of it at most. It needs the stop request's own
 stamp, `stop_requested_at_ns` on the `infer.trace_window` record; without it
 the class is `unsupported/no_stop_request_stamp`, and a run without profiler
 windows has nothing to assess (`no_trace_windows`).
+
+## Host stalls in the engine loop
+
+**`host_stall` at `engine_core`** (`detail.form: loop_stall`): the engine
+loop stalled while it had work ready. The stalls are the online
+`engine_loop_gap`'s own (see Engine-loop stalls): found by the same rules on
+the imported steps, so the trigger and the diagnosis cannot disagree about
+what a stall is. Two kinds of time are cut from them first, exactly as the
+trigger cuts what it is told to exclude: a scheduler paused for all
+requests (the hook's pause records), and the engine's own profiler calls
+(the hook's `engine_profile` records, `engine.profile_call` stages), each
+cut by its own bracket, the time the call held the loop. The engine runs
+between a capture's start and stop, so nothing else of a capture is cut.
+Without the hook's profile records, only the client's trace windows say
+where a capture was, and they only bound the engine's calls: a stall's time
+overlapping one is neither cut nor counted but *unresolved*
+(`detail.unresolved_ms`), and judged by nothing.
+
+Where a stall sits decides what it can be blamed on (`detail.locus`): from a
+step's completion to the next `schedule()` call (`between_steps`) and
+inside `schedule()` (`in_schedule`) it is the host's (`host`); a step that
+took far longer than its peers (`within_step`) may be the GPU's too
+(`host_or_gpu`) until a GPU trace splits it. The claim rests on host stalls
+alone: the gate `host_attribution` fails when there are none, or when they
+explain the incident only together with `host_or_gpu` time, and the finding
+is then an observation. One finding per subject and engine, its stalls
+those the subject's requests lived through (from entering the queue to
+their last step).
+
+| Competitor | Indispensable | Ruled out when |
+| --- | --- | --- |
+| `scheduler_paused` | yes | no counted host stall is one a pause could make (a gap between steps, or a step whose output an overlapped schedule held), or the hook records pauses and they were cut; otherwise `untestable` |
+| `capture_pause@profiler` | yes | under 10% of the finding's resolved host stall time began inside a profiler call or window, or within the clock's uncertainty (1 ms) and one baseline cadence after it; up to half it is `contributing`; above, the stall is the capture finding's `secondary` (cause `instrumentation`) when that finding is eligible, and the competitor `not_ruled_out` otherwise. A stall that began before the capture is never its. Client windows that cannot be placed on the engine's clock leave it `untestable` |
+
+Each request is held by the host stall time it lived through beyond the
+cadence the steps would have taken anyway. The contribution claim asks for
+an excess whose interval excludes zero and, as for the queue, that the held
+time add up to at least half of it over the subject's requests: up to first
+token against the TTFT excess (`explains_ttft_excess`), or over the whole
+request against the end-to-end excess (`explains_e2e_excess`). The
+contribution's lower bound is the median request's held time, or the
+excess's lower bound when smaller. Records lost over a stall leave the
+class `partial/hook_coverage_unknown`: a missing record can look like a
+gap.
 
 ## Workload changes
 

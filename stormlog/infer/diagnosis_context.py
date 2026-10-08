@@ -31,6 +31,8 @@ class Assessment:
     status: str
     reasons: list[str] = field(default_factory=list)
     findings: list[Any] = field(default_factory=list)  # diagnosis_model.Finding
+    # For a kind spanning components, the one this class assesses.
+    component: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +56,8 @@ class Context:
     )
     _steps: dict[str, Steps] = field(default_factory=dict)
     _scrapes: list[VllmScrapeRecord] | None = None
+    # Views a class computes once and others read again, keyed by the class.
+    cache: dict[Any, Any] = field(default_factory=dict)
 
     def clock(self, producer: str) -> EngineClock:
         if producer not in self._clocks:
