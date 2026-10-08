@@ -31,6 +31,9 @@ def finding_detail(
     """``payload.findings_detail[<id>]``: everything the finding claims and
     every record it rests on."""
     display = finding.display[:DISPLAY_LIMIT]
+    subject = next(
+        (s for s in context.subjects() if s.key == finding.subject.get("key")), None
+    )
     return {
         "id": finding_id,
         "kind": finding.kind,
@@ -47,6 +50,9 @@ def finding_detail(
         "location": finding.location,
         "window": finding.window,
         "first_detectable_ns": finding.first_detectable_ns,
+        "detection_evidence": (
+            subject.detection_evidence() if subject is not None else None
+        ),
         "segments": finding.segments,
         "observations": [o.as_dict() for o in finding.observations],
         "alternatives": [a.as_dict() for a in finding.alternatives],
