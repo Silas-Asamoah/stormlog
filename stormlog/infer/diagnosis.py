@@ -352,8 +352,11 @@ def _explains(finding: Finding) -> bool:
     instrumentation finding that no competitor contests and that meets the
     criterion saying it explains the incident. A contested one leaves a
     second cause open, and a change in demand alone says what drove the
-    incident, not what slowed."""
+    incident, not what slowed. A secondary, the consequence of its
+    upstreams, explains only what each of them explains."""
     if finding.kind in WORKLOAD_KINDS:
+        return False
+    if not all(_explains(upstream) for upstream in finding.upstreams):
         return False
     if finding.severity == "warning":
         return True

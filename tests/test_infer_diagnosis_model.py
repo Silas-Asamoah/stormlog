@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from stormlog.infer import diagnosis_model as model
+from stormlog.infer.diagnosis import _explains
 from stormlog.infer.diagnosis_inputs import Line
 from stormlog.infer.diagnosis_model import (
     CONTRIBUTING,
@@ -287,6 +288,59 @@ def test_a_fault_claim_outranks_a_more_confident_instrumentation_warning() -> No
     ranked = [f for _, f in rank_findings([instrumentation, fault], "r")]
 
     assert ranked == [fault, instrumentation]
+
+
+def _secondary_to(upstream: Finding) -> Finding:
+    """A queue linked as KV pressure's secondary: uncontested, its own
+    explains criterion met, its severity capped at its upstream's."""
+    queue = _finding(role=SECONDARY, subject={"key": "s"})
+    queue.upstreams.append(upstream)
+    return queue
+
+
+def _kv(**changes: Any) -> Finding:
+    values: dict[str, Any] = {
+        "kind": "kv_preemption_pressure",
+        "component": "kv_cache",
+        "subject": {"key": "s"},
+        "gates": {},
+        "alternatives": [],
+        "explains": "explains_e2e_excess",
+    }
+    values.update(changes)
+    return _finding(**values)
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        # Eligible, but its hold explains neither excess: info.
+        _kv(contribution=Criteria(met=("excess_ci_excludes_zero",))),
+        # It explains the excess, but a competitor contributes: contested.
+        _kv(alternatives=[Alternative("engine_stall", CONTRIBUTING, "r", True)]),
+    ],
+    ids=["upstream_explains_nothing", "upstream_contested"],
+)
+def test_a_secondary_explains_nothing_its_upstream_does_not(
+    upstream: Finding,
+) -> None:
+    """A secondary is the consequence of its upstream, so it explains the
+    incident only if the upstream does: a queue held by KV pressure that
+    is itself an info or contested condition leaves the incident open."""
+    queue = _secondary_to(upstream)
+    assert not _explains(upstream)
+    assert not queue.contested and "explains_ttft_excess" in queue.contribution.met
+
+    assert not _explains(queue)
+
+
+def test_a_secondary_explains_what_its_upstream_explains() -> None:
+    # Eligible, uncontested, its criterion met, on no incident subject: info.
+    met = Criteria(met=("excess_ci_excludes_zero", "explains_e2e_excess"))
+    upstream = _kv(contribution=met, incident=False)
+    assert upstream.severity == "info" and _explains(upstream)
+
+    assert _explains(_secondary_to(upstream))
 
 
 def _line(number: int) -> Line:
