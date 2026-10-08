@@ -651,6 +651,15 @@ def test_every_stamp_is_bracketed_by_two_wall_reads(vllm: dict[str, Any]) -> Non
     assert clock["gap_ns"] == clock["wall_after_ns"] - clock["wall_ns"]
 
 
+def test_a_stamp_reads_the_wall_clock_again_after_the_monotonic_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    walls = iter([10, 30])
+    monkeypatch.setattr(writer_module.time, "time_ns", lambda: next(walls))
+    monkeypatch.setattr(writer_module.time, "monotonic_ns", lambda: 20)
+    assert writer_module.stamp() == {"wall_ns": 10, "mono_ns": 20, "wall_after_ns": 30}
+
+
 @pytest.mark.parametrize(
     ("config", "reason"),
     [

@@ -758,9 +758,6 @@ def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> No
     assert after.summary["epochs"][EPOCH]["unanchored"][0]["seq"] == 3
 
 
-# ---------------------------------------------------------------- brackets
-
-
 def test_a_reset_stage_needs_the_records_of_its_request(tmp_path: Path) -> None:
     """A reset's preemption is written only with its request's record, which
     its first final step writes; that step completes after the reset, so the
@@ -785,6 +782,132 @@ def test_a_reset_stage_needs_the_records_of_its_request(tmp_path: Path) -> None:
     assert stage.event_id in {
         event.event_id for events in _stages(prefix).values() for event in events
     }
+
+
+def test_a_step_that_resumes_a_reset_s_requests_keeps_none_of_its_preemptions(
+    tmp_path: Path,
+) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            *_admitted(OWN0, OWN1),
+            cache_reset([OWN0, OWN1], T0 + SECOND + 5),  # 5
+            # A second reset finds nothing running: the first preempted all.
+            cache_reset([], T0 + SECOND + 7),  # 6
+            # The next step lists both and resumes one; it is kept for it.
+            scheduled(
+                1,
+                T0 + 2 * SECOND,
+                [member(OWN0, scheduled=8)],
+                preempted=[OWN0, OWN1],
+            ),
+            completed(1, T0 + 2 * SECOND + 10, [done(OWN0)]),  # 8
+            heartbeat(T0 + 3 * SECOND, 8),
+        ],
+        _two_requests(),
+    )
+
+    stages = _stages(result)
+    assert "1" in [i.iteration_ref.id for i in _of(result, IterationEvent)]
+    assert "engine.preempted" not in stages
+    by_reset = stages["engine.preempted_by_reset"]
+    assert sorted(
+        (s.request_ref.id, s.metadata["reset_seq"]) for s in by_reset if s.request_ref
+    ) == [(REQUEST0, 5), (REQUEST1, 5)]
+
+
+def test_a_reset_that_keeps_running_requests_preempts_none(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            *_admitted(OWN0, OWN1),
+            cache_reset(
+                [OWN0, OWN1], T0 + SECOND + 5, reset_running_requests=False
+            ),  # 5
+            scheduled(
+                1, T0 + 2 * SECOND, [member(OWN0, scheduled=1)], preempted=[OWN1]
+            ),
+            completed(1, T0 + 2 * SECOND + 10, [done(OWN0)]),  # 7
+            heartbeat(T0 + 3 * SECOND, 7),
+        ],
+        _two_requests(),
+    )
+
+    stages = _stages(result)
+    assert "engine.preempted_by_reset" not in stages
+    (reset,) = stages["engine.cache_reset"]
+    assert reset.metadata["reset_running_requests"] is False
+    # The step's preemption is its own.
+    (stage,) = stages["engine.preempted"]
+    assert stage.request_ref == EntityRef("stormlog", REQUEST1)
+
+
+def test_without_resets_observed_a_step_s_preemptions_say_so(tmp_path: Path) -> None:
+    result = _reduce(
+        tmp_path,
+        [
+            hello("engine", PID, START),  # 0: a hook that does not list resets
+            alias(OWN0, f"chatcmpl-{X0}", T0 - 30),
+            alias(OWN1, f"chatcmpl-{X1}", T0 - 20),
+            scheduled(0, T0, [member(OWN0, scheduled=8), member(OWN1, scheduled=8)]),
+            completed(0, T0 + SECOND, [done(OWN0), done(OWN1)]),
+            scheduled(
+                1, T0 + SECOND + 10, [member(OWN0, scheduled=1)], preempted=[OWN1]
+            ),
+            completed(1, T0 + 2 * SECOND, [done(OWN0)]),  # 6
+            heartbeat(T0 + 3 * SECOND, 6),
+        ],
+        _two_requests(),
+    )
+
+    (stage,) = _stages(result)["engine.preempted"]
+    assert stage.metadata["reset_observed"] is False
+
+
+def test_a_reset_waits_for_another_client_s_request_a_pending_step_writes(
+    tmp_path: Path,
+) -> None:
+    """Another client's request whose only final step was not kept has no
+    record yet, and no admission holds the mark for it: only the pending
+    step that will write its record does, so the reset waits for it."""
+    first = [
+        hello("engine", PID, START, observes=OBSERVES),  # 0
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+        alias(OTHER, "chatcmpl-other", T0 - 20),  # 2
+        scheduled(0, T0, [member(OTHER, scheduled=8)]),  # 3: not kept
+        completed(0, T0 + SECOND, [done(OTHER)]),  # 4
+        cache_reset([OTHER], T0 + SECOND + 5),  # 5
+        scheduled(
+            1, T0 + SECOND + 10, [member(OWN0, scheduled=8)], preempted=[OTHER]
+        ),  # 6
+        completed(1, T0 + 2 * SECOND, [done(OWN0)]),  # 7
+        # The other request resumes beside the run's, in a step still pending.
+        scheduled(
+            2,
+            T0 + 2 * SECOND + 10,
+            [member(OWN0, scheduled=1), member(OTHER, scheduled=8)],
+        ),  # 8
+        heartbeat(T0 + 3 * SECOND, 8),  # 9
+    ]
+    rest = [
+        completed(2, T0 + 3 * SECOND + 10, [done(OWN0), done(OTHER)]),  # 10
+        heartbeat(T0 + 4 * SECOND, 10),  # 11
+    ]
+    before = _reduce(tmp_path, first)
+    write_epoch(tmp_path, "engine", PID, START, [*first, *rest])
+    after = reduce_execution_log(
+        read_execution_log(tmp_path, importer=HERE, high_water=before.high_water),
+        _after(before),
+    )
+
+    assert "engine.preempted_by_reset" not in _stages(before)
+    assert before.high_water == {EPOCH: 4}  # read again from the reset
+    (stage,) = _stages(after)["engine.preempted_by_reset"]
+    assert stage.metadata["reset_seq"] == 5
+    assert stage.metadata["ownership"] == "foreign"
+
+
+# ---------------------------------------------------------------- brackets
 
 
 def test_records_keep_each_stamp_s_second_wall_read(tmp_path: Path) -> None:

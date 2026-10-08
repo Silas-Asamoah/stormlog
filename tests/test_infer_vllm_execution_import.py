@@ -680,6 +680,19 @@ def test_a_dead_client_s_phase_ends_at_its_last_record_once_the_run_is_over(
         assert _placement(artifact) == placement, name
 
 
+def test_a_phase_begun_after_the_session_ended_has_no_window(tmp_path: Path) -> None:
+    ended = {
+        "schema_version": 1,
+        "event_type": "infer.session",
+        "session_id": SESSION,
+        "timestamp_ns": T0 + WALL_OFFSET - 2 * SECOND,
+        "status": "completed",
+    }
+    artifact = _in_progress_artifact(tmp_path / "infer.jsonl", ended)
+    facts = run_facts_from_records(load_inference_artifact(artifact), RUN, SESSION)
+    assert [w for w in facts.windows if w.kind == "phase"] == []
+
+
 def test_cli_imports_and_reports_the_epochs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
