@@ -417,14 +417,20 @@ def test_the_next_episode_waits_while_the_engine_looks_hung(
 
 
 @pytest.mark.parametrize(
-    ("late_ms", "measured_ms", "decision"),
-    [(15, 15, "start"), (1500, 1500, "start"), (1500, None, "timeout")],
+    ("late_ms", "measured_ms", "hung", "decision"),
+    [
+        (15, 15, False, "start"),
+        (1500, 1500, False, "start"),
+        (1500, None, False, "timeout"),
+        (0, 60_000, True, "timeout"),
+    ],
 )
 def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     late_ms: int,
     measured_ms: int | None,
+    hung: bool,
     decision: str,
 ) -> None:
     # Astra's closure of delta 3, H5: engine_stalled compared the gap open
@@ -433,7 +439,10 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     # hung at most polls and every episode ran into the recovery timeout.
     # The run allows at least a poll period, or the baseline's measured lag
     # if longer; a lag past both still reads as a hang. Which it used, and
-    # why, is logged in probes/record-lag.json.
+    # why, is logged in probes/record-lag.json. close-221-delta, N3: a
+    # measured p99 of a minute let an engine hung since 80 s start the next
+    # episode; the allowance is capped at 10 s (a tenth of the 150 s
+    # timeout at most), and the hang times out.
     from types import SimpleNamespace
     from typing import cast
 
@@ -445,6 +454,7 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
 
     second, step = 1_000_000_000, 20_000_000
     record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    record["timeline"]["recovery_timeout"] = 150
     plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
     now = [100 * second]
 
@@ -471,18 +481,22 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     # The lag used, and where it came from, is on record.
     used = json.loads((run.directory.probes / "record-lag.json").read_text())
     assert used["measured_p99_ns"] == lag
-    assert used["lag_ns"] == max(second, lag or 0)
+    assert used["cap_ns"] == 10 * second
+    assert used["lag_ns"] == min(max(second, lag or 0), 10 * second)
     assert (
         used["source"]
         == {
             15: "poll_period: longer than the measured lag",
             1500: "measured",
+            60_000: "cap: the measured lag was longer",
             None: "poll_period: no step record in the baseline to measure",
         }[measured_ms]
     )
 
     def seen() -> Signals:
         visible = now[0] - late_ms * 1_000_000
+        if hung:
+            visible = min(visible, 80 * second)
         steps = list(range(0, visible + 1, step))
         return Signals(in_flight=[(0, 10**18)], step_starts=steps)
 
@@ -498,6 +512,40 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
         plan.episodes[0], baseline, Actions(), 90 * second, 95 * second
     )
     assert found == decision
+
+
+@pytest.mark.parametrize(("timeout_s", "cap_s"), [(150, 10), (30, 3), (5, 1)])
+def test_the_record_lag_cap_is_a_tenth_of_the_timeout_but_never_under_a_poll(
+    tmp_path: Path, timeout_s: int, cap_s: int
+) -> None:
+    # close-221-final's mutants: the cap is 10 s or a tenth of the recovery
+    # timeout, whichever is less, and never less than the poll period (1 s
+    # here), the least the run ever allows.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    second = 1_000_000_000
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-c"), Server("", "m", tmp_path, {})
+    )
+    run.thresholds = replace(run.thresholds, recovery_timeout_ns=timeout_s * second)
+    run.directory.create()
+    run.channel = cast(
+        Any,
+        SimpleNamespace(
+            record_lag_ns=lambda *_: 60 * second, stop_noting_lags=lambda: None
+        ),
+    )
+    run._measure_record_lag(0, 45 * second)
+    used = json.loads((run.directory.probes / "record-lag.json").read_text())
+    assert used["cap_ns"] == used["lag_ns"] == cap_s * second
+    assert used["source"] == "cap: the measured lag was longer"
 
 
 def test_a_recovery_that_can_never_hold_ends_the_episode_at_once(

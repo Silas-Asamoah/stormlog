@@ -88,6 +88,11 @@ from .run_dir import RunDirectory
 from .victim import read_marker
 
 MARKER_TIMEOUT_SECONDS = 120.0
+# The most record lag engine_stalled is allowed, however late the baseline's
+# records came: 10 s, and no more than a tenth of the recovery timeout. A
+# p99 of a minute (a buffered hook, a poll thread stalled for a while) would
+# otherwise let a hung engine start the next episode (close-221-delta, N3).
+RECORD_LAG_CAP_SECONDS = 10.0
 # After its stop file appears the victim drains (its --timeout at most) and
 # runs its post-run imports; past this it is interrupted instead.
 VICTIM_STOP_SECONDS = 180.0
@@ -571,15 +576,20 @@ class InjectionRun:
         first-seen times the tailer notes, and never less than a poll
         period: a healthy engine's records arriving late must not read as a
         hang (Astra's H5). With no step record in the baseline to measure,
-        the poll period stands. What was used, and why, goes in
+        the poll period stands. Nor more than the cap: a lag that long would
+        keep a hung engine from being seen. What was used, and why, goes in
         ``probes/record-lag.json``."""
         with self._lock:
             assert self.channel is not None
             measured = self.channel.record_lag_ns(start_ns, end_ns)
             self.channel.stop_noting_lags()
         floor = self._record_lag_ns
+        cap = max(floor, min(int(RECORD_LAG_CAP_SECONDS * SECOND),
+                             self.thresholds.recovery_timeout_ns // 10))  # fmt: skip
         if measured is None:
             source = "poll_period: no step record in the baseline to measure"
+        elif measured > cap:
+            source, self._record_lag_ns = "cap: the measured lag was longer", cap
         elif measured > floor:
             source, self._record_lag_ns = "measured", measured
         else:
@@ -589,6 +599,7 @@ class InjectionRun:
             "source": source,
             "measured_p99_ns": measured,
             "poll_period_ns": floor,
+            "cap_ns": cap,
             "baseline": [start_ns, end_ns],
         }
         (self.directory.probes / "record-lag.json").write_text(
