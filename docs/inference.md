@@ -222,9 +222,12 @@ progress records of a request come before its `infer.request` record. A
 dropped request was never sent and has neither; a request without streamed
 content has no `infer.first_content`. A call the drain gave up on can still
 report its first content after its `cancelled` record, while the profile is
-writing the artifact. `infer analyze` reads none of these records;
-`infer import-execution` binds requests from their dispatches as well
-(see [the vLLM execution hook](vllm_execution.md#import)).
+writing the artifact. `infer import-execution` binds requests from their
+dispatches as well (see [the vLLM execution hook](vllm_execution.md#import)),
+so `infer analyze` reads dispatches in one place only: the execution
+coverage block counts a dispatched request among the run's requests, and
+gives the steps it ran in to its case, even when it never ended (see
+[Coverage](vllm_execution.md#coverage)). It reads no other progress record.
 
 ### Prompts and prefix sharing
 
