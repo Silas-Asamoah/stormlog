@@ -500,12 +500,22 @@ def test_poll_schedule_skips_missed_polls_instead_of_bursting() -> None:
 class _Process:
     pid = 7
 
-    def __init__(self, *, running: bool = True, error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        error: Exception | None = None,
+        status: str = psutil.STATUS_RUNNING,
+    ):
         self.running = running
         self.error = error
+        self._status = status
 
     def is_running(self) -> bool:
         return self.running
+
+    def status(self) -> str:
+        return self._status
 
     def memory_info(self) -> SimpleNamespace:
         if self.error is not None:
@@ -518,6 +528,9 @@ class _Process:
     [
         (_Process(), "valid"),
         (_Process(running=False), "invalid"),
+        # As Linux shows a killed child its parent has not reaped: still
+        # running, with an RSS of 0.
+        (_Process(status=psutil.STATUS_ZOMBIE), "invalid"),
         (_Process(error=psutil.NoSuchProcess(7)), "invalid"),
         (_Process(error=psutil.ZombieProcess(7)), "invalid"),
         (_Process(error=psutil.AccessDenied(7)), "missing"),
