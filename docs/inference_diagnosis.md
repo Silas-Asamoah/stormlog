@@ -402,6 +402,9 @@ interval); with no excess it reports `not_observed`.
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 
+A profiler stop is no competitor of its own: the engine stalls while the
+trace is written, so a stop that held the waits shows as `engine_stall`.
+
 The excess is a median over the subject's requests, so the witness asks
 about the requests, not the steps: bursts that overflow `max_num_seqs` by a
 few leave every step run while someone waited full, yet the median request
