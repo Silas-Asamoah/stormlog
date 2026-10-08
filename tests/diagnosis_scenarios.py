@@ -61,6 +61,8 @@ class SimRequest:
     shared_prefix_tokens: int | None = None
     prefix_group: int | None = None
     cached: int = 0  # prefix-cache hit at its first step
+    # Another client's run: the engine serves it, the artifact has no record.
+    run: str = RUN
     # Filled by the engine.
     first_step: int | None = None
     first_done_ns: int | None = None
@@ -68,7 +70,11 @@ class SimRequest:
 
     @property
     def x_request_id(self) -> str:
-        return f"stormlog-{RUN}-{self.request_id}"
+        return f"stormlog-{self.run}-{self.request_id}"
+
+    @property
+    def foreign(self) -> bool:
+        return self.run != RUN
 
     @property
     def internal(self) -> str:
@@ -554,7 +560,10 @@ def build_run(
     lines = [identity_record(client_host)]
     events: list[tuple[int, dict[str, Any]]] = []
     for request in requests if client else ():
-        events.extend((r["timestamp_ns"], r) for r in client_records(request, engine))
+        if not request.foreign:
+            events.extend(
+                (r["timestamp_ns"], r) for r in client_records(request, engine)
+            )
     for window in windows or []:
         events.append((window["timestamp_ns"], window))
     events.sort(key=lambda item: item[0])
