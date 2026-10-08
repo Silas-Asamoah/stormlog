@@ -55,6 +55,44 @@ count are recorded with the diagnosis so a reader can tell.
 A record without the fields its ID needs has none, and is cited by line
 alone.
 
+## Where a request's time went
+
+A request's TTFT, from the client's send to its first content, is split into
+segments that tile it, and its end-to-end latency likewise:
+
+| Segment | From | To | Clock |
+| --- | --- | --- | --- |
+| `send_to_ingress` | the client's send | the engine's admission (`alias`) | client to engine |
+| `engine_ingress` | admission | entering the scheduler's queue (`enqueued`) | engine |
+| `scheduler_wait` | entering the queue | the `schedule()` call that first ran it | engine |
+| `prefill` | that call | the completion of the first step that kept an output token for it | engine |
+| `first_token_delivery` (TTFT) | that completion | the client's first content | engine to client |
+| `decode` (end-to-end) | that completion | the completion of the step it finished in | engine |
+| `final_delivery` (end-to-end) | that completion | the client's end | engine to client |
+
+On a hook log without `enqueued` records the second and third are one
+segment, `engine_ingress_to_schedule`, never called a queue wait. A segment
+on the engine's monotonic clock is exact. One that crosses between the
+client's clock and the engine's is an interval: the engine's stamp is a
+bracketed read of the same wall clock when the engine shares the client's
+host and boot, so the segment is known to within that bracket. Otherwise it
+is unknown, with a reason: `legacy_unbracketed_stamp` for a hook from before
+the bracket, `cross_host_continuity_unknown` for an engine on another host,
+and `wall_clock_discontinuity` when the wall clock may have jumped between
+the two reads. The residual, the client's interval minus the segments, is an
+interval too, and exists only when every segment does. A request with more
+than one engine execution, or none, is not decomposed.
+
+**Continuity.** The engine's `wall - mono` offset, from every step's
+schedule entry and completion, splits its log into continuity segments:
+consecutive samples stay in one segment while the offset moves by at most
+100 ppm of the time between them (and never less than 10 us), which covers
+NTP's normal slewing. A client read pairs with an engine read only when it
+lies within the wall span of the engine read's segment, or, before the
+first sample or after the last, within one sample gap of it. Two jumps that
+cancel between two samples cannot be seen, so a segment is monitored to
+within its largest sample gap, not verified.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
