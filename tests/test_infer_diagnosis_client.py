@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.diagnosis_client import (
     assess_api_server,
     assess_capture_pause,
@@ -282,3 +283,30 @@ def test_a_brief_stop_explains_none_of_a_queue_s_waits(
     assert finding.metrics["requests_across_stop"] > 50
     assert "explains_ttft_excess" in finding.contribution.unmet
     assert finding.contribution_lower is not None and finding.contribution_lower <= 2.0
+
+
+def test_an_instrumentation_warning_exits_3_without_a_fault_claim(
+    tmp_path: Path,
+) -> None:
+    calm = poisson_free(1000, 10 * SECOND, 100 * MS, prefix="a")
+    stop = _trace_window(
+        stop_requested_at_ns=AT + WALL_OFFSET,
+        stopped_at_ns=AT + WALL_OFFSET + 2 * SECOND,
+    )
+    artifact = build_run(
+        tmp_path, calm, Engine(max_num_seqs=64, stall=(AT, 2 * SECOND)), windows=[stop]
+    )
+    window = (AT + WALL_OFFSET, AT + WALL_OFFSET + 2 * SECOND)
+
+    report = diagnose_artifact(
+        artifact, windows=[window], options=DiagnoseOptions(generated_at_ns=1)
+    )
+
+    details = report["payload"]["findings_detail"].values()
+    (capture,) = [d for d in details if d["kind"] == "capture_pause"]
+    assert (capture["severity"], capture["cause"], capture["claim"]) == (
+        "warning",
+        "instrumentation",
+        "condition",
+    )
+    assert report["verdict"]["exit_code"] == 3
