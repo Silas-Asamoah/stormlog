@@ -606,6 +606,47 @@ excess's lower bound when smaller. Records lost over a stall leave the
 class `partial/hook_coverage_unknown`: a missing record can look like a
 gap.
 
+## The matched design
+
+Did steps that also prefilled complete later than decode-only steps like
+them? The matched design (`stormlog.infer.diagnosis_matched`) answers it from
+the hook's steps alone.
+
+- **Units.** A unit is one complete step of one engine epoch whose every
+  member is known (none withheld, unresolved, or of unknown role) and whose
+  decode set continues from the step completed before it, so its completion
+  cadence, from that step's completion to its own, is defined. Under async
+  scheduling that is the pace at which the engine completed steps, not one
+  step's execution time.
+- **Treatment.** A treated unit scheduled prefill. Its dose is its prefill
+  members' context-phase tokens (a prompt, and the output a resumed request
+  computes again), binned 1-256, 257-1024 and over 1024.
+- **Controls.** A treated unit's controls are decode-only units of the same
+  epoch that share its match key exactly:
+  - its running requests, decode and prefill members together, so a step
+    that spent a slot on prefill is compared with steps of the same batch
+    that spent it on decode;
+  - its drafts;
+  - whether it, and the step before it, ran short of a refill. Under async
+    scheduling the step after a finish is scheduled before the freed slot is
+    known, and completes late. Matching on it, rather than excluding such
+    steps, keeps every treated unit in the support.
+
+  A control's decode context, the mean `computed_before` per decode member,
+  lies within 15% of the treated unit's. Of the controls completed in the
+  30 s before it, the 32 nearest in time are used: only the past, so the
+  design is causal. With fewer than 5 the treated unit is unmatched, and the
+  share matched is the common support.
+- **Effect.** A treated unit's effect is its cadence minus its controls'
+  median.
+
+Matching on the running requests rather than on the decode members is
+what keeps the async pipeline's bubble out of the controls. On a real run
+at saturation (0.5B, `max_num_seqs` 8) the steps with seven decoders and no
+prefill were the step after a finish, 12.2 ms against 2.95 ms for eight
+decoders, and a match on decode members made every prefill step look
+9.5 ms faster than its controls.
+
 ## Workload changes
 
 Four kinds say what the workload asked for, never what failed; they are
@@ -684,6 +725,10 @@ The values are provisional until they are read from real runs.
 | `queue_saturation.front_excess_share` | 0.25 | share of the wait excess an excess before the queue (engine ingress, the API server) must reach to explain it instead |
 | `queue_saturation.kv_hold_share` | 0.5 | share of the wait excess the median request must have waited behind the subject's preempted requests for KV pressure to be upstream of the queue |
 | `queue_saturation.competitor_floor_share` | 0.1 | share of the wait excess below which a competitor is ruled out; above it, up to the competitor's own share, it is contributing |
+| `mixed_prefill_interference.match_window_ns` | 30 s | a treated step's controls completed this long before it |
+| `mixed_prefill_interference.context_tolerance` | 0.15 | a control's mean decode context per decode member lies within this fraction of the treated step's |
+| `mixed_prefill_interference.min_controls` | 5 | controls a treated step needs to be matched |
+| `mixed_prefill_interference.nearest_controls` | 32 | the controls nearest in time that are used |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
 | `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |

@@ -32,6 +32,10 @@ QUEUE_STALL_SHARE = "queue_saturation.stall_excess_share"
 QUEUE_FRONT_SHARE = "queue_saturation.front_excess_share"
 QUEUE_KV_SHARE = "queue_saturation.kv_hold_share"
 QUEUE_COMPETITOR_FLOOR = "queue_saturation.competitor_floor_share"
+MIXED_MATCH_WINDOW_NS = "mixed_prefill_interference.match_window_ns"
+MIXED_CONTEXT_TOLERANCE = "mixed_prefill_interference.context_tolerance"
+MIXED_MIN_CONTROLS = "mixed_prefill_interference.min_controls"
+MIXED_NEAREST_CONTROLS = "mixed_prefill_interference.nearest_controls"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
 WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
@@ -100,6 +104,16 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # between it and the competitor's own cut it is contributing, which
         # leaves the queue no fault claim.
         QUEUE_COMPETITOR_FLOOR: 0.1,
+        # The matched design: a treated step's controls completed in this
+        # window before it,
+        MIXED_MATCH_WINDOW_NS: 30_000_000_000.0,
+        # with a mean decode context per decode member within this fraction
+        # of its own;
+        MIXED_CONTEXT_TOLERANCE: 0.15,
+        # it needs this many of them, and the nearest this many in time are
+        # used.
+        MIXED_MIN_CONTROLS: 5.0,
+        MIXED_NEAREST_CONTROLS: 32.0,
         # Workload changes: arrivals faster by this ratio (interval's lower
         # bound), prompts or outputs longer by this ratio, or this much less
         # of the requests declaring a shared prefix.
@@ -146,6 +160,10 @@ __all__ = [
     "LOOP_NO_BASELINE_FLOOR_NS",
     "LOOP_STALL_FACTOR",
     "LOOP_STALL_FLOOR_NS",
+    "MIXED_CONTEXT_TOLERANCE",
+    "MIXED_MATCH_WINDOW_NS",
+    "MIXED_MIN_CONTROLS",
+    "MIXED_NEAREST_CONTROLS",
     "PREFIX_HIT_RATIO_DROP",
     "PREFIX_MIN_QUERIED",
     "PREFIX_WORKING_SET_RATIO",

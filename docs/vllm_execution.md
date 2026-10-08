@@ -268,6 +268,11 @@ each turn's prefill is measured against the prompt of that turn. `sighting` is
 `first` the first time the hook sees an internal ID and `repeat` after, whatever
 vLLM's own field calls it. `cached_at_admission` is set on the first sighting
 only.
+The diagnoser's matched design (`docs/inference_diagnosis.md`, The matched
+design) reads a step's members by role: `computed_before` and
+`drafts_scheduled` of its decode members, and `prefill_scheduled` plus
+`past_prompt_scheduled`, `computed_before` and `recompute` of its prefill
+members.
 
 **`completed`**
 
