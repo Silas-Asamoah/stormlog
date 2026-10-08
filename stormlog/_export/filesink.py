@@ -67,7 +67,8 @@ class LineFileSink:
         """Open for appending; an ``OSError`` reaches the caller."""
         self._fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         self._size = os.fstat(self._fd).st_size
-        if self._size and _last_byte(self.path) != b"\n":
+        # A full file is left as it is: no line can follow the broken one.
+        if 0 < self._size < self.max_bytes and _last_byte(self.path) != b"\n":
             _write_all(self._fd, b"\n")
             self._size += 1
             self.stats.ended_partial = True

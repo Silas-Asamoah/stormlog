@@ -48,6 +48,21 @@ def test_a_line_past_the_cap_is_refused_before_writing(tmp_path: Path) -> None:
     sink.close()
 
 
+def test_a_full_file_ending_in_part_of_a_line_is_left_as_it_is(
+    tmp_path: Path,
+) -> None:
+    # The newline that would end the broken line does not fit under the
+    # cap; nothing can follow it anyway.
+    path = tmp_path / "f"
+    path.write_bytes(b"x" * 10)
+    sink = LineFileSink(path, max_bytes=10)
+    sink.open()
+    assert path.read_bytes() == b"x" * 10
+    assert sink.write_line(b"y") == FILE_FULL
+    sink.close()
+    assert path.read_bytes() == b"x" * 10
+
+
 def test_reopening_counts_what_the_file_already_holds(tmp_path: Path) -> None:
     path = tmp_path / "f"
     path.write_bytes(b"x" * 8)
