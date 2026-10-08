@@ -318,6 +318,19 @@ their first content. It needs the stop request's own stamp,
 class is `unsupported/no_stop_request_stamp`, and a run without profiler
 windows has nothing to assess (`no_trace_windows`).
 
+## Workload changes
+
+Four kinds say what the workload asked for, never what failed; they are
+always `info` with cause `workload_change`, and an incident explained only
+by them is still `inconclusive`:
+
+| Kind | Found when |
+| --- | --- |
+| `load_increase` | the subject's requests arrived faster than the reference's, the lower bound of the rate ratio's exact 95% interval (conditional binomial, Clopper-Pearson) at least 1.25 |
+| `longer_inputs` | the median prompt grew, the difference of medians' interval above zero and at least 10% longer |
+| `longer_outputs` | the same for outputs |
+| `prefix_sharing_drop` | the share of requests declaring a shared prefix fell: its exact interval's upper bound at least 0.1 below the reference's share |
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
@@ -344,6 +357,9 @@ The values are provisional until they are read from real runs.
 | `queue_saturation.witness_step_share` | 0.5 | share of the steps spanning the waits at capacity for a witness |
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
 | `queue_saturation.stall_wait_share` | 0.5 | share of the waiting time engine stalls must cover to explain it instead |
+| `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
+| `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
+| `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |
 | `selection.window_seconds` | 1 | base window of incident selection |
 | `selection.span_cap_seconds` | 30 | longest a joined window may span |
 | `selection.min_requests` | 20 | requests a window is joined until it holds |

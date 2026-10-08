@@ -41,8 +41,19 @@ from .diagnosis_vocabulary import (
     HOST_STALL,
     KINDS,
     KV_PREEMPTION_PRESSURE,
+    LOAD_INCREASE,
+    LONGER_INPUTS,
+    LONGER_OUTPUTS,
     PREFIX_CACHE_LOSS,
+    PREFIX_SHARING_DROP,
     QUEUE_SATURATION,
+    WORKLOAD_KINDS,
+)
+from .diagnosis_workload import (
+    assess_inputs,
+    assess_load,
+    assess_outputs,
+    assess_sharing,
 )
 
 REPORT_KIND = "inference_diagnosis"
@@ -61,6 +72,10 @@ CLASSES: dict[str, tuple[Assess, ...]] = {
     CLIENT_ADMISSION: (assess_client_admission,),
     HOST_STALL: (assess_api_server,),
     CAPTURE_PAUSE: (assess_capture_pause,),
+    LOAD_INCREASE: (assess_load,),
+    LONGER_INPUTS: (assess_inputs,),
+    LONGER_OUTPUTS: (assess_outputs,),
+    PREFIX_SHARING_DROP: (assess_sharing,),
 }
 # Parts of a kind this version does not assess yet.
 NOT_YET: dict[str, str] = {
@@ -288,8 +303,13 @@ def _overall(statuses: set[str]) -> str:
 
 
 def _unexplained(context: Context, ranked: list[tuple[str, Finding]]) -> list[Subject]:
-    """Incident subjects with no eligible finding."""
-    explained = {str(f.subject.get("key")) for _, f in ranked if f.eligible}
+    """Incident subjects with no eligible mechanism or instrumentation
+    finding: a change in demand alone says what drove it, not what slowed."""
+    explained = {
+        str(f.subject.get("key"))
+        for _, f in ranked
+        if f.eligible and f.kind not in WORKLOAD_KINDS
+    }
     return [
         s for s in context.selection.subjects if s.incident and s.key not in explained
     ]
