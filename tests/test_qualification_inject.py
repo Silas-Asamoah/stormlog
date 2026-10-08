@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psutil
 import pytest
@@ -574,6 +574,25 @@ def _short_plan(path: Path, *episodes: dict[str, Any]) -> Path:
     record["episodes"] = list(episodes)
     path.write_text(json.dumps(record))
     return path
+
+
+def test_the_skipped_episodes_name_why_recovery_could_never_hold() -> None:
+    # Astra's closure of delta 3, H4: a cadence episode refused by G0's dose
+    # check also times out. The episodes it skips say so, not that the
+    # baseline was too thin.
+    from types import SimpleNamespace
+
+    from examples.qualification.inject import _timeout_reason
+
+    def skipped_after(injected: dict[str, Any]) -> str:
+        attempt = SimpleNamespace(injected=injected)
+        return _timeout_reason(cast(Any, SimpleNamespace(attempts=[attempt])))
+
+    dose = "dose_check_failed: 16 of 2021 busy step gaps in the baseline are ..."
+    thin = "baseline_too_thin: 3 waiting counts of the 5 a hold needs"
+    assert skipped_after({"recovery_blocked": [dose]}) == "dose_check_failed"
+    assert skipped_after({"recovery_blocked": [thin, dose]}) == "baseline_too_thin"
+    assert skipped_after({}) == "recovery_timeout"
 
 
 def test_an_actuation_that_raises_is_published_not_actuated(tmp_path: Path) -> None:
