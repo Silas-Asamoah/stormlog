@@ -28,6 +28,8 @@ LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
 QUEUE_WITNESS_SHARE = "queue_saturation.witness_step_share"
 QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
 QUEUE_STALL_COVERAGE = "queue_saturation.stall_wait_share"
+QUEUE_FRONT_SHARE = "queue_saturation.front_excess_share"
+QUEUE_COMPETITOR_FLOOR = "queue_saturation.competitor_floor_share"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
 WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
@@ -77,6 +79,13 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # Engine stalls explain the waits instead when they cover this share
         # of the waiting time.
         QUEUE_STALL_COVERAGE: 0.5,
+        # Time before the queue (engine ingress, the API server) explains the
+        # excess instead when its own excess is this share of the wait's.
+        QUEUE_FRONT_SHARE: 0.25,
+        # Below this share of the wait excess a competitor is ruled out;
+        # between it and the competitor's own cut it is contributing, which
+        # leaves the queue no fault claim.
+        QUEUE_COMPETITOR_FLOOR: 0.1,
         # Workload changes: arrivals faster by this ratio (interval's lower
         # bound), prompts or outputs longer by this ratio, or this much less
         # of the requests declaring a shared prefix.
@@ -125,7 +134,9 @@ __all__ = [
     "LOOP_STALL_FLOOR_NS",
     "PREFIX_HIT_RATIO_DROP",
     "PREFIX_MIN_QUERIED",
+    "QUEUE_COMPETITOR_FLOOR",
     "QUEUE_CONTRIBUTION",
+    "QUEUE_FRONT_SHARE",
     "QUEUE_MEDIAN_WAITING",
     "QUEUE_STALL_COVERAGE",
     "QUEUE_WITNESS_SHARE",

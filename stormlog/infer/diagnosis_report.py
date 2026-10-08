@@ -54,6 +54,7 @@ def finding_detail(
             "eligible": finding.eligible,
             "gates": dict(sorted(finding.gates.items())),
             "failed": finding.failed_gates,
+            "contested": finding.contested,
         },
         "confidence": {
             "level": finding.confidence_level,
