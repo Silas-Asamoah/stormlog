@@ -213,7 +213,9 @@ def test_two_requests_sharing_two_steps_become_canonical_records(
     assert isinstance(alignment, ClockAlignmentEvent)
     assert alignment.from_clock_domain == f"{HOST}/{BOOT}/monotonic_ns"
     assert alignment.to_clock_domain == f"{HOST}/{BOOT}/unix_epoch_ns"
-    assert alignment.offset_ns == WALL_OFFSET
+    # The hello's wall reads bracket its monotonic one by 1,200 ns: the offset
+    # is the bracket's midpoint, known to half its width.
+    assert alignment.offset_ns == WALL_OFFSET + 600
     assert alignment.uncertainty_ns == 600 and alignment.valid_from_ns == T0
     assert alignment.valid_to_ns is None
     # Everything resolves through the existing correlation graph.
