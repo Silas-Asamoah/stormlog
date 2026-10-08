@@ -211,8 +211,13 @@ def end_journaled(launched: Launched, cleanup: Cleanup) -> None:
     """Journal a launch's end once its cleanup verified, so a resume does
     not judge it again; one whose cleanup did not verify stays for it."""
     if cleanup.verified and launched.journal is not None:
-        with launched.journal.open("a") as handle:
-            handle.write(json.dumps({"ended": launched.mark}) + "\n")
+        end_launch(launched.journal, launched.mark)
+
+
+def end_launch(journal: Path, mark: str) -> None:
+    """Journal the end of the launch with this mark."""
+    with journal.open("a") as handle:
+        handle.write(json.dumps({"ended": mark}) + "\n")
 
 
 def journaled(path: Path) -> list[dict[str, Any]]:
@@ -901,6 +906,7 @@ __all__ = [
     "clean_up_after",
     "current_boot",
     "end_journaled",
+    "end_launch",
     "identify",
     "journaled",
     "listens",

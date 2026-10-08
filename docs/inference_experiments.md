@@ -194,7 +194,8 @@ cleanup, and what it launched lives on in sessions of its own. So every
 launch, of a run or a prelude, is journaled in `launches.ndjson` as it
 starts: the host's boot ID, PID, process group, start time and mark. Once
 a launch's cleanup verifies, the runner journals its end (`{"ended":
-<mark>}`), and a resume leaves it be; only a whole line ends a launch, so
+<mark>}`), and a resume leaves it be; so does a resume once it has
+stopped a launch and verified it gone. Only a whole line ends a launch, so
 one a crash tore leaves it to the resume. A resume signals or kills only
 what it can tie to a launch that has not ended:
 
