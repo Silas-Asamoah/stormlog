@@ -165,8 +165,12 @@ def parse_plan(record: Mapping[str, Any]) -> Plan:
         problems.append(f"no binding {record.get('binding')!r}")
     if not sections:
         # With the windows and rates readable, their samples are checked in
-        # the same round: every problem is listed at once.
-        problems += _sample_problems(_plan_of(record, episodes, "", 0))
+        # the same round: every problem is listed at once. A plan that can't
+        # be built even so is one more problem, never a bare TypeError.
+        try:
+            problems += _sample_problems(_plan_of(record, episodes, "", 0))
+        except (KeyError, TypeError, ValueError) as error:
+            problems.append(f"malformed plan: {error}")
     if problems:
         raise PlanError(problems)
     try:
