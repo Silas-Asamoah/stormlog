@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -126,7 +127,8 @@ def diagnose_artifact(
 
     Raises:
         OSError: when the artifact cannot be read.
-        ValueError: for unknown threshold keys or empty windows.
+        ValueError: for unknown or non-finite threshold overrides, or empty
+            windows.
     """
     options = options or DiagnoseOptions()
     _check(options, windows)
@@ -161,6 +163,9 @@ def _check(options: DiagnoseOptions, windows: Sequence[tuple[int, int]] | None) 
     unknown = sorted(set(options.thresholds) - set(DEFAULT_THRESHOLDS))
     if unknown:
         raise ValueError(f"unknown threshold keys: {', '.join(unknown)}")
+    if not all(math.isfinite(value) for value in options.thresholds.values()):
+        # A NaN is never exceeded: every finding it gates would vanish silently.
+        raise ValueError("threshold overrides must be finite numbers")
     for start, end in windows or ():
         if not end > start:
             raise ValueError(f"window {start},{end} is empty")

@@ -193,3 +193,15 @@ def test_bad_invocations_have_their_codes(
     burst: Path, argv: list[str], code: int, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert main([a.format(artifact=burst) for a in argv]) == code
+
+
+def test_a_nan_threshold_is_a_usage_error_not_a_silent_pass(
+    tmp_path: Path, burst: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # json.loads reads NaN; never exceeded, it would hide the queue warning.
+    overrides = tmp_path / "thresholds.json"
+    overrides.write_text('{"queue_saturation.witness_step_share": NaN}')
+
+    code = main(["diagnose", str(burst), "--thresholds", str(overrides)])
+
+    assert code == 2 and "finite" in capsys.readouterr().err

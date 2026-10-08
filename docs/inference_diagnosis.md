@@ -110,7 +110,7 @@ exits `5`.
 | --- | --- |
 | 0 | the diagnosis completed with no `warning` finding, including `inconclusive` |
 | 3 | at least one `warning` finding |
-| 2 | a usage error: no artifact, a malformed `--window`, an unknown threshold key |
+| 2 | a usage error: no artifact, a malformed `--window`, an unknown threshold key or one that is not a finite number |
 | 5 | an unreadable artifact, report or threshold file |
 | 1 | anything unexpected |
 
