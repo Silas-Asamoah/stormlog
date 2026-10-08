@@ -24,6 +24,7 @@ from stormlog.infer.diagnosis_selection import SelectionOptions, select
 from stormlog.infer.diagnosis_steps import Step, refills
 from tests.diagnosis_scenarios import (
     MS,
+    OBSERVES,
     Engine,
     SimRequest,
     build_run,
@@ -427,7 +428,8 @@ def test_a_stalled_engine_explains_the_waits_instead(tmp_path: Path) -> None:
     assessment = _assess(tmp_path, calm + heavy, engine)
 
     (finding,) = assessment.findings
-    assert _alternatives(finding)["engine_stall"] == "not_ruled_out"
+    # The host's stall: the engine-core host-stall finding's to explain.
+    assert _alternatives(finding)["host_stall@engine_core"] == "upstream"
     assert "capacity_witness" in finding.failed_gates
     assert (
         assessment.status == "partial" and "no_capacity_witness" in assessment.reasons
@@ -450,7 +452,11 @@ def test_a_stall_during_the_waits_is_judged_by_its_length(
     assessment = _assess(tmp_path, _requests(), engine)
 
     (finding,) = assessment.findings
-    assert _alternatives(finding)["engine_stall"] == status
+    # Over the stall share, the host's stall is the host-stall finding's.
+    alternatives = _alternatives(finding)
+    named = "host_stall@engine_core" if status == "not_ruled_out" else "engine_stall"
+    status = "upstream" if status == "not_ruled_out" else status
+    assert alternatives[named] == status
     assert finding.claim == claim and finding.severity == "info"
 
 
@@ -481,7 +487,7 @@ def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None
 
     (finding,) = _assess(tmp_path, calm + load, engine).findings
 
-    assert _alternatives(finding)["engine_stall"] == "not_ruled_out"
+    assert _alternatives(finding)["host_stall@engine_core"] == "upstream"
     assert finding.claim == "observation"
 
 
@@ -498,6 +504,45 @@ def test_stalls_spread_over_a_saturation_are_weighed_per_request(
 
     (stall,) = [a for a in finding.alternatives if a.kind == "engine_stall"]
     assert stall.status == "contributing"
+
+
+def test_a_host_stall_that_held_the_waits_makes_the_queue_its_secondary(
+    tmp_path: Path,
+) -> None:
+    """The loop stops 1 s mid-burst: the engine-core host-stall finding is
+    eligible, so the queue behind it is its secondary (E2)."""
+    engine = Engine(max_num_seqs=4, stall=(BURST_AT + 500 * MS, SECOND))
+    artifact = build_run(tmp_path, _requests(), engine)
+
+    report = diagnose_artifact(artifact, options=DiagnoseOptions(generated_at_ns=1))
+
+    details = report["payload"]["findings_detail"].values()
+    by = {f"{d['kind']}@{d['location']['component']}": d for d in details}
+    stall, queue = by["host_stall@engine_core"], by["queue_saturation@scheduler"]
+    assert stall["eligibility"]["eligible"] and stall["role"] == "primary"
+    assert (queue["role"], queue["secondary_to"]) == ("secondary", [stall["id"]])
+    (evidence,) = queue["detail"]["role_evidence"]
+    assert evidence["edge"] == "host_stall->queue_saturation"
+    assert {a["kind"] for a in queue["alternatives"]} >= {"engine_stall"}
+
+
+def test_a_profiler_stop_that_held_the_waits_stays_an_engine_stall(
+    tmp_path: Path,
+) -> None:
+    """The engine's own stop call is cut from the host's stalls, but it
+    still held the waits: it stays the queue's engine_stall competitor,
+    and no host-stall edge forms."""
+    engine = Engine(
+        max_num_seqs=4,
+        observes=[*OBSERVES, "profile"],
+        profiles=[(BURST_AT + 500 * MS, SECOND, False)],
+    )
+
+    (finding,) = _assess(tmp_path, _requests(), engine).findings
+
+    alternatives = _alternatives(finding)
+    assert "host_stall@engine_core" not in alternatives
+    assert alternatives["engine_stall"] == "not_ruled_out"
 
 
 def test_a_stall_holds_a_wait_back_by_no_more_than_the_wait() -> None:

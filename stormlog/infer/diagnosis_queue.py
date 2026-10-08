@@ -21,10 +21,10 @@ from statistics import median
 from typing import Any, Callable
 
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
+from .diagnosis_host import engine_stalls
 from .diagnosis_inputs import Line
 from .diagnosis_join import Execution
 from .diagnosis_kv import held_admissions
-from .diagnosis_loop import LoopGapConfig, stalls_over_limit
 from .diagnosis_metrics import aggregate_assessment, subject_signal
 from .diagnosis_model import (
     CONTRIBUTING,
@@ -41,7 +41,7 @@ from .diagnosis_model import (
 from .diagnosis_segments import MERGED_INGRESS
 from .diagnosis_selection import Subject
 from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
-from .diagnosis_steps import Step, Steps, loop_steps, merge_intervals
+from .diagnosis_steps import Step, Steps, merge_intervals
 from .diagnosis_thresholds import (
     QUEUE_COMPETITOR_FLOOR,
     QUEUE_CONTRIBUTION,
@@ -52,7 +52,9 @@ from .diagnosis_thresholds import (
     resolve_threshold,
 )
 from .diagnosis_vocabulary import (
+    COMPONENT_ENGINE_CORE,
     COMPONENT_SCHEDULER,
+    HOST_STALL,
     KV_PREEMPTION_PRESSURE,
     QUEUE_SATURATION,
 )
@@ -163,7 +165,7 @@ def _finding(
     ttft = _ttft_excess(context, subject)
     kv_hold, held = _kv_hold(context, subject, producer, waiting, excess)
     alternatives = [
-        _engine_stall(context, producer, waiting, excess),
+        *_engine_stalls(context, producer, waiting, excess),
         _scheduler_paused(
             context,
             producer,
@@ -336,9 +338,9 @@ def _at_capacity(step: Step, seqs: int | None, tokens: int | None) -> bool:
 
 
 # ------------------------------------------------------------- competitors
-def _engine_stall(
+def _engine_stalls(
     context: Context, producer: str, waiting: list[Execution], excess: Difference
-) -> Alternative:
+) -> list[Alternative]:
     """Engine-loop stalls, by the online trigger's own rules, against the
     wait excess, request by request. While the queue stays busy a stall
     postpones every later admission by its length, so a request is held by
@@ -347,29 +349,78 @@ def _engine_stall(
     the engine during a stall enters the queue only when the loop resumes),
     by no more than its own wait. The excess is a median over the requests,
     so it is set against the median request's held time: stalls spread over
-    a long saturation hold each request by those before it, not by all."""
+    a long saturation hold each request by those before it, not by all.
+
+    When the host stalls the engine-core host-stall class counts hold the
+    median request for the stall share or more, they are that finding's to
+    explain (``host_stall@engine_core``, upstream); every other stall time
+    (a slow step, paused time, a profiler call, a client-window overlap)
+    stays the ``engine_stall`` competitor."""
     intervals = _wait_intervals(context, waiting)
     if not intervals:
-        return Alternative("engine_stall", UNTESTABLE, "no wait was placed", True)
-    config = LoopGapConfig(thresholds=dict(context.thresholds or {}))
-    stalls = [
-        (stall.start_mono_ns, stall.start_mono_ns + stall.duration_ns)
-        for stall, _ in stalls_over_limit(
-            loop_steps(context.view, producer), (), config
-        )
-    ]
+        return [Alternative("engine_stall", UNTESTABLE, "no wait was placed", True)]
+    found = engine_stalls(context, producer)
     busy = _busy_periods(context, producer)
-    held = [
-        _held_by_stalls(stalls, wait, _busy_since(busy, wait)) for wait in intervals
+    host = found.host_intervals()
+    host_held = _median_held(host, intervals, busy)
+    cut = resolve_threshold(QUEUE_STALL_SHARE, context.thresholds)[0]
+    if not host or host_held < cut * excess.estimate:
+        return [_stall_competitor(context, found.every, intervals, busy, excess, "")]
+    reason = (
+        f"the engine core's host stalls held the median waiting request "
+        f"{host_held / 1e6:.1f} ms, against a wait excess of "
+        f"{excess.estimate / 1e6:.1f} ms"
+    )
+    residue = _subtract(found.every, host)
+    return [
+        Alternative(f"{HOST_STALL}@{COMPONENT_ENGINE_CORE}", UPSTREAM, reason, True),
+        _stall_competitor(context, residue, intervals, busy, excess, "other "),
     ]
-    typical = median(held)
+
+
+def _stall_competitor(
+    context: Context,
+    stalls: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    busy: list[tuple[int, int]],
+    excess: Difference,
+    which: str,
+) -> Alternative:
+    typical = _median_held(stalls, intervals, busy)
     status = _by_share(context, typical / excess.estimate, QUEUE_STALL_SHARE)
     reason = (
-        f"{len(stalls)} engine stalls; the median waiting request was held "
+        f"{len(stalls)} {which}engine stalls; the median waiting request was held "
         f"{typical / 1e6:.1f} ms by those since its queue was last empty, "
         f"against a wait excess of {excess.estimate / 1e6:.1f} ms"
     )
     return Alternative("engine_stall", status, reason, True)
+
+
+def _median_held(
+    stalls: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    busy: list[tuple[int, int]],
+) -> float:
+    return float(
+        median(
+            _held_by_stalls(stalls, wait, _busy_since(busy, wait)) for wait in intervals
+        )
+    )
+
+
+def _subtract(
+    intervals: list[tuple[int, int]], cut: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """What of ``intervals`` lies outside ``cut``."""
+    pieces = list(intervals)
+    for start, end in cut:
+        pieces = [
+            part
+            for low, high in pieces
+            for part in ((low, min(high, start)), (max(low, end), high))
+            if part[1] > part[0]
+        ]
+    return pieces
 
 
 def _busy_periods(context: Context, producer: str) -> list[tuple[int, int]]:

@@ -350,23 +350,26 @@ minor second cause.
 - **Roles.** A finding is `secondary` to a cause upstream of it, and lists
   that finding's ID in `secondary_to`, when the subject's finding of that
   kind is eligible: an observation establishes nothing, and leaves the
-  competitor `not_ruled_out`. This version links one pair: the queue, when
-  its requests waited behind the subject's own preempted requests, is KV
-  preemption pressure's secondary. The competitor then leaves its
-  alternatives (an upstream cause is no competitor), `detail.role_evidence`
-  says why, and its claim is a condition, never the fault. Its severity is
-  capped at the upstream finding's, through any chain of them, so an edge
-  never raises the exit code above what the cause says, and its cause is the
-  upstream's: a host stall a capture caused is `instrumentation`. Edges join
-  kinds at components, from a fixed, versioned table that the payload
-  carries as `edges` (`diagnosis_edges_v1`), so a stall at the API server is
-  upstream of nothing. The upstream finding claims what its consequence
-  explains: KV pressure explains the TTFT excess through the queue
+  competitor `not_ruled_out`. This version forms three of the table's edges:
+  the queue is KV preemption pressure's secondary when its requests waited
+  behind the subject's own preempted requests, and the engine-core host
+  stall's when that finding's stalls held them; a host stall is a capture
+  pause's secondary when most of its host time began at the capture's call
+  or window. The competitor then leaves its alternatives (an upstream cause
+  is no competitor), `detail.role_evidence` says why, and its claim is a
+  condition, never the fault. Its severity is capped at the upstream
+  finding's, through any chain of them, so an edge never raises the exit
+  code above what the cause says, and its cause is the upstream's: a host
+  stall a capture caused is `instrumentation`. Edges join kinds at
+  components, from a fixed, versioned table that the payload carries as
+  `edges` (`diagnosis_edges_v1`), so a stall at the API server is upstream
+  of nothing. The upstream finding claims what its consequence explains: KV
+  pressure explains the TTFT excess through the queue
   (`explains_ttft_excess_through_queue`) when the median request's time held
   behind preempted ones is at least half of it, so a KV fault that shows as
-  queueing is still a warning. The other edges of the table come with the
-  engine-loop class; until then a competitor that stays `upstream` contests
-  the finding like a contributing one.
+  queueing is still a warning. The mixed-prefill edges come with that class;
+  a competitor that stays `upstream`, with no edge to form, contests the
+  finding like a contributing one.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, a fault claim before a condition (so a warning at
   medium confidence outranks an info finding at high: the top finding is
@@ -402,7 +405,7 @@ interval); with no excess it reports `not_observed`.
 
 | Competitor | Indispensable | Ruled out when |
 | --- | --- | --- |
-| `engine_stall` | yes | engine-loop stalls over their limit, found by the same rules as the online `engine_loop_gap`, hold the median waiting request back for under 10% of the wait excess; up to half of it they are `contributing`. While the queue stays busy a stall postpones every later admission by its length, so a request is held by the stalls since its queue was last empty (anyone's request waiting), up to its own admission, and by one that ended at most its own length before then, since a request reaching the engine during a stall enters the queue only when the loop resumes, leaving a backlog that drains after it; never by more than its own wait. Stalls spread over a long saturation each hold the requests after them, so the median request is held by those before it, not by their sum. A host gap while only queued requests exist, none running, is no engine-loop stall (nothing was ready), so this competitor cannot see it |
+| `engine_stall` | yes | engine-loop stalls over their limit, found by the same rules as the online `engine_loop_gap`, hold the median waiting request back for under 10% of the wait excess; up to half of it they are `contributing`. While the queue stays busy a stall postpones every later admission by its length, so a request is held by the stalls since its queue was last empty (anyone's request waiting), up to its own admission, and by one that ended at most its own length before then, since a request reaching the engine during a stall enters the queue only when the loop resumes, leaving a backlog that drains after it; never by more than its own wait. Stalls spread over a long saturation each hold the requests after them, so the median request is held by those before it, not by their sum. When the stalls the engine-core host-stall class counts (host-attributed, after its cut) alone hold the median request for half the excess or more, they are named `host_stall@engine_core`, `upstream` and indispensable, and the queue is that finding's secondary when it is eligible (see Roles); every other stall time (a slow step, paused time, the engine's profiler calls, a client capture window's overlap) stays this competitor, judged the same way, so a profiler stop that held the waits still contests the queue. A host gap while only queued requests exist, none running, is no engine-loop stall (nothing was ready), so this competitor cannot see it |
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else, without pause records, the longest stretch without an admission while a subject's request waited (the longest pause that could hide there, since a paused scheduler admits nobody) is under 10% of the wait excess; a longer one is `untestable`, since a full engine admits nobody either. Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
