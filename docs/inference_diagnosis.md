@@ -327,7 +327,9 @@ minor second cause.
   criterion lowers confidence to `medium`, but never that one: a queue that
   explains a sixth of the TTFT rise is not the fault. A warning's cause is
   then `fault`, and with `role: primary` that is the fault claim
-  (`claim: fault`). An eligible finding at `info` is `claim: condition`, its
+  (`claim: fault`); for an instrumentation kind (`client_admission`,
+  `capture_pause`) it is `instrumentation`, since Stormlog's own client or
+  profiler caused it, and the claim is a condition. Either exits 3. An eligible finding at `info` is `claim: condition`, its
   cause undetermined until a driver says otherwise. Workload kinds are
   always `workload_change` at `info`; instrumentation kinds are
   `instrumentation`.
