@@ -203,7 +203,11 @@ def _finding(
             excess_ci_excludes_zero=excess.excludes_zero,
             ttft_rose=prefill is not None and prefill.low > 0,
         ),
-        contribution_lower=excess.low,
+        # In ms of latency, as every kind's: the most the loss can explain
+        # is the TTFT excess.
+        contribution_lower=(
+            prefill.low / 1e6 if prefill is not None and prefill.low > 0 else None
+        ),
         observations=[
             Observation(
                 "o1",

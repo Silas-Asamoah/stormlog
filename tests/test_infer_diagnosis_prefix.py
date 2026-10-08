@@ -57,6 +57,8 @@ def test_warm_requests_finding_nothing_cached_are_a_prefix_loss(
     # the loss explains no incident and is no warning.
     assert finding.contribution.unmet == ("ttft_rose",)
     assert (finding.severity, finding.claim) == ("info", "condition")
+    # Ranked in ms of latency like every kind, not in its 64 missing tokens.
+    assert finding.contribution_lower is None
 
 
 def test_concurrent_first_use_of_a_group_is_not_warm(tmp_path: Path) -> None:

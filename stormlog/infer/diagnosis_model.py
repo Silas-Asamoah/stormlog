@@ -162,7 +162,9 @@ class Finding:
     alternatives: list[Alternative] = field(default_factory=list)
     condition: Criteria = field(default_factory=Criteria)
     contribution: Criteria = field(default_factory=Criteria)
-    contribution_lower: float | None = None  # the excess's lower bound
+    # The latency excess it explains, its lower bound in ms: compared across
+    # kinds by rank, so every kind gives it in the same unit.
+    contribution_lower: float | None = None
     observations: list[Observation] = field(default_factory=list)
     location: dict[str, Any] = field(default_factory=dict)
     window: dict[str, Any] | None = None
