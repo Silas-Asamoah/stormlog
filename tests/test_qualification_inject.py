@@ -154,6 +154,10 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     assert (run / "run" / "victim.jsonl").exists()
     assert (run / "truth" / "reference" / "scrapes.jsonl").exists()
     assert (run / "probes" / "hook-firstseen.jsonl").exists()
+    # The record lag the hang check allowed was measured once the baseline
+    # ended (close-221-delta, N4), and is on record.
+    used = json.loads((run / "probes" / "record-lag.json").read_text())
+    assert used["measured_p99_ns"] is not None and used["lag_ns"] >= 1_000_000_000
     # The run record: its label, its windows and the victim's clock, which
     # every episode shares; the victim ran under the same label.
     record = load_run(run / "truth" / "run.json")
