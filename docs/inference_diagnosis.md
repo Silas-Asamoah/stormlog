@@ -419,8 +419,9 @@ vLLM also preempts every running request when the prefix cache is reset, and
 the import attributes those preemptions to the reset; so the class's gate,
 `allocation_cause_established`, holds only when its indispensable
 competitor, a reset, is ruled out: the hook records resets (`cache_reset` in
-`observes`), none happened over the subject, and the hook's loss coverage
-spans it (every `dropped` count, `<kind>_oversized` included, and `errors`
+`observes`), none happened over the subject (as a stage, or as a dated fact
+the import kept for a reset before any step was written), and the hook's
+loss coverage spans it (every `dropped` count, `<kind>_oversized` included, and `errors`
 unchanged, the writer not capped). Without that the class is
 `partial/preemption_cause_unknown` and the finding is an observation that
 preemption and recomputation happened.
