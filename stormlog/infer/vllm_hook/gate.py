@@ -9,6 +9,7 @@ reason, and vLLM then runs untouched.
 
 from __future__ import annotations
 
+import enum
 from dataclasses import dataclass, field
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -32,6 +33,20 @@ SUPPORTED_RUNNERS = frozenset(
     }
 )
 SUPPORTED_SPECULATION = frozenset({"ngram"})
+# vLLM's ProfilerConfig settings that decide what a profiler window costs the
+# server (how long a stop pauses it) and whether one stops by itself.
+PROFILER_FIELDS = (
+    "profiler",
+    "torch_profiler_dir",
+    "torch_profiler_with_stack",
+    "torch_profiler_dump_cuda_time_total",
+    "ignore_frontend",
+    "max_iterations",
+    "delay_iterations",
+    "warmup_iterations",
+    "active_iterations",
+    "wait_iterations",
+)
 
 
 @dataclass(frozen=True)
@@ -91,7 +106,62 @@ def config_summary(
         "request_id_randomization": _request_id_randomization(),
         "scheduler": _qualname(scheduler),
         "runner": _qualname(runner),
+        **_runtime_layout(vllm_config, scheduler),
     }
+
+
+def _runtime_layout(vllm_config: Any, scheduler: Any) -> dict[str, Any]:
+    """Capacity and memory settings; a scheduler's own resolved values win,
+    since the engine sets the KV layout only after profiling memory."""
+    cache = getattr(vllm_config, "cache_config", None)
+    model = getattr(vllm_config, "model_config", None)
+    groups = getattr(
+        getattr(scheduler, "kv_cache_config", None), "kv_cache_groups", None
+    )
+    block_size = getattr(scheduler, "block_size", None)
+    return {
+        "max_num_seqs": _primitive(
+            getattr(
+                getattr(vllm_config, "scheduler_config", None), "max_num_seqs", None
+            )
+        ),
+        "num_gpu_blocks": _primitive(getattr(cache, "num_gpu_blocks", None)),
+        "kv_cache_groups": len(groups) if isinstance(groups, (list, tuple)) else None,
+        "block_size": _primitive(
+            getattr(cache, "block_size", None) if block_size is None else block_size
+        ),
+        "cudagraph_mode": _primitive(
+            getattr(
+                getattr(vllm_config, "compilation_config", None), "cudagraph_mode", None
+            )
+        ),
+        "gpu_memory_utilization": _primitive(
+            getattr(cache, "gpu_memory_utilization", None)
+        ),
+        "enable_cumem_allocator": _primitive(
+            getattr(model, "enable_cumem_allocator", None)
+        ),
+        "enable_sleep_mode": _primitive(getattr(model, "enable_sleep_mode", None)),
+        "profiler": _profiler(getattr(vllm_config, "profiler_config", None)),
+    }
+
+
+def _profiler(profiler_config: Any) -> dict[str, Any] | None:
+    if profiler_config is None:
+        return None
+    return {
+        name: _primitive(getattr(profiler_config, name, None))
+        for name in PROFILER_FIELDS
+    }
+
+
+def _primitive(value: Any) -> Any:
+    """A JSON primitive: an enum by its name, any other object by its text."""
+    if isinstance(value, enum.Enum):
+        return value.name
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return str(value)
 
 
 def _request_id_randomization() -> bool | None:
@@ -171,6 +241,7 @@ def _qualname_of(cls: Any) -> str:
 
 __all__ = [
     "GateResult",
+    "PROFILER_FIELDS",
     "SUPPORTED_VERSIONS",
     "check",
     "config_summary",
