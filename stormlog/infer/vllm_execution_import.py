@@ -92,7 +92,7 @@ def import_execution_into_artifact(
     """
     run_id, session_id = artifact_run_identity(artifact)
     records = _load_records(artifact)
-    facts = run_facts_from_records(records, run_id, session_id)
+    facts = run_facts_from_records(records, run_id, session_id, run_over=server_stopped)
     read = _read_log(directory, execution_high_water(records), importer, server_stopped)
     _check_foreign_schemes(read, execution_foreign_schemes(records), raw_foreign_ids)
     capture = reduce_to_capture(read, facts, ReduceOptions(raw_foreign_ids))
@@ -289,9 +289,17 @@ def reduce_to_capture(
 
 
 def run_facts_from_records(
-    records: Iterable[InferenceRecord], run_id: str, session_id: str
+    records: Iterable[InferenceRecord],
+    run_id: str,
+    session_id: str,
+    *,
+    run_over: bool = False,
 ) -> RunFacts:
-    """What an artifact's records tell the reducer about the run."""
+    """What an artifact's records tell the reducer about the run.
+
+    ``run_over`` says the run can make no more steps (its server stopped), so
+    a phase a client that died left begun ends at its last record.
+    """
     client = _ClientFacts()
     held = _HeldFacts()
     for record in records:
@@ -304,7 +312,7 @@ def run_facts_from_records(
         session_id=session_id,
         client_clock_domain=held.client_clock_domain,
         requests=client.requests,
-        windows=client.all_windows(),
+        windows=client.all_windows(run_over),
         referenced_iterations=frozenset(held.referenced),
         existing_iterations=frozenset(held.iterations),
         existing_attempts=frozenset(held.attempts),
@@ -370,9 +378,15 @@ class _ClientFacts:
     # Phases begun and not yet measured, by (case, phase), at their start.
     begun: dict[tuple[str | None, str | None], int] = field(default_factory=dict)
     session_end_ns: int | None = None
+    # When the client last wrote anything.
+    last_record_ns: int | None = None
 
     def add(self, raw: dict[str, Any]) -> None:
         kind = raw.get("event_type")
+        at = _integer(raw.get("timestamp_ns"))
+        if at is not None:
+            last = self.last_record_ns
+            self.last_record_ns = at if last is None else max(at, last)
         if kind in ("infer.request", "infer.dispatch"):
             self._add_request(raw)
         elif kind == "infer.phase_start":
@@ -399,10 +413,15 @@ class _ClientFacts:
                 _text(raw.get("phase")),
             )
 
-    def all_windows(self) -> tuple[Window, ...]:
+    def all_windows(self, run_over: bool = False) -> tuple[Window, ...]:
         """The recorded windows, plus each begun phase up to the session's
-        end, or open-ended while the session is still running."""
-        end_ns = _OPEN_END_NS if self.session_end_ns is None else self.session_end_ns
+        end, or open-ended while the session is still running. A session
+        that never ended in a run that is over had a client that died: its
+        phases end at the last thing it wrote."""
+        end_ns = self.session_end_ns
+        if end_ns is None:
+            last = self.last_record_ns
+            end_ns = last if run_over and last is not None else _OPEN_END_NS
         begun = [
             Window("phase", start_ns, end_ns, case_id, phase)
             for (case_id, phase), start_ns in self.begun.items()
