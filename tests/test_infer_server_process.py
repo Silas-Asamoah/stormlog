@@ -211,13 +211,22 @@ def test_a_real_group_is_listed_and_empty_after_it_is_killed(
 
 
 @linux_only
-def test_the_real_proc_gives_this_process_its_start_and_environment() -> None:
+def test_the_real_proc_gives_a_process_its_start_and_environment() -> None:
     me = read_process(os.getpid())
     assert me is not None
     assert (me.pgid, me.sid) == (os.getpgid(0), os.getsid(0))
     assert me.cpus_allowed_list
-    environ = read_environ(os.getpid())
-    assert environ is not None and "PATH" in environ
+    # A child's environment, not this process's: an xdist worker retitles
+    # itself with setproctitle when it is installed (vLLM's environments
+    # install it), which overwrites its own environ (gate-213-b23).
+    # Popen returns once exec has begun, before the kernel has set the new
+    # environment: until then the read is empty, so wait for it.
+    child = subprocess.Popen(["/bin/sleep", "30"], env={"PATH": "/usr/bin:/bin"})
+    try:
+        assert _wait_for(lambda: read_environ(child.pid) == {"PATH": "/usr/bin:/bin"})
+    finally:
+        child.kill()
+        child.wait()
     assert boot_time_s() is not None
 
 
