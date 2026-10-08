@@ -46,7 +46,7 @@ The payload, `stormlog.inference_diagnosis` v1
 | --- | --- |
 | `diagnoser` | the version, a SHA-256 over the thresholds and options that decide the result, and the generation time |
 | `inputs` | the artifact's path, size, SHA-256 and line count, so a reader can tell whether it changed |
-| `outcome` | `findings`, `no_findings`, or `inconclusive` when an incident has no eligible explanation or automatic selection could test no window |
+| `outcome` | `findings`, `no_findings`, or `inconclusive` when an incident has no eligible explanation or automatic selection could test no window. A declared subject whose TTFT and end-to-end excess intervals both reach zero was no slower than its reference: it is no incident to explain, and the summary ends "no excess in the declared window" |
 | `join` | what was joined: client requests, dispatch and first-content records, engine executions, engines and their clocks |
 | `selection` | every analysis window with its tests, and the subjects |
 | `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
