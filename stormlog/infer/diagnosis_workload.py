@@ -17,7 +17,7 @@ from typing import Any
 from scipy import stats
 
 from .diagnosis_context import ASSESSED, UNSUPPORTED, Assessment, Context
-from .diagnosis_model import Finding, Observation, met
+from .diagnosis_model import NOT_DETERMINED, Finding, Observation, met
 from .diagnosis_selection import Subject, assignment_ns
 from .diagnosis_stats import median_difference
 from .diagnosis_thresholds import (
@@ -231,8 +231,7 @@ def _workload(
         title=title,
         message=observation.statement,
         condition=met(direct_evidence=True, sufficient_samples=True),
-        contribution=met(excess_ci_excludes_zero=True),
-        contribution_lower=observation.ci[0] if observation.ci else None,
+        contribution=NOT_DETERMINED,
         observations=[observation],
         location={"component": COMPONENT_WORKLOAD},
         window=context.window(subject),

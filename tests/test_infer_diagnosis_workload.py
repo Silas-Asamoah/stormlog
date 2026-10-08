@@ -53,6 +53,13 @@ def test_faster_arrivals_are_a_load_increase(tmp_path: Path) -> None:
     )
     observation = finding.observations[0]
     assert observation.ci is not None and observation.ci[0] > 1.25
+    # What share of the incident the demand explains is the driver's to say.
+    assert finding.contribution.as_dict() == {
+        "level": None,
+        "met": [],
+        "unmet": ["not_determined"],
+    }
+    assert finding.confidence_level == finding.condition.level
 
 
 def test_longer_prompts_are_longer_inputs_only(tmp_path: Path) -> None:
