@@ -20,6 +20,7 @@ there.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
@@ -34,6 +35,7 @@ from typing import IO, Any
 
 import psutil
 
+from .host_clock import host_boot_id
 from .server_process import (
     HELPER_ROLES,
     PROC,
@@ -54,6 +56,9 @@ POLL_SECONDS = 0.1
 # psutil's creation time), never against the wall clock.
 START_SLACK_SECONDS = 2.0
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
+# What ``identify`` records as a process's start: ticks since boot from
+# /proc, or psutil's creation time.
+_STARTS = ("start_ticks", "create_time")
 
 
 @dataclass
@@ -371,29 +376,44 @@ def verify_cleanup(
 
 
 def identify(pid: int, *, proc: Path = PROC) -> dict[str, Any]:
-    """A process by PID and start time, so a later check can tell it from
-    another process given the same PID."""
+    """A process by its host's boot, its PID and its start time, so a later
+    check can tell it from another process given the same PID, in this boot
+    or the next (Linux start ticks count from the boot)."""
     if _linux():
         info = read_process(pid, proc)
-        return {"pid": pid, "start_ticks": None if info is None else info.start_ticks}
-    try:
-        return {"pid": pid, "create_time": psutil.Process(pid).create_time()}
-    except psutil.Error:
-        return {"pid": pid, "create_time": None}
+        start = {"start_ticks": None if info is None else info.start_ticks}
+    else:
+        try:
+            start = {"create_time": psutil.Process(pid).create_time()}
+        except psutil.Error:
+            start = {"create_time": None}
+    return {"pid": pid, **start, "boot_id": current_boot()}
+
+
+@functools.cache
+def current_boot() -> str | None:
+    """This host's boot ID, read once: no process outlives its boot."""
+    return host_boot_id()
 
 
 def still_there(survivor: Mapping[str, Any], *, proc: Path = PROC) -> bool:
     """Whether a recorded survivor is still the same live process.
 
     One recorded without its start time cannot be told from a process that
-    reused its PID, so it does not count.
+    reused its PID, so it does not count; nor does one recorded in another
+    boot, whatever now runs with its PID and start time.
     """
     pid = survivor.get("pid")
     if not isinstance(pid, int) or not _alive(pid):
         return False
-    starts = {k: v for k, v in survivor.items() if k != "pid" and v is not None}
+    starts = {k: survivor[k] for k in _STARTS if survivor.get(k) is not None}
+    if not starts:
+        return False
     now = identify(pid, proc=proc)
-    return bool(starts) and all(now.get(k) == v for k, v in starts.items())
+    boot = survivor.get("boot_id")
+    if boot is not None and boot != now["boot_id"]:
+        return False
+    return all(now.get(k) == v for k, v in starts.items())
 
 
 def _survivors(
@@ -727,6 +747,7 @@ __all__ = [
     "Launched",
     "affinity_matches",
     "clean_up_after",
+    "current_boot",
     "identify",
     "journaled",
     "listens",
