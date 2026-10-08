@@ -210,7 +210,8 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
         return Assessment(
             HOST_STALL, subject.key, UNSUPPORTED, [NO_ENGINE_PROGRESS_EVIDENCE]
         )
-    if not context.segment_values(subject.requests, SEND):
+    placed = len(context.segment_values(subject.requests, SEND))
+    if not placed:
         return Assessment(
             HOST_STALL, subject.key, UNSUPPORTED, [CLOCK_ALIGNMENT_REQUIRED]
         )
@@ -233,7 +234,12 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
         subject=subject.as_dict(),
         title="Requests took longer to reach the engine while it kept stepping",
         message=f"Median send_to_ingress rose by {excess.estimate / 1e6:.1f} ms against the reference.",
-        gates={"engine_progress": progressed, "bounded_placement": True},
+        # Most requests' send_to_ingress placed within its bracket: the
+        # unplaced ones (a wall clock discontinuity, say) are left out.
+        gates={
+            "engine_progress": progressed,
+            "bounded_placement": 2 * placed >= len(subject.requests),
+        },
         alternatives=alternatives,
         condition=met(
             direct_evidence=True, sufficient_samples=True, robust_to_clock=True
@@ -260,7 +266,11 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
         detail={"form": "frontend", "attribution": "host"},
         first_detectable_ns=subject.first_detectable_ns,
         incident=subject.incident,
-        metrics={"send_to_ingress_excess_ms": round(excess.estimate / 1e6, 3)},
+        metrics={
+            "send_to_ingress_excess_ms": round(excess.estimate / 1e6, 3),
+            "send_to_ingress_placed": placed,
+            "subject_requests": len(subject.requests),
+        },
         experiment={
             "change": "rerun with the API server given more CPU, or with fewer API server workers sharing it",
             "prediction": f"median send_to_ingress falls by at least {excess.low / 1e6:.1f} ms",
