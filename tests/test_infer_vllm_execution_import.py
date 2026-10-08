@@ -45,11 +45,13 @@ from tests.vllm_execution_helpers import (
     done,
     engine_log,
     heartbeat,
+    hello,
     importer,
     member,
     producer,
     scheduled,
     terminal,
+    write_epoch,
 )
 
 PID, START = 2600, 1_790_000_000_000_000_000
@@ -182,6 +184,75 @@ def test_import_appends_the_reduced_records_and_the_high_water(tmp_path: Path) -
     envelope = json.loads((tmp_path / "stormlog_run.json").read_text(encoding="utf-8"))
     assert [row["kind"] for row in envelope["attachments"]] == ["inference_jsonl"]
     assert resolve_inference_events(records).unresolved == ()
+
+
+def _newer_hook(record: dict[str, Any]) -> dict[str, Any]:
+    """A record as a later hook writes it: bracketed stamps, and the pause
+    state on each step."""
+    newer = dict(record)
+    for prefix in ("", "start_", "end_"):
+        if f"{prefix}wall_ns" in newer:
+            newer[f"{prefix}wall_after_ns"] = newer[f"{prefix}wall_ns"] + 900
+    if newer["kind"] == "scheduled":
+        newer["pause_state"] = "UNPAUSED"
+    return newer
+
+
+def test_the_import_ignores_what_later_hooks_add(tmp_path: Path) -> None:
+    stamp = {"wall_ns": T0 + WALL_OFFSET, "mono_ns": T0, "wall_after_ns": T0 + 1}
+    later = [
+        hello(
+            "engine",
+            PID,
+            START,
+            config={"max_num_seqs": 256, "profiler": None},
+            observes=["cache_reset", "enqueued", "pause"],
+            process_start_ns=START - SECOND,
+            process_start_ticks=81234567,
+            parent_pid=1,
+            parent_process_start_ticks=1,
+            parent_process_start_ns=1,
+        ),
+        # After the aliases, whose seq the import keeps as admission_seq.
+        *(_newer_hook(record) for record in _records()[:2]),
+        {
+            "kind": "enqueued",
+            "internal": OWN0,
+            "structured_output": False,
+            "resumable": False,
+            **stamp,
+        },
+        {"kind": "pause", "from": "UNPAUSED", "to": "PAUSED_NEW", **stamp},
+        *(_newer_hook(record) for record in _records()[2:4]),
+        {
+            "kind": "cache_reset",
+            "reset_running_requests": True,
+            "reset_connector": False,
+            "running": [OWN0],
+            "succeeded": True,
+            "raised": False,
+            **{f"start_{k}": v for k, v in stamp.items()},
+            **{f"end_{k}": v for k, v in stamp.items()},
+        },
+        *(_newer_hook(record) for record in _records()[4:]),
+    ]
+    imported = []
+    for name, log in (("plain", None), ("later", later)):
+        artifact = _artifact(tmp_path / f"{name}.jsonl")
+        if log is None:
+            engine_log(tmp_path / name, _records())
+        else:
+            write_epoch(tmp_path / name, "engine", PID, START, log)
+        import_execution_into_artifact(artifact, tmp_path / name, importer=HERE)
+        imported.append(
+            [
+                record.to_record()
+                for record in load_inference_artifact(artifact)
+                if not isinstance(record, CapabilityEvent)
+            ]
+        )
+
+    assert imported[0] == imported[1]
 
 
 def test_a_second_import_adds_only_what_became_final(tmp_path: Path) -> None:
