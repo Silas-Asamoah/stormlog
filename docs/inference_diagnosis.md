@@ -283,7 +283,7 @@ interval); with no excess it reports `not_observed`.
 
 | Gate | Holds when |
 | --- | --- |
-| `capacity_witness` | at least half of the busy steps spanning the waits ran at the hello's `max_num_seqs`, or scheduled `max_num_batched_tokens` |
+| `capacity_witness` | at least half of the busy steps scheduled while a subject's request waited (from its entry into the queue to the call that ran it, not counting that call) ran at the hello's `max_num_seqs`, or scheduled `max_num_batched_tokens` |
 | `usable_timing` | the wait is `scheduler_wait`; on a log without `enqueued` records it is `engine_ingress_to_schedule`, labelled, and the gate fails |
 
 | Competitor | Indispensable | Ruled out when |
@@ -292,7 +292,7 @@ interval); with no excess it reports `not_observed`.
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms) |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under a quarter of the wait excess (untestable on a log without `enqueued` records) |
-| `kv_preemption_pressure` | no | the steps spanning the waits preempted nobody; otherwise it is `upstream` |
+| `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream` |
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under a quarter of the wait excess |
 
@@ -457,7 +457,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.min_busy_steps` | 20 | busy steps at least as large as the stall's that window needs |
 | `host_stall.matched_bin_min_steps` | 20 | steps of the stall's own work bucket (scheduled tokens within a factor of two) needed to compare it with steps of its size |
 | `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
-| `queue_saturation.witness_step_share` | 0.5 | share of the steps spanning the waits at capacity for a witness |
+| `queue_saturation.witness_step_share` | 0.5 | share of the steps scheduled while requests waited at capacity for a witness |
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
 | `queue_saturation.stall_wait_share` | 0.5 | share of the waiting time engine stalls must cover to explain it instead |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |

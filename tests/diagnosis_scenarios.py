@@ -107,6 +107,9 @@ class Engine:
     # (mono_ns, duration_ns): the engine loop stops for duration after the
     # first step that completes at or after mono_ns.
     stall: tuple[int, int] | None = None
+    # How long an idle engine takes from a request's entry to its schedule()
+    # call; vLLM 0.30.0's loop took 20 us and more on an A30.
+    wake_ns: int = 0
 
     def wall(self, mono_ns: int) -> int:
         """The shared wall clock at an engine monotonic time."""
@@ -167,7 +170,7 @@ class Engine:
         iteration = 0
         while waiting or running:
             if not running and waiting[0].enqueued_ns > now:
-                now = waiting[0].enqueued_ns
+                now = waiting[0].enqueued_ns + self.wake_ns
                 continue
             preempted = self._make_room(running, waiting, resumed)
             # vLLM schedules waiting requests only in a step that preempted none.

@@ -3,7 +3,7 @@ full.
 
 The class compares the subject's ``scheduler_wait`` with its reference's
 (the difference of medians, with a bootstrap interval), and asks whether the
-engine was at capacity over the steps spanning the waits: running at
+engine was at capacity over the steps scheduled while requests waited: running at
 ``max_num_seqs``, or scheduling ``max_num_batched_tokens``. Four competitors
 must be ruled out before the waits may be called a fault: a stalled engine,
 a paused scheduler, requests blocked by their own constraints, and time
@@ -134,7 +134,9 @@ def _finding(
     steps = context.steps(producer)
     waiting = list(waits.executions.values())
     span = _wait_span(context, waiting)
-    spanning = steps.between(*span) if span else []
+    # Steps run while a subject's request waited; the span from the first
+    # wait to the last can hold stretches in which nobody did.
+    spanning = steps.within(_wait_intervals(context, waiting))
     witness = _witness(context, producer, spanning)
     if not witness[0]:
         witness = _exporter_witness(context, subject, witness)
@@ -198,7 +200,7 @@ def _finding(
 def _witness(
     context: Context, producer: str, spanning: list[Step]
 ) -> tuple[bool, float | None]:
-    """Whether most steps spanning the waits ran at capacity: at
+    """Whether most steps scheduled while requests waited ran at capacity: at
     max_num_seqs running, or at the max_num_batched_tokens budget."""
     seqs, tokens = _capacity(context, producer)
     busy = [step for step in spanning if step.members]
@@ -391,12 +393,12 @@ def _preemption(spanning: list[Step]) -> Alternative:
         return Alternative(
             "kv_preemption_pressure",
             UPSTREAM,
-            f"{preempted} preemptions in the steps spanning the waits",
+            f"{preempted} preemptions in the steps scheduled while requests waited",
         )
     return Alternative(
         "kv_preemption_pressure",
         RULED_OUT,
-        "no preemption in the steps spanning the waits",
+        "no preemption in the steps scheduled while requests waited",
     )
 
 
@@ -560,7 +562,7 @@ def _observations(
         out.append(
             Observation(
                 "o3",
-                f"{witness[1]:.0%} of the {busy} steps spanning the waits ran at capacity.",
+                f"{witness[1]:.0%} of the {busy} steps scheduled while requests waited ran at capacity.",
                 "steps_at_capacity_share",
                 witness[1],
                 n=busy,
@@ -575,7 +577,7 @@ def _message(
     share = (
         ""
         if witness[1] is None
-        else f"; {witness[1]:.0%} of the steps spanning the waits ran at capacity"
+        else f"; {witness[1]:.0%} of the steps scheduled while requests waited ran at capacity"
     )
     return f"Median {waits.segment} rose by {excess.estimate / 1e6:.1f} ms against the reference{share}."
 
