@@ -224,7 +224,7 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
     progressed = _engine_progressed(steps, stalls)
     ttft = context.total_excess(subject, "ttft")
     alternatives = [
-        _paused(context, producer, steps, stalls),
+        _paused(context, subject, producer, steps, stalls),
         _capture(context, stalls),
     ]
     finding = Finding(
@@ -274,15 +274,37 @@ def assess_api_server(context: Context, subject: Subject) -> Assessment:
 
 def _stall_intervals(context: Context, subject: Subject) -> list[tuple[int, int]]:
     """Each subject request's send to admission, on the client's clock."""
-    intervals = []
+    return [(sent, admitted) for sent, admitted, _ in _stalls(context, subject)]
+
+
+def _lost_over(context: Context, subject: Subject, producer: str) -> int:
+    """How many stalls the hook's loss coverage does not span."""
+    return sum(
+        not context.lossless(producer, span) for span in _engine_spans(context, subject)
+    )
+
+
+def _engine_spans(context: Context, subject: Subject) -> list[tuple[int, int]]:
+    """The same stalls on the engine's monotonic clock: each ends at the
+    execution's admission there, and began as long before as it lasted."""
+    return [
+        (mono - (admitted - sent), mono)
+        for sent, admitted, mono in _stalls(context, subject)
+        if mono is not None
+    ]
+
+
+def _stalls(context: Context, subject: Subject) -> list[tuple[int, int, int | None]]:
+    """(send, admission on the wall clock, admission on the engine's
+    monotonic clock) of each subject request that reached the engine."""
+    found = []
     for request_id in subject.requests:
-        request = context.view.client[request_id]
+        sent = context.view.client[request_id].sent_at_ns
         for execution in context.view.executions_of(request_id):
             admitted = execution.metadata.get("admitted_wall_ns")
-            sent = request.sent_at_ns
             if isinstance(admitted, int) and sent is not None and admitted > sent:
-                intervals.append((sent, admitted))
-    return intervals
+                found.append((sent, admitted, execution.event.start_ns))
+    return found
 
 
 def _engine_progressed(steps: Steps, stalls: list[tuple[int, int]]) -> bool:
@@ -298,7 +320,11 @@ def _engine_progressed(steps: Steps, stalls: list[tuple[int, int]]) -> bool:
 
 
 def _paused(
-    context: Context, producer: str, steps: Steps, stalls: list[tuple[int, int]]
+    context: Context,
+    subject: Subject,
+    producer: str,
+    steps: Steps,
+    stalls: list[tuple[int, int]],
 ) -> Alternative:
     """A scheduler paused for new requests holds them while running ones
     step, which looks the same from the client: a pause overlapping the
@@ -310,19 +336,15 @@ def _paused(
     paused = steps.paused_intervals(max(e for _, e in stalls), wall=True)
     if any(p[0] < e and s < p[1] for p in paused for s, e in stalls):
         return Alternative(kind, NOT_RULED_OUT, "a pause overlaps the stalls", True)
-    if _records_pauses(context, producer):
-        return Alternative(
-            kind, RULED_OUT, "no pause transition, and the hook records them", True
-        )
-    return Alternative(kind, UNTESTABLE, "the hook does not record pauses", True)
-
-
-def _records_pauses(context: Context, producer: str) -> bool:
-    """Whether the engine's hook records pauses and reported no loss."""
-    epoch = context.epoch_of(producer)
-    if epoch is None or epoch.observes is None or "pause" not in epoch.observes:
-        return False
-    return bool((epoch.coverage or {}).get("spans"))
+    if not context.observes(producer, "pause"):
+        return Alternative(kind, UNTESTABLE, "the hook does not record pauses", True)
+    lost = _lost_over(context, subject, producer)
+    if lost:
+        reason = f"records may have been lost over {lost} of the stalls"
+        return Alternative(kind, UNTESTABLE, reason, True)
+    return Alternative(
+        kind, RULED_OUT, "no pause transition, and nothing lost over the stalls", True
+    )
 
 
 def _capture(context: Context, stalls: list[tuple[int, int]]) -> Alternative:
