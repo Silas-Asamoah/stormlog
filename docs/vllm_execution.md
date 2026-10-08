@@ -523,7 +523,10 @@ and boot) and the step lies inside a run phase or trace window; otherwise
 it is counted in the summary, not written. A phase that has an
 `infer.phase_start` record but no `infer.phase_window` yet runs from its
 start to the session's terminal `infer.session` record, or with no end while
-the session is still running. A step that scheduled no request
+the session is still running. A client that was killed writes no terminal
+record, and its artifact cannot be told from a run still under way, so its
+phase stays open; with `--server-stopped` no step can follow, and the phase
+ends at the last record the client wrote. A step that scheduled no request
 (an idle scheduler call) is counted as empty, not written.
 
 **Stages.** Preemptions, cache resets and pause changes are written as
