@@ -8,6 +8,7 @@ import json
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -577,6 +578,8 @@ class _SlowThenRejectingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        on_sent: Callable[[int], None] | None = None,
+        on_first_content: Callable[[int], None] | None = None,
     ) -> ChatCompletionResult:
         self.calls += 1
         if self.calls > 1:
