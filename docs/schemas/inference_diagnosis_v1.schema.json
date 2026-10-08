@@ -214,8 +214,9 @@
       "required": [
         "id", "kind", "status", "partial_reasons", "role", "secondary_to", "rank",
         "severity", "cause", "claim", "driver", "subject", "location", "window",
-        "first_detectable_ns", "segments", "observations", "alternatives",
-        "eligibility", "confidence", "evidence", "evidence_shown", "evidence_total",
+        "first_detectable_ns", "detection_evidence", "segments", "observations",
+        "alternatives", "eligibility", "confidence", "evidence", "evidence_shown",
+        "evidence_total",
         "support", "detail", "experiment", "thresholds"
       ],
       "properties": {
@@ -240,7 +241,10 @@
                 "client", "api_server", "scheduler", "kv_cache", "prefix_cache",
                 "engine_core", "worker", "interconnect", "profiler", "workload"
               ]
-            }
+            },
+            "engine_producer": { "type": "string" },
+            "rank": { "type": "integer", "minimum": 0 },
+            "pid": { "type": "integer", "minimum": 1 }
           }
         },
         "window": {
@@ -261,6 +265,34 @@
           ]
         },
         "first_detectable_ns": { "type": ["integer", "null"] },
+        "detection_evidence": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["basis", "windows", "client_records_through_ns"],
+              "properties": {
+                "basis": { "type": "string" },
+                "windows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["start_ns", "end_ns", "evaluated_at_ns", "flagged_on", "tests"],
+                    "properties": {
+                      "start_ns": { "type": "integer" },
+                      "end_ns": { "type": "integer" },
+                      "evaluated_at_ns": { "type": "integer" },
+                      "flagged_on": { "type": "array", "items": { "enum": ["ttft", "e2e"] } },
+                      "tests": { "type": "object" }
+                    }
+                  }
+                },
+                "client_records_through_ns": { "type": "integer" }
+              }
+            }
+          ]
+        },
         "segments": { "type": ["object", "null"] },
         "observations": {
           "type": "array",

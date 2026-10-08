@@ -133,6 +133,21 @@ def test_a_calm_run_counts_the_windows_it_could_not_test(tmp_path: Path) -> None
     assert report["verdict"]["summary"].endswith(f"{untested} windows untested")
 
 
+def test_a_finding_says_what_made_its_incident_detectable(burst: Path) -> None:
+    report = diagnose_artifact(burst, options=_options())
+
+    detail = report["payload"]["findings_detail"][report["findings"][0]["id"]]
+    evidence = detail["detection_evidence"]
+    detected = detail["first_detectable_ns"]
+    assert evidence["basis"] == "selection_sustained/1"
+    assert evidence["client_records_through_ns"] == detected
+    first, second = evidence["windows"]
+    assert second["evaluated_at_ns"] == detected
+    assert first["flagged_on"] and second["flagged_on"]
+    test = first["tests"][first["flagged_on"][0]]
+    assert test["above"] >= 3 and test["p"] < 0.01
+
+
 def test_a_declared_window_is_the_subject(burst: Path) -> None:
     start = 90 * SECOND + WALL_OFFSET
 
@@ -143,6 +158,9 @@ def test_a_declared_window_is_the_subject(burst: Path) -> None:
     (subject,) = report["payload"]["selection"]["subjects"]
     assert subject["declared_by"] == "caller" and subject["requests"] == 300
     assert report["payload"]["selection"]["automatic"] is False
+    assert subject["detection_unavailable"] == "declared"
+    details = report["payload"]["findings_detail"].values()
+    assert all(d["detection_evidence"] is None for d in details)
 
 
 def test_a_declared_window_over_healthy_traffic_has_no_findings(

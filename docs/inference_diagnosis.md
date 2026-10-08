@@ -50,7 +50,7 @@ The payload, `stormlog.inference_diagnosis` v1
 | `join` | what was joined: client requests, dispatch and first-content records, engine executions, engines and their clocks |
 | `selection` | every analysis window with its tests, and the subjects |
 | `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
-| `findings_detail` | per finding ID: its claim, cause, eligibility, confidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
+| `findings_detail` | per finding ID: its claim, cause, role, eligibility, confidence, location, window, detection time and evidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
 | `thresholds` | the table version, the overridden keys and every value used |
 
 The envelope's findings carry the verdict, flat metrics and up to 8
@@ -240,7 +240,21 @@ still running then is censored at its elapsed time, and counts as above only
 once that passes the threshold. A request is known from its send only when
 the client wrote `infer.dispatch` records, and its TTFT before its end only
 with `infer.first_content` records; without dispatch records, an incident
-has no `first_detectable_ns`, and says `legacy_no_dispatch_records`.
+has no `first_detectable_ns`, and says `legacy_no_dispatch_records`; a
+declared subject has none either, and says `declared`. A finding's
+`detection_evidence` says what made its incident selectable then (basis
+`selection_sustained/1`): the two windows the sustain rule needed, each
+with its evaluation time, the metrics it was flagged on, and per metric its
+requests above the reference p90 out of those known, the reference's, and
+the p-value, read from the client records stamped by
+`client_records_through_ns`, which is `first_detectable_ns`. It is null
+when there is no detection time. A class's own evidence (hook records,
+dated by their `source_seq_max`) can come later; neither field dates it.
+
+**Location.** A finding's `location` names its `component`; an engine-side
+finding adds `engine_producer`, and a finding located in one worker adds its
+TP or PP `rank` and its `pid`. No kind this version assesses is located in
+one worker, so none has a rank yet. An absent field is unspecified.
 
 **Server-only artifacts.** An artifact with no client requests, as an
 incident watcher captures one, can still be diagnosed over a declared
