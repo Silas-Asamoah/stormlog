@@ -27,11 +27,23 @@ class Step:
     iteration: str
     start_ns: int
     end_ns: int | None  # completion; None when it never completed
+    completed_wall_ns: int | None
     members: int
     total_tokens: int
     admitted: int  # requests first scheduled in it
     preempted: int
     line: Line
+
+
+@dataclass(frozen=True)
+class Pause:
+    """A change of the scheduler's pause state."""
+
+    mono_ns: int
+    wall_ns: int | None
+    before: str | None
+    after: str | None
+    line: Line | None  # None for a dated fact from an import summary
 
 
 @dataclass
@@ -40,9 +52,7 @@ class Steps:
 
     producer: str
     steps: list[Step] = field(default_factory=list)
-    pauses: list[tuple[int, str | None, str | None, Line | None]] = field(
-        default_factory=list
-    )  # (mono, from, to, line)
+    pauses: list[Pause] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.steps.sort(key=lambda step: step.start_ns)
@@ -65,16 +75,22 @@ class Steps:
         gaps = [b - a for a, b in zip(done, done[1:]) if b > a]
         return float(median(gaps)) if gaps else None
 
-    def paused_intervals(self, end_of_time: int) -> list[tuple[int, int, str]]:
-        """Spans spent in a pause state, from the pause transitions."""
+    def paused_intervals(
+        self, end_of_time: int, *, wall: bool = False
+    ) -> list[tuple[int, int, str]]:
+        """Spans spent in a pause state, from the pause transitions, on the
+        engine's monotonic clock or, with ``wall``, its wall clock."""
         spans: list[tuple[int, int, str]] = []
         current: tuple[int, str] | None = None
-        for at, _before, after, _line in sorted(self.pauses, key=lambda p: p[0]):
+        for pause in sorted(self.pauses, key=lambda p: p.mono_ns):
+            at = pause.wall_ns if wall else pause.mono_ns
+            if at is None:
+                continue
             if current is not None:
                 spans.append((current[0], at, current[1]))
                 current = None
-            if after in PAUSED_STATES:
-                current = (at, after)
+            if pause.after in PAUSED_STATES:
+                current = (at, pause.after)
         if current is not None:
             spans.append((current[0], end_of_time, current[1]))
         return spans
@@ -158,6 +174,7 @@ def _step(line: Line, iteration: IterationEvent, admitted: int) -> Step:
         iteration=iteration.iteration_ref.id,
         start_ns=iteration.start_ns or 0,
         end_ns=iteration.end_ns,
+        completed_wall_ns=_optional(metadata.get("completed_wall_ns")),
         members=_count(metadata.get("members")),
         total_tokens=_count(metadata.get("total_tokens")),
         admitted=admitted,
@@ -178,36 +195,35 @@ def _first_sightings(view: RunView, producer: str) -> dict[str, int]:
     return counts
 
 
-def _pauses(
-    view: RunView, producer: str
-) -> list[tuple[int, str | None, str | None, Line | None]]:
+def _pauses(view: RunView, producer: str) -> list[Pause]:
     """Pause transitions: the import's stages, and the dated facts it kept
     for transitions before any step was written."""
-    found: dict[tuple[str, int], tuple[int, str | None, str | None, Line | None]] = {}
+    found: dict[tuple[str, int], Pause] = {}
     for line, stage in view.stages:
         if stage.name != "engine.pause_transition" or stage.start_ns is None:
             continue
         if stage.stage_ref.producer_id != producer:
             continue
-        key = (str(stage.metadata.get("epoch")), _count(stage.metadata.get("seq")))
-        found[key] = (
+        data = stage.metadata
+        key = (str(data.get("epoch")), _count(data.get("seq")))
+        found[key] = Pause(
             stage.start_ns,
-            _text(stage.metadata.get("from")),
-            _text(stage.metadata.get("to")),
+            _optional(data.get("wall_ns")),
+            _text(data.get("from")),
+            _text(data.get("to")),
             line,
         )
     for epoch in view.engines.values():
         if epoch.producer != producer:
             continue
         for fact in epoch.unanchored:
-            if fact.get("name") == "engine.pause_transition" and isinstance(
-                fact.get("start_mono_ns"), int
-            ):
-                key = (epoch.epoch, _count(fact.get("seq")))
+            mono = fact.get("start_mono_ns")
+            if fact.get("name") == "engine.pause_transition" and isinstance(mono, int):
                 found.setdefault(
-                    key,
-                    (
-                        fact["start_mono_ns"],
+                    (epoch.epoch, _count(fact.get("seq"))),
+                    Pause(
+                        mono,
+                        _optional(fact.get("wall_ns")),
                         _text(fact.get("from")),
                         _text(fact.get("to")),
                         None,
@@ -228,4 +244,4 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-__all__ = ["PAUSED_STATES", "Step", "Steps", "loop_steps", "steps_of"]
+__all__ = ["PAUSED_STATES", "Pause", "Step", "Steps", "loop_steps", "steps_of"]

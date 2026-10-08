@@ -56,6 +56,7 @@ class SimRequest:
     delivery_ns: int = 500_000  # a step's completion to the client
     structured_output: bool = False
     held_for_slot: bool = False
+    closed_loop: bool = False  # no intended arrival time
     shared_prefix_tokens: int | None = None
     prefix_group: int | None = None
     cached: int = 0  # prefix-cache hit at its first step
@@ -354,9 +355,11 @@ def client_records(
         "case_id": request.case_id,
         "phase": request.phase,
     }
-    intended = wall(
+    intended: int | None = wall(
         request.intended_ns if request.intended_ns is not None else request.sent_ns
     )
+    if request.closed_loop:
+        intended = None
     records = [
         {
             **common,
@@ -394,7 +397,7 @@ def client_records(
             "target_output_tokens": request.output,
             "arrival_mode": "poisson",
             "intended_at_ns": intended,
-            "dispatch_lag_ms": (sent - intended) / MS,
+            "dispatch_lag_ms": None if intended is None else (sent - intended) / MS,
             "held_for_slot": request.held_for_slot,
             "shared_prefix_tokens": request.shared_prefix_tokens,
             "prefix_group": request.prefix_group,
