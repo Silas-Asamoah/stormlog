@@ -329,10 +329,23 @@ def _unexplained(context: Context, ranked: list[tuple[str, Finding]]) -> list[Su
     ]
 
 
+def _untested(context: Context) -> int:
+    """Windows automatic selection abstained on: too few requests of their
+    own, or too few in their reference. Declared subjects test no window."""
+    selection = context.selection
+    if not selection.tested:
+        return 0
+    return sum(1 for window in selection.windows if window.status is not None)
+
+
 def _outcome(context: Context, ranked: list[tuple[str, Finding]]) -> str:
     """``inconclusive`` when an incident subject has no eligible
-    explanation; ``findings`` when there are any; else ``no_findings``."""
-    if _unexplained(context, ranked):
+    explanation, or when automatic selection could test no window, so it
+    ruled no incident out either; ``findings`` when there are any; else
+    ``no_findings``."""
+    selection = context.selection
+    tested_none = selection.tested and _untested(context) == len(selection.windows)
+    if _unexplained(context, ranked) or tested_none:
         return "inconclusive"
     return "findings" if ranked else "no_findings"
 
@@ -352,6 +365,7 @@ def _summary(
             sum(1 for e in coverage.values() if e["status"] == UNSUPPORTED),
             "kind unsupported",
         ),
+        (_untested(context), "window untested"),
     )
     return f"{outcome}: " + "; ".join(_plural(n, noun) for n, noun in counts)
 
@@ -361,7 +375,7 @@ def _plural(count: int, noun: str) -> str:
     if count == 1:
         return f"1 {noun}"
     head, _, tail = noun.partition(" ")
-    if head in ("incident", "kind"):
+    if head in ("incident", "kind", "window"):
         return f"{count} {head}s {tail}"
     return f"{count} {noun}s"
 

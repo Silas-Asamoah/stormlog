@@ -106,6 +106,33 @@ def test_a_calm_run_has_no_findings(tmp_path: Path) -> None:
     assert report["findings"] == []
 
 
+def test_a_run_too_short_to_test_is_inconclusive_not_clean(tmp_path: Path) -> None:
+    # 40 requests never reach the 114 a reference needs: selection abstains
+    # on every window, so it ruled nothing out.
+    short = build_run(tmp_path, poisson_free(40, 10 * SECOND, 500 * MS), Engine())
+
+    report = diagnose_artifact(short, options=_options())
+
+    _validate(report)
+    windows = report["payload"]["selection"]["windows"]
+    assert windows and all(w["status"] is not None for w in windows)
+    assert report["payload"]["outcome"] == "inconclusive"
+    assert report["verdict"]["exit_code"] == 0  # an abstention is not a warning
+    assert f"{len(windows)} windows untested" in report["verdict"]["summary"]
+
+
+def test_a_calm_run_counts_the_windows_it_could_not_test(tmp_path: Path) -> None:
+    calm = build_run(tmp_path, poisson_free(160, 10 * SECOND, 500 * MS), Engine())
+
+    report = diagnose_artifact(calm, options=_options())
+
+    windows = report["payload"]["selection"]["windows"]
+    untested = sum(1 for w in windows if w["status"] is not None)
+    assert 0 < untested < len(windows)
+    assert report["payload"]["outcome"] == "no_findings"
+    assert report["verdict"]["summary"].endswith(f"{untested} windows untested")
+
+
 def test_a_declared_window_is_the_subject(burst: Path) -> None:
     start = 90 * SECOND + WALL_OFFSET
 
