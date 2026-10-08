@@ -24,7 +24,7 @@ from typing import Any, cast
 import pytest
 
 import stormlog.infer.vllm_hook as hook
-from stormlog.infer.vllm_hook import gate
+from stormlog.infer.vllm_hook import gate, process
 from stormlog.infer.vllm_hook import writer as writer_module
 from stormlog.infer.vllm_hook.engine import ITERATION_ATTRIBUTE, EngineRecorder
 from stormlog.infer.vllm_hook.worker import RunnerRecorder
@@ -535,6 +535,131 @@ def test_hello_says_whether_request_ids_are_randomized(
 
     hello = _of(_records(vllm["root"], "engine"), "hello")[0]
     assert hello["config"]["request_id_randomization"] is (not disabled)
+
+
+class CUDAGraphMode(enum.Enum):
+    FULL_AND_PIECEWISE = (2, 1)
+
+
+PROFILER = {
+    "profiler": "torch",
+    "torch_profiler_dir": "/traces",
+    "torch_profiler_with_stack": False,
+    "torch_profiler_dump_cuda_time_total": False,
+    "ignore_frontend": True,
+    "max_iterations": 40,
+    "delay_iterations": 0,
+    "warmup_iterations": 0,
+    "active_iterations": 5,
+    "wait_iterations": 0,
+}
+
+
+def _sized_config() -> Config:
+    config = vllm_config()
+    config.scheduler_config.max_num_seqs = 256
+    config.cache_config = Config(
+        num_gpu_blocks=9000, block_size=32, gpu_memory_utilization=0.9
+    )
+    config.compilation_config = Config(cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE)
+    config.model_config.enable_cumem_allocator = False
+    config.model_config.enable_sleep_mode = False
+    config.profiler_config = Config(**PROFILER)
+    return config
+
+
+def test_hello_records_the_layout_the_profiler_and_the_process(
+    vllm: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(process, "start_ticks", lambda pid: pid * 10)
+    monkeypatch.setattr(process, "start_ns", lambda pid: pid * 1_000)
+    scheduler_class = vllm["Scheduler"]
+
+    class SizedScheduler(scheduler_class):  # type: ignore[misc, valid-type]
+        def __init__(self, vllm_config: Any) -> None:
+            # vLLM resolves the scheduler's block size and KV groups itself.
+            self.kv_cache_config = Config(kv_cache_groups=[object(), object()])
+            self.block_size = 16
+            super().__init__(vllm_config)
+
+    SizedScheduler.__module__ = scheduler_class.__module__
+    SizedScheduler(_sized_config())
+    worker = vllm["Worker"](_sized_config())
+    worker.init_device()
+
+    engine = _of(_records(vllm["root"], "engine"), "hello")[0]
+    assert {
+        key: engine["config"][key]
+        for key in (
+            "max_num_seqs",
+            "num_gpu_blocks",
+            "kv_cache_groups",
+            "block_size",
+            "cudagraph_mode",
+            "gpu_memory_utilization",
+            "enable_cumem_allocator",
+            "enable_sleep_mode",
+            "profiler",
+        )
+    } == {
+        "max_num_seqs": 256,
+        "num_gpu_blocks": 9000,
+        "kv_cache_groups": 2,
+        "block_size": 16,
+        "cudagraph_mode": "FULL_AND_PIECEWISE",
+        "gpu_memory_utilization": 0.9,
+        "enable_cumem_allocator": False,
+        "enable_sleep_mode": False,
+        "profiler": PROFILER,
+    }
+    pid, parent = os.getpid(), os.getppid()
+    for hello in (engine, _of(_records(vllm["root"], "worker"), "hello")[0]):
+        assert {
+            key: hello[key]
+            for key in (
+                "process_start_ns",
+                "process_start_ticks",
+                "parent_pid",
+                "parent_process_start_ticks",
+                "parent_process_start_ns",
+            )
+        } == {
+            "process_start_ns": pid * 1_000,
+            "process_start_ticks": pid * 10,
+            "parent_pid": parent,
+            "parent_process_start_ticks": parent * 10,
+            "parent_process_start_ns": parent * 1_000,
+        }
+        assert hello["observes"] == []
+    worker_config = _of(_records(vllm["root"], "worker"), "hello")[0]["config"]
+    # A worker has no scheduler: its layout is the configured one.
+    assert (worker_config["kv_cache_groups"], worker_config["block_size"]) == (None, 32)
+
+
+def test_a_hello_without_these_settings_records_them_as_null(
+    vllm: dict[str, Any]
+) -> None:
+    vllm["Scheduler"](vllm_config())
+
+    config = _of(_records(vllm["root"], "engine"), "hello")[0]["config"]
+    assert config["profiler"] is None
+    assert config["num_gpu_blocks"] is None and config["cudagraph_mode"] is None
+
+
+def test_process_start_is_read_like_psutil(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A command name may hold spaces and parentheses.
+    fields = " ".join(str(n) for n in range(5, 22))  # fields 5 to 21
+    stat = f"4242 (vllm (x) y) S 1 {fields} 777 9"
+    assert process.ticks_from_stat(stat) == 777
+    assert process.ticks_from_stat("4242 (short) S 1") is None
+
+    monkeypatch.setitem(sys.modules, "psutil", None)  # psutil missing
+    monkeypatch.setattr(process, "start_ticks", lambda pid: 250)
+    monkeypatch.setattr(process, "_boot_seconds", lambda: 1_700_000_000)
+    monkeypatch.setattr(process.os, "sysconf", lambda name: 100)
+    assert process.start_ns(4242) == 1_700_000_002_500_000_000
+    monkeypatch.setattr(process, "_boot_seconds", lambda: None)
+    assert process.start_ns(4242) is None
 
 
 def test_vllm_errors_pass_through_and_telemetry_errors_do_not(

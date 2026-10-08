@@ -132,14 +132,51 @@ Times are pairs: `*_wall_ns` from `time.time_ns()` and `*_mono_ns` from
 ```json
 {"kind": "hello", "role": "engine", "host": "node-7", "boot_id": "…",
  "pid": 2600, "start_ns": 1790000000000000000,
+ "process_start_ns": 1789999990120000000, "process_start_ticks": 81234567,
+ "parent_pid": 2512, "parent_process_start_ticks": 81230011,
+ "parent_process_start_ns": 1789999944560000000,
  "vllm_version": "0.30.0", "enabled": true, "refused": null,
  "producer": "vllm:node-7:<boot>:2600:1790000000000000000",
+ "observes": [],
  "config": {"executor": "mp", "scheduler": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
             "runner": null, "tp": 2, "pp": 1, "dp": 1, "async_scheduling": true,
             "speculative": "ngram", "max_num_batched_tokens": 2048,
-            "request_id_randomization": true},
+            "request_id_randomization": true,
+            "max_num_seqs": 256, "num_gpu_blocks": 9000, "kv_cache_groups": 1,
+            "block_size": 16, "cudagraph_mode": "FULL_AND_PIECEWISE",
+            "gpu_memory_utilization": 0.9, "enable_cumem_allocator": false,
+            "enable_sleep_mode": false,
+            "profiler": {"profiler": "torch", "torch_profiler_dir": "/traces",
+                         "torch_profiler_with_stack": false,
+                         "torch_profiler_dump_cuda_time_total": false,
+                         "ignore_frontend": true, "max_iterations": 40,
+                         "delay_iterations": 0, "warmup_iterations": 0,
+                         "active_iterations": 5, "wait_iterations": 0}},
  "clock": {"wall_ns": 1790000000000123456, "mono_ns": 123456789000, "gap_ns": 1200}}
 ```
+
+`start_ns` is when the hook's writer started. The process fields name the
+process across pid reuse: `process_start_ticks` is field 22 of
+`/proc/<pid>/stat` (clock ticks after boot, exact within one boot), and
+`process_start_ns` is the wall-clock start as psutil's `create_time` gives
+it, the value Stormlog's server collector records. `parent_pid` and the two
+`parent_process_*` fields say the same of the parent process; a multiproc
+worker's parent is the engine core. Each is null where it cannot be read.
+
+`observes` lists the optional record kinds this epoch's hook can write, so
+a reader can tell "none happened" from "not recorded"; it is empty when the
+hook is refused. With no kind listed, the absence of such records says
+nothing.
+
+`config` records vLLM's settings as JSON values (an enum by its name), each
+null when vLLM does not have it. `max_num_seqs`, `num_gpu_blocks`,
+`kv_cache_groups` (how many), `block_size`, `cudagraph_mode`,
+`gpu_memory_utilization`, `enable_cumem_allocator` and `enable_sleep_mode`
+describe capacity and memory; an engine's are what its scheduler was built
+with, after vLLM sized the KV cache, while a worker records the configured
+values before that. `profiler` holds ten of vLLM's profiler settings, which
+decide how long a profiler stop pauses the server and whether a window stops
+by itself, or is null without a profiler configuration.
 
 `refused` is null when enabled, else a short reason.
 `config.request_id_randomization` is false when vLLM was told not to add a random
