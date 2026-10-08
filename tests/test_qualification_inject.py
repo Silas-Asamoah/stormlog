@@ -1120,6 +1120,117 @@ def test_a_signal_on_the_way_to_the_finish_still_publishes(
     assert published == [True]
 
 
+@pytest.mark.parametrize("first", ["run_failure", "keyboard_interrupt"])
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_at_the_last_check_before_the_runs_except_still_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str, signum: int
+) -> None:
+    # The lead's proof for Astra's H6: the run's end is raised from deep in
+    # the episodes, and a signal is made pending in the last __exit__ the
+    # unwind runs before execute's except block, the last place CPython can
+    # run a handler before it (from 3.11; see execute). After a failure the
+    # signal raises into the except and the run is published interrupted;
+    # after a first Ctrl+C it is held, the first goes on, and the run is
+    # published. Run on 3.11 and 3.12 as well as 3.10.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-u"), Server("", "m", tmp_path, {})
+    )
+    seen: dict[str, Any] = {}
+
+    class LastExit:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, *_exc: object) -> None:
+            signal.raise_signal(signum)
+
+    def deep(depth: int) -> None:
+        if depth:
+            deep(depth - 1)
+        elif first == "run_failure":
+            raise RuntimeError("engine died")
+        else:
+            signal.raise_signal(signal.SIGINT)  # a first Ctrl+C, deep in the run
+
+    def episodes(victim: Any, progress: Any) -> None:
+        with LastExit():
+            deep(8)
+
+    def finish(victim: Any, poller: Any, progress: Any, held: Any) -> Any:
+        with held:
+            seen.update(failure=progress.failure, received=list(held.received))
+        return tmp_path, None
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", lambda: None)
+    monkeypatch.setattr(run, "_poll_loop", lambda: None)
+    monkeypatch.setattr(run, "_start_victim", lambda: None)
+    monkeypatch.setattr(run, "_episodes", episodes)
+    monkeypatch.setattr(run, "_finish", finish)
+    held_first = first == "keyboard_interrupt"
+    raised = KeyboardInterrupt if held_first or signum == signal.SIGINT else SystemExit
+    try:
+        with pytest.raises(raised):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    assert seen["failure"] == "interrupted"
+    assert seen["received"] == ([signum] if held_first else [])
+
+
+# Instructions that run no Python code and don't check for pending signals.
+# NOT_TAKEN (3.14) only marks a branch not taken, for sys.monitoring.
+_NO_HANDLER_RUNS = {
+    "PUSH_EXC_INFO", "LOAD_GLOBAL", "CHECK_EXC_MATCH", "POP_JUMP_IF_FALSE",
+    "POP_JUMP_FORWARD_IF_FALSE", "STORE_FAST", "LOAD_CONST", "LOAD_FAST",
+    "STORE_ATTR", "NOP", "CACHE", "NOT_TAKEN",
+}  # fmt: skip
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11), reason="3.10 checks for signals entering an except"
+)
+def test_no_signal_handler_can_run_between_the_runs_except_and_holding() -> None:
+    # The other half of H6's proof: from the except clause's first
+    # instruction to its store of ``holding``, execute's bytecode holds
+    # nothing CPython checks for pending signals at (no call, no backward
+    # jump, no RESUME), and the store itself runs no Python code (no
+    # __setattr__, no descriptor). A signal is handled before the except,
+    # and raises into it, or after the store, and is held.
+    import dis
+
+    from examples.qualification.inject import InjectionRun, _HeldSignals
+
+    code = list(dis.get_instructions(InjectionRun.execute))
+    stores = [
+        index
+        for index, ins in enumerate(code)
+        if ins.opname == "STORE_ATTR" and ins.argval == "holding"
+    ]
+    entries = [i for i, ins in enumerate(code) if ins.opname == "PUSH_EXC_INFO"]
+    handler = [
+        (entry, store)
+        for store in stores
+        for entry in entries
+        if entry < store and "CHECK_EXC_MATCH" in {c.opname for c in code[entry:store]}
+    ]
+    entry, store = min(handler, key=lambda pair: pair[1] - pair[0])
+    assert {ins.opname for ins in code[entry : store + 1]} <= _NO_HANDLER_RUNS
+    assert _HeldSignals.__setattr__ is object.__setattr__
+    assert "holding" not in vars(_HeldSignals)
+
+
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
     # SIGTERM during F4a's pulses: the engine was stopped several times, so
     # the truth says so, with each completed pulse, and that it was cut

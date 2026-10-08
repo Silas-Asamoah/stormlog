@@ -247,22 +247,29 @@ class InjectionRun:
         victim: subprocess.Popen[bytes] | None = None
         held = _HeldSignals()
         try:
-            # Passed on until each way out of the episodes sets ``holding``
-            # first, by a plain store that runs no handler: a signal before
-            # it raises into the handlers below, one after it is noted, and
-            # none can leave the run unpublished on its way to the finish.
+            # Signals are passed on until ``holding`` is set, and noted after.
+            # Each way out of the episodes sets it first, by a plain attribute
+            # store. CPython runs a Python signal handler only where it checks
+            # for pending calls: at a call (a frame's RESUME), a backward jump
+            # or a C call's return. From 3.11, matching an except clause and
+            # a STORE_ATTR are none of these, so a signal handled before the
+            # store raises into this except, one after it is noted, and none
+            # leaves the run unpublished on its way to the finish. On 3.10
+            # the jump into an except block is itself a check: a first signal
+            # landing at that instant still escapes, while a second is held,
+            # since a passed-on signal sets ``holding`` itself (_pass_on).
             held.__enter__()
             victim = self._start_victim()
             self._episodes(victim, progress)
             held.holding = True
-        except Exception as error:  # the run's own failure; publish it
+        except BaseException as error:
             held.holding = True
-            progress.failure = f"run_failed: {error!r}"
-        except BaseException:
-            held.holding = True
-            progress.failure = "interrupted"
-            self._finish(victim, poller, progress, held)
-            raise
+            if not isinstance(error, Exception):
+                # Interrupted: publish what was done, then go on ending.
+                progress.failure = "interrupted"
+                self._finish(victim, poller, progress, held)
+                raise
+            progress.failure = f"run_failed: {error!r}"  # the run's own failure
         published, signum = self._finish(victim, poller, progress, held)
         if signum is not None:
             _act_on(signum)
@@ -836,11 +843,19 @@ class _HeldSignals:
             signal.raise_signal(signum)
 
     def _pass_on(self, signum: int, frame: Any) -> None:
-        """Act on a signal as the handler it replaced would have."""
+        """Act on a signal as the handler it replaced would have. That one
+        ends the run (KeyboardInterrupt, the pulser's SystemExit), so signals
+        are held from here: a second one, during the unwind or as it reaches
+        the run's except block, is noted rather than raised over the first.
+        If the handler returns instead, the run goes on unheld."""
         previous = self._previous.get(signum)
+        if previous == signal.SIG_IGN:
+            return
+        self.holding = True
         if callable(previous):
             previous(signum, frame)
-        elif previous != signal.SIG_IGN:  # the default, or one set from C
+            self.holding = False
+        else:  # the default, or one set from C
             self.__exit__()
             signal.raise_signal(signum)
 
