@@ -226,6 +226,56 @@ def test_a_stalled_engine_explains_the_waits_instead(tmp_path: Path) -> None:
     assert finding.claim == "observation"
 
 
+@pytest.mark.parametrize(
+    "stall_ms, status, claim",
+    [(150, "contributing", "condition"), (1000, "not_ruled_out", "observation")],
+)
+def test_a_stall_during_the_waits_is_judged_by_its_length(
+    tmp_path: Path, stall_ms: int, status: str, claim: str
+) -> None:
+    """A stall holds a waiting request back by no more than its own length:
+    150 ms is a minor second cause of a 907 ms excess; 1 s could explain all
+    of a 1,757 ms one. Neither is ruled out, though neither covers half of
+    the waiting time."""
+    engine = Engine(max_num_seqs=4, stall=(BURST_AT + 500 * MS, stall_ms * MS))
+    assessment = _assess(tmp_path, _requests(), engine)
+
+    (finding,) = assessment.findings
+    assert _alternatives(finding)["engine_stall"] == status
+    assert finding.claim == claim and finding.severity == "info"
+
+
+def _entering_after(requests: list[SimRequest], engine: Engine) -> None:
+    """vLLM adds requests on the engine thread: one that reaches the engine
+    during a stall enters its queue only when the loop resumes."""
+    probe = Engine(max_num_seqs=engine.max_num_seqs, stall=engine.stall)
+    starts = sorted(
+        record["start_mono_ns"]
+        for record in probe.run([SimRequest(r.request_id, r.sent_ns) for r in requests])
+        if record["kind"] == "scheduled"
+    )
+    gap = max(zip(starts, starts[1:]), key=lambda pair: pair[1] - pair[0])
+    for request in requests:
+        if gap[0] < request.admitted_ns < gap[1]:
+            request.enqueue_ns = gap[1] - 1 - request.admitted_ns
+
+
+def test_a_stall_that_built_the_backlog_is_not_ruled_out(tmp_path: Path) -> None:
+    """Load the engine carries (no witness without a stall), and a 600 ms
+    stall half a second in: the requests that arrived during it enter the
+    queue after it, so it covers none of their waiting time, yet the
+    backlog it left is the whole excess."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    load = poisson_free(600, BURST_AT, 8 * MS, prefix="b")
+    engine = Engine(max_num_seqs=8, stall=(BURST_AT + 500 * MS, 600 * MS))
+    _entering_after(calm + load, engine)
+
+    (finding,) = _assess(tmp_path, calm + load, engine).findings
+
+    assert _alternatives(finding)["engine_stall"] == "not_ruled_out"
+    assert finding.claim == "observation"
+
+
 def test_without_engine_records_the_queue_is_unsupported(tmp_path: Path) -> None:
     path = build_run(tmp_path, _requests(), Engine(max_num_seqs=4))
     client_only = [

@@ -42,7 +42,7 @@ from .diagnosis_thresholds import (
     QUEUE_COMPETITOR_FLOOR,
     QUEUE_CONTRIBUTION,
     QUEUE_FRONT_SHARE,
-    QUEUE_STALL_COVERAGE,
+    QUEUE_STALL_SHARE,
     QUEUE_WITNESS_SHARE,
     resolve_threshold,
 )
@@ -145,7 +145,7 @@ def _finding(
         witness = _exporter_witness(context, subject, witness)
     ttft = _ttft_excess(context, subject)
     alternatives = [
-        _engine_stall(context, producer, waiting),
+        _engine_stall(context, producer, waiting, excess),
         _scheduler_paused(
             context, producer, steps, merge_intervals(_wait_intervals(context, waiting))
         ),
@@ -253,24 +253,41 @@ def _at_capacity(step: Step, seqs: int | None, tokens: int | None) -> bool:
 
 # ------------------------------------------------------------- competitors
 def _engine_stall(
-    context: Context, producer: str, waiting: list[Execution]
+    context: Context, producer: str, waiting: list[Execution], excess: Difference
 ) -> Alternative:
-    """Engine-loop stalls, by the online trigger's own rules, covering most
-    of the subject's waiting time: then the engine, not its capacity, kept
-    the requests waiting."""
+    """Engine-loop stalls, by the online trigger's own rules, during the
+    subject's waits or just before them, against the wait excess. A stall
+    holds a request back by no more than its own length, so their summed
+    length is the most of the excess they can explain. One just before the
+    waits counts: a request reaching the engine during a stall enters the
+    queue only when the loop resumes, and the backlog it left drains after
+    it."""
     intervals = _wait_intervals(context, waiting)
     if not intervals:
         return Alternative("engine_stall", UNTESTABLE, "no wait was placed", True)
     config = LoopGapConfig(thresholds=dict(context.thresholds or {}))
-    stalls = stalls_over_limit(loop_steps(context.view, producer), (), config)
-    stalled = [(s.start_mono_ns, s.start_mono_ns + s.duration_ns) for s, _ in stalls]
-    total = sum(end - start for start, end in intervals)
-    covered = sum(_covered_by(interval, stalled) for interval in intervals)
-    share = covered / total if total else 0.0
-    needed = resolve_threshold(QUEUE_STALL_COVERAGE, context.thresholds)[0]
-    status = NOT_RULED_OUT if share >= needed else RULED_OUT
-    reason = f"{len(stalls)} engine stalls cover {share:.0%} of the waiting time"
+    stalls = [
+        (stall.start_mono_ns, stall.start_mono_ns + stall.duration_ns)
+        for stall, _ in stalls_over_limit(
+            loop_steps(context.view, producer), (), config
+        )
+    ]
+    near = [s for s in stalls if any(_holds_back(s, wait) for wait in intervals)]
+    held = sum(end - start for start, end in near)
+    status = _by_share(context, held / excess.estimate, QUEUE_STALL_SHARE)
+    reason = (
+        f"{len(near)} engine stalls during or just before the waits, "
+        f"{held / 1e6:.1f} ms in all, against a wait excess of "
+        f"{excess.estimate / 1e6:.1f} ms"
+    )
     return Alternative("engine_stall", status, reason, True)
+
+
+def _holds_back(stall: tuple[int, int], wait: tuple[int, int]) -> bool:
+    """Whether the stall overlaps the wait, or ended at most its own length
+    before the wait began."""
+    start, end = stall
+    return start < wait[1] and wait[0] - (end - start) <= end
 
 
 def _wait_intervals(
@@ -288,22 +305,6 @@ def _wait_intervals(
         if start is not None and end is not None and end > start:
             intervals.append((start, end))
     return intervals
-
-
-def _covered_by(interval: tuple[int, int], stalls: list[tuple[int, int]]) -> int:
-    """How much of ``interval`` the union of ``stalls`` covers."""
-    pieces = sorted(
-        (max(start, interval[0]), min(end, interval[1]))
-        for start, end in stalls
-        if start < interval[1] and interval[0] < end
-    )
-    covered, reach = 0, interval[0]
-    for start, end in pieces:
-        start = max(start, reach)
-        if end > start:
-            covered += end - start
-            reach = end
-    return covered
 
 
 def _scheduler_paused(

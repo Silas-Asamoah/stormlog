@@ -303,7 +303,7 @@ interval); with no excess it reports `not_observed`.
 
 | Competitor | Indispensable | Ruled out when |
 | --- | --- | --- |
-| `engine_stall` | yes | engine-loop stalls, found by the same rules as the online `engine_loop_gap`, cover less than half of the waiting time |
+| `engine_stall` | yes | engine-loop stalls over their limit, found by the same rules as the online `engine_loop_gap`, during the waits or ending at most their own length before one began, last under 10% of the wait excess in all; up to half of it they are `contributing`. A stall holds a request back by no more than its own length, and one just before the waits counts because a request reaching the engine during a stall enters the queue only when the loop resumes, leaving a backlog that drains after it |
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms). Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
@@ -479,7 +479,7 @@ The values are provisional until they are read from real runs.
 | `host_stall.heartbeat_grace_ns` | 3 s | how recently the hook's writer must have been heard from to judge a stall still going on |
 | `queue_saturation.witness_step_share` | 0.5 | share of the steps scheduled while requests waited at capacity for a witness |
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
-| `queue_saturation.stall_wait_share` | 0.5 | share of the waiting time engine stalls must cover to explain it instead |
+| `queue_saturation.stall_excess_share` | 0.5 | share of the wait excess the engine stalls during or just before the waits must last to explain it instead |
 | `queue_saturation.front_excess_share` | 0.25 | share of the wait excess an excess before the queue (engine ingress, the API server) must reach to explain it instead |
 | `queue_saturation.competitor_floor_share` | 0.1 | share of the wait excess below which a competitor is ruled out; above it, up to the competitor's own share, it is contributing |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
