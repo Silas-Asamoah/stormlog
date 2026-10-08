@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer.diagnosis_context import Context
 from stormlog.infer.diagnosis_inputs import Line, read_input
 from stormlog.infer.diagnosis_join import ClientRequest, RunView, join
 from stormlog.infer.diagnosis_selection import (
@@ -23,7 +24,7 @@ from stormlog.infer.diagnosis_selection import (
     select,
 )
 from tests.diagnosis_scenarios import MS, Engine, build_run, poisson_free
-from tests.vllm_execution_helpers import SECOND
+from tests.vllm_execution_helpers import SECOND, WALL_OFFSET
 
 
 def _burst_run(tmp_path: Path, *, burst: int = 600) -> RunView:
@@ -72,6 +73,29 @@ def test_a_sustained_burst_is_one_incident_detected_on_its_second_window(
     assert incident.first_detectable_ns == incident.windows[1].evaluated_at_ns
     test = incident.windows[0].tests[TTFT]
     assert test.p_value < 0.01 and test.window_above >= 3
+
+
+def test_an_incident_is_placed_where_it_was_first_seen(tmp_path: Path) -> None:
+    """Calm requests 500 ms apart, then a burst 10 s after the last: the
+    burst's first window was joined forward from the calm, so it begins 10 s
+    before the burst. The finding's window starts at the onset instead, the
+    first moment a flagged request had run past the reference's p90, with
+    that window's span as its resolution."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    burst = poisson_free(300, 90 * SECOND, 5 * MS, prefix="b")
+    view = join(read_input(build_run(tmp_path, calm + burst, Engine(max_num_seqs=4))))
+    selection = select(view)
+    (incident,) = selection.subjects
+    onset = 90 * SECOND + WALL_OFFSET
+
+    assert incident.start_ns == onset - 10 * SECOND
+    assert incident.onset_ns is not None
+    assert onset <= incident.onset_ns < onset + 100 * MS
+    window = Context(view, selection).window(incident)
+    assert window is not None and window["start_ns"] == incident.onset_ns
+    assert window["resolution_ns"] == 11 * SECOND
+    # #221's match: start >= effect onset - (resolution + uncertainty).
+    assert window["start_ns"] >= onset - window["resolution_ns"]
 
 
 def test_one_bad_window_alone_is_not_an_incident(tmp_path: Path) -> None:

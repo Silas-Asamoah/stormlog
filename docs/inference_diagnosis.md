@@ -205,6 +205,14 @@ the measured phase:
   failed request is above any threshold.
 - **Incident.** At least two consecutive flagged windows of a case, joined
   into one subject. One bad window alone is not an incident.
+- **Onset.** A window joined forward from calm traffic can begin seconds
+  before the burst that flagged it. An incident's `onset_ns` is when its
+  degradation was first visible: the earliest instant a request of its
+  first flagged window that was over a flagged threshold had run longer than
+  that threshold (its send plus the threshold). A finding's `window` starts
+  there, and its `resolution_ns` is the first flagged window's span, how
+  finely selection placed the onset; the subject keeps the windows' own
+  start.
 - **Abstention.** A window with fewer than 20 requests of its own
   (`too_few_requests`) or too small a reference (`insufficient_reference`)
   is not tested, and the summary counts such windows as untested. When no
