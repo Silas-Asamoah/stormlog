@@ -202,6 +202,30 @@ def test_an_incident_without_an_eligible_explanation_is_inconclusive(
     assert {f["severity"] for f in report["findings"]} == {"info"}
 
 
+def test_an_incident_explained_only_by_a_contested_finding_is_inconclusive(
+    tmp_path: Path,
+) -> None:
+    """The burst into a full engine, with six 120 ms engine-loop stalls over
+    its drain: the stalls are a minor second cause, so the queue is
+    contested and claims no fault. No finding explains the incident, so the
+    outcome says so rather than that every incident was explained."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    heavy = poisson_free(300, 90 * SECOND, 5 * MS, prefix="b")
+    stalls = [(90 * SECOND + 500 * MS + k * 700 * MS, 120 * MS) for k in range(6)]
+    engine = Engine(max_num_seqs=4, stalls=stalls)
+    artifact = build_run(tmp_path, calm + heavy, engine)
+
+    report = diagnose_artifact(artifact, options=_options())
+
+    _validate(report)
+    details = report["payload"]["findings_detail"].values()
+    (queue,) = [d for d in details if d["kind"] == "queue_saturation"]
+    assert queue["eligibility"]["contested"]
+    assert report["payload"]["outcome"] == "inconclusive"
+    assert "1 incident unexplained" in report["verdict"]["summary"]
+    assert report["verdict"]["exit_code"] == 0
+
+
 @pytest.mark.parametrize(
     "windows, options, message",
     [

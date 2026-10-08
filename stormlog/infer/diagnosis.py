@@ -336,21 +336,31 @@ def _overall(statuses: set[str]) -> str:
 
 
 def _unexplained(context: Context, ranked: list[tuple[str, Finding]]) -> list[Subject]:
-    """Incident subjects with no eligible mechanism or instrumentation
-    finding: a change in demand alone says what drove it, not what slowed.
-    A declared subject that was no slower than its reference is no incident
-    to explain."""
-    explained = {
-        str(f.subject.get("key"))
-        for _, f in ranked
-        if f.eligible and f.kind not in WORKLOAD_KINDS
-    }
+    """Incident subjects that no finding explains. A declared subject that
+    was no slower than its reference is no incident to explain."""
+    explained = {str(f.subject.get("key")) for _, f in ranked if _explains(f)}
     calm = {s.key for s in _without_excess(context)}
     return [
         s
         for s in context.selection.subjects
         if s.incident and s.key not in explained and s.key not in calm
     ]
+
+
+def _explains(finding: Finding) -> bool:
+    """A warning explains its subject, and so does an eligible mechanism or
+    instrumentation finding that no competitor contests and that meets the
+    criterion saying it explains the incident. A contested one leaves a
+    second cause open, and a change in demand alone says what drove the
+    incident, not what slowed."""
+    if finding.kind in WORKLOAD_KINDS:
+        return False
+    if finding.severity == "warning":
+        return True
+    explains = finding.explains is not None and (
+        finding.explains in finding.contribution.met
+    )
+    return finding.eligible and not finding.contested and explains
 
 
 def _without_excess(context: Context) -> list[Subject]:
@@ -378,8 +388,8 @@ def _untested(context: Context) -> int:
 
 
 def _outcome(context: Context, ranked: list[tuple[str, Finding]]) -> str:
-    """``inconclusive`` when an incident subject has no eligible
-    explanation, or when automatic selection could test no window, so it
+    """``inconclusive`` when no finding explains an incident subject, or
+    when automatic selection could test no window, so it
     ruled no incident out either; ``findings`` when there are any; else
     ``no_findings``."""
     selection = context.selection
