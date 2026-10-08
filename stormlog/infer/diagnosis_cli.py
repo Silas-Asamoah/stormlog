@@ -57,6 +57,13 @@ def add_diagnose_parser(subparsers: Any) -> None:
             "log was imported, so its metrics may witness hook findings"
         ),
     )
+    parser.add_argument(
+        "--server-telemetry",
+        action="append",
+        default=[],
+        metavar="JSONL",
+        help="On-host collector artifact for the memory ledger; repeatable",
+    )
     parser.add_argument("--format", choices=["txt", "json"], default="txt")
     parser.add_argument(
         "--output", default=None, help="Write the validated JSON report here"
@@ -86,6 +93,7 @@ def cmd_diagnose(args: argparse.Namespace, argv: list[str] | None = None) -> int
         case_ids=tuple(args.case),
         thresholds=_thresholds(args),
         metrics_from_engine=args.metrics_from_engine,
+        server_telemetry=tuple(args.server_telemetry),
         report_dir=output.parent if output is not None else None,
         argv=tuple(argv) if argv is not None else None,
     )

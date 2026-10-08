@@ -29,6 +29,7 @@ from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Conte
 from .diagnosis_inputs import read_input
 from .diagnosis_join import RunView, join
 from .diagnosis_kv import assess_kv
+from .diagnosis_memory import memory_ledger
 from .diagnosis_model import Finding, rank_findings
 from .diagnosis_prefix import assess_prefix
 from .diagnosis_queue import assess_queue
@@ -55,6 +56,7 @@ from .diagnosis_workload import (
     assess_outputs,
     assess_sharing,
 )
+from .telemetry import TelemetrySample, load_telemetry
 
 REPORT_KIND = "inference_diagnosis"
 PAYLOAD_FORMAT = "stormlog.inference_diagnosis"
@@ -95,6 +97,9 @@ class DiagnoseOptions:
     metrics_from_engine: bool = False
     generated_at_ns: int | None = None
     report_dir: Path | None = None  # evidence paths are relative to it
+    # On-host collector artifacts (``infer collect-server``) for the memory
+    # ledger: the only files read besides the artifact.
+    server_telemetry: tuple[str, ...] = ()
     argv: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -103,6 +108,7 @@ class DiagnoseOptions:
             "case_ids": list(self.case_ids),
             "thresholds": dict(sorted(self.thresholds.items())),
             "metrics_from_engine": self.metrics_from_engine,
+            "server_telemetry": list(self.server_telemetry),
         }
 
 
@@ -125,6 +131,7 @@ def diagnose_artifact(
     options = options or DiagnoseOptions()
     _check(options, windows)
     source = read_input(artifact)
+    telemetry = [s for path in options.server_telemetry for s in load_telemetry(path)]
     view = join(source)
     selection = select(
         view,
@@ -147,7 +154,7 @@ def diagnose_artifact(
         for assessors in CLASSES.values()
         for assess in assessors
     ]
-    return _report(context, assessments, options, windows or ())
+    return _report(context, assessments, options, windows or (), telemetry)
 
 
 def _check(options: DiagnoseOptions, windows: Sequence[tuple[int, int]] | None) -> None:
@@ -165,6 +172,7 @@ def _report(
     assessments: list[Assessment],
     options: DiagnoseOptions,
     windows: Sequence[tuple[int, int]],
+    telemetry: Sequence[TelemetrySample],
 ) -> dict[str, Any]:
     view = context.view
     findings: list[Finding] = [f for a in assessments for f in a.findings]
@@ -187,6 +195,7 @@ def _report(
         "selection": context.selection.as_dict(),
         "coverage": coverage,
         "findings_detail": details,
+        "memory": memory_ledger(context, telemetry),
         "thresholds": _thresholds(options),
     }
     report = build_report(

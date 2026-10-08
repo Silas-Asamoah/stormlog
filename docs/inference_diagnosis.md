@@ -371,6 +371,36 @@ by them is still `inconclusive`:
 | `longer_outputs` | the same for outputs |
 | `prefix_sharing_drop` | the share of requests declaring a shared prefix fell: its exact interval's upper bound at least 0.1 below the reference's share |
 
+## Memory
+
+`payload.memory` is a ledger of what each source says about the server's
+memory, never a sum: its sources sample different instants, so categories
+are never added or subtracted. Each entry gives its category, scope, source,
+unit, status (`observed`, `not_collected`, `unsupported`, or
+`exporter_scoped` for metrics not bound to the engine), and, when observed,
+its provenance, cadence, clock and peak (`sampled_max` over the run).
+
+| Category | Source | Status |
+| --- | --- | --- |
+| `physical_device`, `physical_mig_instance` | NVML through `infer collect-server` (`--server-telemetry`) | observed when given |
+| `physical_process_gpu`, `host_process_rss` | the same collector | observed when given |
+| `allocator_allocated`, `allocator_reserved` | the collector's allocator counters | observed when given; nothing in vLLM's server reports them yet |
+| `runtime` (CUDA context, NCCL, workspaces) | none | unsupported |
+| `cuda_graph_pools` | none | unsupported |
+| `kv_blocks_allocated` | `vllm:kv_cache_usage_perc` times the hello's `num_gpu_blocks` | observed with `--metrics-from-engine`, else `exporter_scoped` |
+
+The KV figure counts blocks held by running requests: in tokens these are
+capacity slots, not live tokens, and cached blocks that are free count as
+free. `nesting` says whether the categories nest: under the default caching
+allocator (the hello's `enable_cumem_allocator` false), KV blocks lie within
+the KV pool, within what the allocator reserved, within the process's GPU
+memory, within the device, with runtime memory outside the allocator; with
+any other allocator, or a hello that does not say, `holds` is null.
+
+`stormlog infer diagnose ... --server-telemetry JSONL` (repeatable), or
+`DiagnoseOptions(server_telemetry=...)`, names the collector artifacts to
+read; they and the artifact are the only files a diagnosis reads.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
