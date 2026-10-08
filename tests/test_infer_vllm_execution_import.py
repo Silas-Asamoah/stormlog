@@ -650,6 +650,36 @@ def test_a_begun_phase_ends_with_its_window_or_the_session(tmp_path: Path) -> No
         assert _placement(artifact) == (1, 1), name
 
 
+def test_a_dead_client_s_phase_ends_at_its_last_record_once_the_run_is_over(
+    tmp_path: Path,
+) -> None:
+    # The client was killed: its last sign of life is a first content at
+    # 3 s, and it wrote neither the phase's window nor the session's end.
+    last = {
+        "schema_version": 1,
+        "event_type": "infer.first_content",
+        "session_id": SESSION,
+        "request_id": REQUEST0,
+        "x_request_id": X0,
+        "case_id": "c1_in8_out4",
+        "phase": "measured",
+        "first_content_at_ns": T0 + WALL_OFFSET + 3 * SECOND,
+        "timestamp_ns": T0 + WALL_OFFSET + 3 * SECOND,
+    }
+    for stopped, placement in ((False, (2, 0)), (True, (1, 1))):
+        name = f"stopped-{stopped}"
+        artifact = _in_progress_artifact(tmp_path / f"{name}.jsonl", last)
+        engine_log(tmp_path / name, _records())
+
+        import_execution_into_artifact(
+            artifact, tmp_path / name, importer=HERE, server_stopped=stopped
+        )
+
+        # Without the option the run may still be under way; with it, the
+        # step at 40 s came after the client's end.
+        assert _placement(artifact) == placement, name
+
+
 def test_cli_imports_and_reports_the_epochs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

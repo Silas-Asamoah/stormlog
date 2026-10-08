@@ -540,7 +540,8 @@ def _add_import_execution_parser(subparsers: Any) -> None:
             "The server that wrote this log is no longer running: an epoch "
             "without a goodbye record is gone and its pending steps are final. "
             "Without it, silence is judged only on the server's own host and "
-            "boot; from anywhere else such an epoch's pending steps wait"
+            "boot; from anywhere else such an epoch's pending steps wait. A "
+            "phase a killed client left begun then ends at its last record"
         ),
     )
     parser.add_argument(
