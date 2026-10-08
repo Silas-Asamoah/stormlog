@@ -218,10 +218,22 @@ If anything is left, the resume refuses (exit 2). A `probe_incomplete` run
 is run again at once on a fresh server, after its group is verified gone,
 and both attempts are kept.
 
+A runner holds the experiment's lock, `<output>/.lock`, for its whole run.
+It takes it before anything else, the resume's journal checks included,
+and writes its PID into it. A second runner on the same directory, such as
+a resume started while the first still runs, refuses at once (exit 2),
+naming the lock and the holder's PID, and touches nothing: it would
+otherwise take the first runner's live launches for a killed runner's and
+stop them. The lock is `flock`'s, so it is advisory (it binds only runners
+that take it), goes with the process that held it (a killed runner's lock
+never holds a resume), and is reliable only on a local file system, not
+over NFS.
+
 ### The bundle
 
 | Path | Content |
 | --- | --- |
+| `.lock` | The runner's lock, with the PID of the runner that last held it |
 | `plan.json` | The plan's and the pre-registration's SHA-256 |
 | `prereg.json` | The pre-registration, when the plan has one |
 | `order.json` | Each block's arms in run order, whether positions balance, and each arm's position counts |
