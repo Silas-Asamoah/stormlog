@@ -376,7 +376,7 @@ class CadenceWithin:
     p95 than chance allows.
     The mean weighs a long gap by its length, so a slow minority shows. A
     baseline of fewer than ``min_cadence_samples`` gaps can't be compared
-    with, so it never holds.
+    with: the caller judges with ``Never`` instead, which says why.
 
     A gap is known when its later event arrives, so the time from the
     hold's last event to its end is a gap still open: its busy part (the
@@ -407,7 +407,6 @@ class CadenceWithin:
         self.too_long = _prefix(float(value > never) for value in values)
         self.mean_ceiling = baseline.mean / (1 - thresholds.rate_tolerance)
         self.thresholds = thresholds
-        self.comparable = baseline.count >= thresholds.min_cadence_samples
         self.busy = busy
         self.opens = None if busy is None else [start for start, _end in busy]
 
@@ -423,7 +422,7 @@ class CadenceWithin:
         first = bisect.bisect_left(self.times, start_ns)
         last = bisect.bisect_right(self.times, end_ns)
         count = last - first
-        if not self.comparable or count < self.thresholds.min_cadence_samples:
+        if count < self.thresholds.min_cadence_samples:
             return False
         tail = self.open_gap(self.times[last - 1], end_ns)
         if tail > self.longest or not self._long_gaps_fit(first, last, count):
