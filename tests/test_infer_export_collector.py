@@ -218,10 +218,25 @@ def test_a_gpu_identity_change_is_the_recorded_stop(tmp_path: Path) -> None:
 def test_a_server_that_ends_is_the_recorded_stop(tmp_path: Path) -> None:
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     export = _export(tmp_path)
-    timer = threading.Timer(0.2, child.kill)
+
+    def end_server() -> None:
+        # Reaped at once, as a server's parent would: an unreaped child stays
+        # a zombie for the whole collection.
+        child.kill()
+        child.wait()
+
+    timer = threading.Timer(0.2, end_server)
     timer.start()
     try:
-        result = _collect(tmp_path, export, pid=child.pid, gpu_source=None, no_gpu=True)
+        # The duration only stops a run that missed the end: it fails, not hangs.
+        result = _collect(
+            tmp_path,
+            export,
+            pid=child.pid,
+            gpu_source=None,
+            no_gpu=True,
+            duration_seconds=20.0,
+        )
     finally:
         timer.cancel()
         child.wait(5)
