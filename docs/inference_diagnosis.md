@@ -9,10 +9,15 @@ metrics and spans, the scheduler steps of the
 names a mechanism with the observations and records behind it, how far it
 can be trusted, the competing mechanisms and what became of each, and an
 experiment that would confirm it; a class that cannot be checked says so,
-with a reason. This version assesses queue saturation; the other kinds are
-reported as not assessed yet. The page also documents the threshold table
-and the cheap signals an online trigger evaluates over a window of
-`/metrics` scrapes.
+with a reason. This version assesses queue saturation, KV preemption
+pressure, prefix-cache loss, client admission, host stalls at the API
+server, capture pauses and the four workload kinds. Mixed-prefill
+interference, rank delay and transfer degradation are `unsupported` in the
+coverage with the reason `not_assessed_by_this_version`, and `host_stall` is
+`partial` because its engine-loop and worker forms are not assessed yet.
+The page also documents the threshold table, the cheap signals an online
+trigger evaluates over a window of `/metrics` scrapes, and engine-loop
+stalls in the hook's raw records.
 
 ## Diagnose an artifact
 
@@ -32,7 +37,7 @@ validated [`stormlog.report` v1](report_contract.md) report with
 `warning`, else 0. The same artifact and options give the same report; the
 generation time can be fixed with `DiagnoseOptions(generated_at_ns=...)`.
 Thresholds can be overridden by key (`DiagnoseOptions(thresholds=...)`); an
-unknown key is refused.
+unknown key, or a value that is not a finite number, is refused.
 
 The payload, `stormlog.inference_diagnosis` v1
 ([schema](schemas/inference_diagnosis_v1.schema.json)), holds:
