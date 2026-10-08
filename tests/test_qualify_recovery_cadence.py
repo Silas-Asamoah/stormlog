@@ -19,6 +19,7 @@ from stormlog.infer.qualify.recovery import (
     Actions,
     Baseline,
     Context,
+    GapStats,
     Signals,
     Thresholds,
     Timing,
@@ -492,6 +493,43 @@ def test_the_dose_check_passes_short_prefill_steps_and_a_paused_baseline() -> No
         paused = prefill_context(seed, 0.0, pauses, decode=0.020)
         assert recovery_blocked("F4a", short) == ()
         assert recovery_blocked("F4a", paused) == ()
+
+
+@pytest.mark.parametrize(("mean_s", "refused"), [(0.0202, False), (0.0198, True)])
+def test_the_dose_check_refuses_from_one_too_long_gap_per_hold(
+    mean_s: float, refused: bool
+) -> None:
+    # The lead's boundary: 2 gaps too long for a hold among 1,000 busy gaps
+    # are 0.99 per 10 s hold at a 20.2 ms mean, which passes, and 1.01 at
+    # 19.8 ms, which is refused, not evaluable, with its reason.
+    from stormlog.infer.qualify.recovery import DOSE_CHECK_TOO_LONG_PER_HOLD
+
+    steps = GapStats(
+        count=1000, mean=mean_s, p95=0.03, p99=0.03, p999=0.05, too_long_count=2
+    )
+    baseline = Baseline(
+        wait_p95=1.0,
+        waiting_low=0.0,
+        waiting_high=1.0,
+        kv_max=0.5,
+        steps=steps,
+        chunks=GapStats(),
+        cached_median=1.0,
+    )
+    context = Context(
+        Signals(in_flight=ALWAYS), baseline, Actions(), start_ns=0, until_ns=S
+    )
+    per_hold = steps.too_long_per(Thresholds().cadence_hold_ns / S)
+    assert (per_hold >= DOSE_CHECK_TOO_LONG_PER_HOLD) is refused
+    reasons = recovery_blocked("F4a", context)
+    if refused:
+        assert reasons == (
+            "dose_check_failed: 2 of 1000 busy step gaps in the baseline are too "
+            "long for a hold, past twice the p99 and the smallest dose (60 ms): "
+            "1.0 per 10 s hold",
+        )
+    else:
+        assert reasons == ()
 
 
 def test_the_dose_check_counts_per_hold_of_time_not_per_gap() -> None:
