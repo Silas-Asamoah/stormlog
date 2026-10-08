@@ -127,6 +127,7 @@ stated bound.
 | --- | --- | --- |
 | `hello` | every epoch | first record |
 | `alias` | engine | a request is admitted |
+| `enqueued` | engine | a request enters the scheduler |
 | `scheduled` | engine | `Scheduler.schedule` returns |
 | `completed` | engine | `Scheduler.update_from_output` returns |
 | `terminal` | engine | `Scheduler._free_request` runs |
@@ -144,7 +145,7 @@ stated bound.
  "parent_process_start_ns": 1789999944560000000,
  "vllm_version": "0.30.0", "enabled": true, "refused": null,
  "producer": "vllm:node-7:<boot>:2600:1790000000000000000",
- "observes": ["pause"],
+ "observes": ["enqueued", "pause"],
  "config": {"executor": "mp", "scheduler": "vllm.v1.core.sched.async_scheduler.AsyncScheduler",
             "runner": null, "tp": 2, "pp": 1, "dp": 1, "async_scheduling": true,
             "speculative": "ngram", "max_num_batched_tokens": 2048,
@@ -208,6 +209,24 @@ trace file name. The `config.runner` field is filled by workers.
 
 Written from vLLM's input thread, so it may come before or after the request's
 first `scheduled` record.
+
+**`enqueued`**
+
+```json
+{"kind": "enqueued", "internal": "chatcmpl-stormlog-r1-q0-0f3a9c1d",
+ "structured_output": false, "resumable": false,
+ "wall_ns": …, "mono_ns": …, "wall_after_ns": …}
+```
+
+Stamped just before `Scheduler.add_request` puts the request in the waiting
+queue, on the engine's own thread; the wait from here to the request's first
+`scheduled` record is spent in the scheduler, while the time from `alias`
+to here is spent getting into the engine. One per internal ID while it is
+live: a streaming-input request's later inputs reuse its ID and write none.
+`structured_output` says whether the request is constrained by a grammar,
+which can hold it waiting while others run, and `resumable` whether it is a
+streaming-input request; each is null when vLLM's request does not say. A
+call that raises is not recorded. Listed in `observes` as `enqueued`.
 
 **`scheduled`**
 
