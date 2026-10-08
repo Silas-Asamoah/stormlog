@@ -18,7 +18,6 @@ from typing import Any, Sequence
 from .diagnosis_context import Context
 from .scrape_window import gauge_window
 from .telemetry import TelemetrySample
-from .vllm_telemetry import VllmScrapeRecord
 
 OBSERVED = "observed"
 NOT_COLLECTED = "not_collected"
@@ -117,7 +116,7 @@ def _kv(context: Context) -> dict[str, Any]:
         "source": f"metrics:{KV_USAGE} x hello:num_gpu_blocks",
         "unit": "blocks",
     }
-    scrapes = _scrapes(context)
+    scrapes = context.scrapes()
     gauge = gauge_window(scrapes, KV_USAGE) if scrapes else None
     blocks = _engine_blocks(context)
     if gauge is None or gauge.max is None:
@@ -139,16 +138,6 @@ def _kv(context: Context) -> dict[str, Any]:
         "peak": {"scope": "sampled_max", "value": round(gauge.max * blocks)},
         "binding": "asserted" if context.metrics_from_engine else "exporter_scoped",
     }
-
-
-def _scrapes(context: Context) -> list[VllmScrapeRecord]:
-    records = []
-    for line in context.view.scrapes:
-        try:
-            records.append(VllmScrapeRecord.from_record(dict(line.raw or {})))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return sorted(records, key=lambda r: r.observed_at_ns)
 
 
 def _engine_blocks(context: Context) -> int | None:
