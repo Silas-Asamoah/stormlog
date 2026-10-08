@@ -21,6 +21,8 @@ from stormlog.infer.experiment_plan import plan_from_document
 from stormlog.infer.run_summary import summarize_run
 
 FAKE = str(Path(__file__).with_name("fake_vllm_server.py"))
+# The same server, with the command line of `vllm serve` (see its docstring).
+VLLM = str(Path(__file__).with_name("fake_vllm") / "vllm")
 PROFILE = [
     "{python}",
     "-m",
@@ -101,7 +103,7 @@ def _plan(port: int, **changes: Any) -> dict[str, Any]:
         "blocks": 2,
         "order": {"kind": "williams"},
         "server": {
-            "command": ["{python}", FAKE, "--port", str(port)],
+            "command": ["{python}", VLLM, "serve", "m", "--port", str(port)],
             "base_url": f"http://127.0.0.1:{port}/v1",
             "start_timeout_s": 20,
             "stop_timeout_s": 5,
@@ -146,6 +148,26 @@ def _run(
         environment=Environment(python=sys.executable),
         **options,
     )
+
+
+def test_the_stand_in_server_passes_the_role_check_as_vllms_api_server(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # fable-213's lens a: launched as `python fake_vllm_server.py`, the
+    # stand-in was `other` to the role check, so on Linux every end-to-end
+    # run ended unexpected_server_children (off Linux the check does not
+    # run). Its tree, as Linux /proc shows it, holds only vLLM's roles.
+    from stormlog.infer import experiment_process
+    from tests.infer_proc_helpers import fake_process
+
+    command = tuple(
+        sys.executable if part == "{python}" else part
+        for part in _plan(8000)["server"]["command"]
+    )
+    proc = tmp_path / "proc"
+    fake_process(proc, 100, comm=Path(sys.executable).name[:15], cmdline=command)
+    monkeypatch.setattr(experiment_process, "_linux", lambda: True)
+    assert experiment_process.unexpected_roles(100, proc=proc) == []
 
 
 def test_a_plan_runs_every_arm_of_every_block_into_comparable_runs(
