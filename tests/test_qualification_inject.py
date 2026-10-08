@@ -1204,6 +1204,22 @@ def test_a_third_signal_is_not_held() -> None:
         signal.signal(signal.SIGHUP, previous)
 
 
+def test_a_signal_ignored_before_the_run_stays_ignored() -> None:
+    # close-221-delta, N6: _pass_on's SIG_IGN branch was unpinned. A signal
+    # the process ignored before the run is ignored while it is passed on:
+    # it neither ends the run nor turns holding on, and the holder stays.
+    from examples.qualification.inject import _HeldSignals
+
+    previous = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        with _HeldSignals() as held:
+            signal.raise_signal(signal.SIGHUP)
+            assert (held.holding, held.received, held.installed) == (False, [], True)
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
 def test_a_holder_cut_short_while_installing_installs_the_rest_next_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
