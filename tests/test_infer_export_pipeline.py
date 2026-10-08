@@ -911,3 +911,35 @@ def test_the_volume_warning_names_the_share_it_marks(
     )
     (warning,) = sampler_warnings(config)
     assert says in warning
+
+
+def test_a_span_close_cut_short_is_finished_by_the_next_close(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Ctrl+C inside the span exporter's own close steps: the pipeline's
+    # next close, the run's fallback, finishes them, rather than taking the
+    # step as done and leaving the ledger open and the sink unclosed.
+    pipeline = ExportPipeline(
+        ExportConfig(otlp_file=tmp_path / "spans.jsonl"),
+        LABELS,
+        spans=SpanIdentity("run", "session", "m", "http://h:8000/v1"),
+    )
+    pipeline.start(started_at=0.0)
+    otlp = pipeline.otlp
+    assert otlp is not None
+    real_drain = otlp.exporter.queue.drain
+    presses = [KeyboardInterrupt()]
+
+    def drain_interrupted_once() -> Any:
+        if presses:
+            raise presses.pop()
+        return real_drain()
+
+    monkeypatch.setattr(otlp.exporter.queue, "drain", drain_interrupted_once)
+    with pytest.raises(KeyboardInterrupt):
+        pipeline.close(2.0)
+    finished = otlp.exporter.closed
+    assert not finished
+    pipeline.close(2.0)
+    assert otlp.exporter.closed and otlp.accounting()["frozen"]
+    pipeline.stop_serving()
