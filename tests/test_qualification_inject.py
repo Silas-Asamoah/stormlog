@@ -844,12 +844,32 @@ def test_a_third_signal_is_not_held() -> None:
     previous = signal.signal(signal.SIGHUP, lambda signum, _frame: seen.append(signum))
     try:
         with _HeldSignals() as held:
+            held.holding = True
             signal.raise_signal(signal.SIGHUP)
             signal.raise_signal(signal.SIGHUP)
             assert (held.received, seen) == ([signal.SIGHUP] * 2, [])
             signal.raise_signal(signal.SIGHUP)
             assert seen == [signal.SIGHUP]
-            assert not held.holding
+            assert not held.installed
+    finally:
+        signal.signal(signal.SIGHUP, previous)
+
+
+def test_a_signal_before_holding_is_passed_on() -> None:
+    # Installed for the whole run, the handlers act as the ones they
+    # replaced until the run's end sets holding: mid-run, a signal still
+    # ends the run (and the run is published on the way out).
+    from examples.qualification.inject import _HeldSignals
+
+    seen: list[int] = []
+    previous = signal.signal(signal.SIGHUP, lambda signum, _frame: seen.append(signum))
+    try:
+        with _HeldSignals() as held:
+            signal.raise_signal(signal.SIGHUP)
+            assert (held.received, seen) == ([], [signal.SIGHUP])
+            with pytest.raises(KeyboardInterrupt):
+                signal.raise_signal(signal.SIGINT)
+            assert held.installed
     finally:
         signal.signal(signal.SIGHUP, previous)
 
@@ -907,6 +927,62 @@ def test_the_run_holds_signals_before_it_finishes(
     monkeypatch.setattr(run, "_finish", finish)
     run.execute()
     assert holding == [True]
+
+
+@pytest.mark.parametrize("first", ["run_failure", "keyboard_interrupt"])
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_a_signal_on_the_way_to_the_finish_still_publishes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: str, signum: int
+) -> None:
+    # Astra's closure of delta 3, H6: after the run's own failure, or a
+    # first Ctrl+C, signals were held only once _finish entered them, so a
+    # signal landing in between (a double Ctrl+C) raised out of execute()
+    # with nothing published. It lands here at _finish's entry, the last
+    # moment of that window: the run is still published, then ends as the
+    # first cause, or the held signal, says.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-v"), Server("", "m", tmp_path, {})
+    )
+    published: list[bool] = []
+
+    def finish(victim: Any, poller: Any, progress: Any, held: Any) -> Any:
+        signal.raise_signal(signum)
+        with held:
+            published.append(True)
+        return tmp_path, held.received[0] if held.received else None
+
+    def episodes(victim: Any, progress: Any) -> None:
+        if first == "run_failure":
+            raise RuntimeError("engine died")
+        raise KeyboardInterrupt
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", lambda: None)
+    monkeypatch.setattr(run, "_poll_loop", lambda: None)
+    monkeypatch.setattr(run, "_start_victim", lambda: None)
+    monkeypatch.setattr(run, "_episodes", episodes)
+    monkeypatch.setattr(run, "_finish", finish)
+    expected = {
+        "keyboard_interrupt": KeyboardInterrupt,
+        "run_failure": KeyboardInterrupt if signum == signal.SIGINT else SystemExit,
+    }[first]
+    try:
+        with pytest.raises(expected):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    assert published == [True]
 
 
 def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> None:
