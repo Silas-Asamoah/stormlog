@@ -463,9 +463,9 @@ policy and declared server sampler, the content items, and the final
 summary: the dispositions above, `sampled_out`, `late_results`, attempts by
 kind and category, retries, batches, encoded and sent bytes, the first
 error's kind, category and status, `warnings` (confirmations that rejected
-nothing but carried a message), the transitions, any stage stuck for 5 s
-(`resolve`, or a file `write`), how long the flush at the end took, and the
-worker's CPU time. A collector's own message is kept, as
+nothing but carried a message), the transitions, any stage stuck (a
+`resolve` running over 2 s, or a file `write` over 5 s), how long the flush
+at the end took, and the worker's CPU time. A collector's own message is kept, as
 `collector_message`, only with `--export-content errors`: it can echo what
 was sent, so it is scrubbed and cut to 256 bytes first.
 
