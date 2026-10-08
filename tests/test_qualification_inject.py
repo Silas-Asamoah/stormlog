@@ -397,7 +397,7 @@ def test_the_next_episode_waits_while_the_engine_looks_hung(
 
 @pytest.mark.parametrize(
     ("late_ms", "measured_ms", "decision"),
-    [(15, None, "start"), (1500, 1500, "start"), (1500, None, "timeout")],
+    [(15, 15, "start"), (1500, 1500, "start"), (1500, None, "timeout")],
 )
 def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     tmp_path: Path,
@@ -411,7 +411,8 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     # records arrive after their steps start, so a healthy engine read as
     # hung at most polls and every episode ran into the recovery timeout.
     # The run allows at least a poll period, or the baseline's measured lag
-    # if longer; a lag past both still reads as a hang.
+    # if longer; a lag past both still reads as a hang. Which it used, and
+    # why, is logged in probes/record-lag.json.
     from types import SimpleNamespace
     from typing import cast
 
@@ -434,10 +435,22 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
         plan, RunDirectory(tmp_path / "runs", "q221-y"), Server("", "m", tmp_path, {}),
         clock=clock,
     )  # fmt: skip
-    if measured_ms is not None:
-        lag = measured_ms * 1_000_000
-        run.channel = cast(Any, SimpleNamespace(record_lag_ns=lambda *_: lag))
-        run._measure_record_lag(0, 45 * second)
+    run.directory.create()
+    lag = None if measured_ms is None else measured_ms * 1_000_000
+    run.channel = cast(Any, SimpleNamespace(record_lag_ns=lambda *_: lag))
+    run._measure_record_lag(0, 45 * second)
+    # The lag used, and where it came from, is on record.
+    used = json.loads((run.directory.probes / "record-lag.json").read_text())
+    assert used["measured_p99_ns"] == lag
+    assert used["lag_ns"] == max(second, lag or 0)
+    assert (
+        used["source"]
+        == {
+            15: "poll_period: longer than the measured lag",
+            1500: "measured",
+            None: "poll_period: no step record in the baseline to measure",
+        }[measured_ms]
+    )
 
     def seen() -> Signals:
         visible = now[0] - late_ms * 1_000_000

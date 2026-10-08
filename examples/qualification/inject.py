@@ -528,14 +528,32 @@ class InjectionRun:
         return engine_stalled(context, now, self._record_lag_ns)
 
     def _measure_record_lag(self, start_ns: int, end_ns: int) -> None:
-        """Allow engine_stalled the baseline's record lag, and never less
-        than a poll period: a healthy engine's records arriving late must
-        not read as a hang (Astra's H5)."""
+        """Allow engine_stalled the baseline's record lag, measured from the
+        first-seen times the tailer notes, and never less than a poll
+        period: a healthy engine's records arriving late must not read as a
+        hang (Astra's H5). With no step record in the baseline to measure,
+        the poll period stands. What was used, and why, goes in
+        ``probes/record-lag.json``."""
         with self._lock:
             assert self.channel is not None
             measured = self.channel.record_lag_ns(start_ns, end_ns)
-        if measured is not None:
-            self._record_lag_ns = max(self._record_lag_ns, measured)
+        floor = self._record_lag_ns
+        if measured is None:
+            source = "poll_period: no step record in the baseline to measure"
+        elif measured > floor:
+            source, self._record_lag_ns = "measured", measured
+        else:
+            source = "poll_period: longer than the measured lag"
+        record = {
+            "lag_ns": self._record_lag_ns,
+            "source": source,
+            "measured_p99_ns": measured,
+            "poll_period_ns": floor,
+            "baseline": [start_ns, end_ns],
+        }
+        (self.directory.probes / "record-lag.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True)
+        )
 
     def _timing(
         self,
