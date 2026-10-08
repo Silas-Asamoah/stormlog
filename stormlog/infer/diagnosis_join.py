@@ -173,6 +173,7 @@ class RunView:
     phase_starts: list[Line] = field(default_factory=list)
     phase_windows: list[Line] = field(default_factory=list)
     trace_windows: list[Line] = field(default_factory=list)
+    incident_windows: list[Line] = field(default_factory=list)
     workload: Line | None = None
     sessions: list[Line] = field(default_factory=list)
     engines: dict[str, EngineEpoch] = field(default_factory=dict)
@@ -260,6 +261,7 @@ _LISTS = {
     "infer.phase_start": "phase_starts",
     "infer.phase_window": "phase_windows",
     "infer.trace_window": "trace_windows",
+    "infer.incident_window": "incident_windows",
     "infer.session": "sessions",
 }
 
