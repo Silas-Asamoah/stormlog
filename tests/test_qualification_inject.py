@@ -1118,6 +1118,9 @@ def test_an_episode_interrupted_mid_pulse_records_its_pulses(tmp_path: Path) -> 
     assert stall.validity.actuation == "interrupted"
     assert stall.injected["interrupted"] is True
     assert len(stall.injected["pulses"]) >= 1
+    # Fable's lens-a closure, K5: an interrupted episode's pulses say where
+    # they landed in the step loop, as a whole episode's do.
+    assert all("landed" in pulse for pulse in stall.injected["pulses"])
     assert null.injected == {"method": "none", "skipped": "run_ended"}
 
 
@@ -1152,3 +1155,4 @@ def test_pulses_delivered_before_a_failing_one_are_on_record(
     assert stall.status == "not_actuated"
     assert "did not stop" in stall.injected["error"]
     assert len(stall.injected["pulses"]) == 2
+    assert all("landed" in pulse for pulse in stall.injected["pulses"])

@@ -466,9 +466,11 @@ class InjectionRun:
 
     def _mark_landings(self, injected: dict[str, Any]) -> None:
         """Where each pulse landed in the step loop (A.4, #218 R12), from the
-        hook records read by the end of its recovery."""
+        hook records read by the end of its recovery, or by the run's end
+        for an episode interrupted mid-action. A pulse cut short counts."""
         with self._lock:
-            assert self.channel is not None
+            if self.channel is None:
+                return
             view = self.channel.view
             for pulse in injected.get("pulses") or ():
                 pulse["landed"] = view.landing(int(pulse["stop_sent_ns"]))
@@ -597,7 +599,11 @@ class InjectionRun:
         """An episode the run never finished: interrupted mid-action, with
         what was done, or skipped, after a recovery timeout or the run's end."""
         if self._interrupted is not None and self._interrupted[0] == index:
-            return _skipped(truth, index, episode, self._interrupted[1], "interrupted")
+            done = self._interrupted[1]
+            if episode.row.method == PULSE:
+                # The stops it sent landed somewhere, as a whole episode's do.
+                self._mark_landings(done)
+            return _skipped(truth, index, episode, done, "interrupted")
         reason = "run_ended" if progress.failure else _timeout_reason(progress)
         injected = {"method": episode.row.method, "skipped": reason}
         return _skipped(truth, index, episode, injected, "skipped")
