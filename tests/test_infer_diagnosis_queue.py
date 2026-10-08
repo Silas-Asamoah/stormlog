@@ -214,6 +214,18 @@ def test_without_pause_records_a_long_stop_in_admissions_is_untestable(
     assert "admissions stopped for up to 310.1 ms" in paused.reason
 
 
+def test_pause_records_rule_out_a_pause_only_where_nothing_was_lost(
+    tmp_path: Path,
+) -> None:
+    # The hook records pauses, but reports a dropped record during the burst.
+    engine = Engine(max_num_seqs=4, dropped_from=BURST_AT + 500 * MS)
+
+    (finding,) = _assess(tmp_path, _requests(), engine).findings
+
+    paused = {alt.kind: alt for alt in finding.alternatives}["scheduler_paused"]
+    assert paused.reason.startswith("records may have been lost over the waits")
+
+
 def test_an_older_log_cannot_tell_ingress_from_the_queue(tmp_path: Path) -> None:
     engine = Engine(max_num_seqs=4, enqueued_records=False, observes=None)
     assessment = _assess(tmp_path, _requests(), engine)

@@ -384,8 +384,13 @@ def _scheduler_paused(
         )
     longest = max(_admission_gap(steps, wait) for wait in waits)
     floor = resolve_threshold(QUEUE_COMPETITOR_FLOOR, context.thresholds)[0]
+    records = (
+        "records may have been lost over the waits"
+        if context.observes(producer, "pause")
+        else "no pause records"
+    )
     reason = (
-        f"no pause records; admissions stopped for up to {longest / 1e6:.1f} ms "
+        f"{records}; admissions stopped for up to {longest / 1e6:.1f} ms "
         f"while requests waited, against a wait excess of {excess.estimate / 1e6:.1f} ms"
     )
     if longest < floor * excess.estimate:
