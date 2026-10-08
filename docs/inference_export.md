@@ -59,7 +59,8 @@ A setting that cannot be used exits 2 before anything is sent, and no
 artifact is written (see the [exit-code contract](report_contract.md)):
 - an address that is not `HOST:PORT`;
 - an export flag given without `--prometheus-listen` or `--prometheus-textfile-dir`, even with its default value;
-- a slot another live writer holds;
+- a slot another live writer holds, or whose lock is not a plain file (a
+  link, a directory);
 - a textfile directory that is missing, holds the artifact, or cannot be
   written;
 - a matrix over the budget.
@@ -182,6 +183,11 @@ Delete it by hand once you know its writer is gone. On a system without
 `flock`, a lock is taken over only when its writer is certainly gone: its
 process no longer exists, or that pid now belongs to a process with a
 different start time.
+
+Neither the lock nor the temporary file below is ever opened through a
+link: whoever else can write the directory cannot make a write land in
+another file. A lock that is a link, or not a regular file, refuses the
+run; a temporary file that is one fails that write.
 
 Each write goes to a temporary file in the same directory, which then
 replaces the real one, so a reader never sees half a file. A failed write
