@@ -292,7 +292,7 @@ confirmed, and pulses the injector never recorded are among the tests.
 | F2 | at least one victim request was preempted |
 | F3 | the victim's cached fraction fell below 0.5 |
 | F4a | no hook step started during a pulse |
-| F4b | the stopped state was confirmed. Whether the engine kept stepping in every pulse with a victim request in flight is recorded but doesn't gate: if it didn't, `added_mechanisms` adds `host_stall@engine_core` to the realized set, as A.4 says |
+| F4b | the stopped state was confirmed. Whether the engine kept stepping in every pulse with a victim request in flight is recorded but doesn't gate: if it didn't, `added_mechanisms` adds `host_stall@engine_core` to the realized set, as A.4 says. #218 claims `host_stall@api_server` as a fault only past its `bounded_placement` gate (at least half the victim's sends placed on the engine's clock). The victim runs on the engine's host, so every send is placed; a run on another clock is `incomparable` (the harness's `same_clock`), and a claim that fails the gate anyway is an observation (`eligibility.failed`), scored as an `ineligible` miss |
 | F5 | the stopped state was confirmed, and the peer rank's NCCL wait lengthened (`Actions.peer_wait_extended`, from Nsight) |
 | T1 | the waits stayed within the baseline (no window's median wait above its p95; the check's value is the highest window median over the p95, so a twin that just crossed it is told from one that saturated) |
 | T2 | nothing was preempted |
@@ -353,8 +353,9 @@ config)` turns the runs into the claims. The rules are frozen before any
 evaluation data is drawn.
 
 **One finding, one episode.** A finding that qualifies for several episodes
-of a run goes to the one whose effect began latest at or before its start
-(`assign_findings`), so it is never credited twice.
+of a run goes to the one whose effect began latest at or before its start,
+else, when every one began after it, to the earliest (`assign_findings`), so
+it is never credited twice.
 
 **The candidate set.** These are every finding, of any kind, subject or role,
 that passes the temporal rule, less the neutral secondaries. The set is
@@ -364,9 +365,11 @@ ranked by #218's total `rank`, and top-1 and top-3 are taken over it.
   `S = [effect_onset − pre_grace, effect_end + grace(kind)]`. Here
   `pre_grace` is the finding's `window.resolution_ns`, at most
   `ScoreConfig.max_resolution_ns` (30 s: #218's resolution is its first
-  flagged window's span, and it joins 1 s windows up to its 30 s span cap),
-  plus its `window.uncertainty_ns`, at most `ScoreConfig.max_uncertainty_ns`
-  (5 s; #218 emits none on one host). Both bounds are fixed, frozen with
+  flagged window's span, and it joins 1 s windows up to its default 30 s
+  span cap, `selection.span_cap_seconds`; a diagnosis run with a wider
+  override is clipped here and counted), plus its `window.uncertainty_ns`,
+  at most `ScoreConfig.max_uncertainty_ns` (5 s; #218 emits none on one
+  host). Both bounds are fixed, frozen with
   `score_v1`, never taken from a claim. A run's problems count, separately,
   the findings that claim more resolution, those that claim more
   uncertainty, and those whose resolution is longer than their own window

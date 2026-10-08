@@ -125,10 +125,11 @@ class ScoreConfig:
     # bounded clock uncertainty. Both bounds are fixed, never taken from a
     # claim. #218's resolution is its first flagged window's span, and it
     # joins 1 s windows up to its span cap (selection.span_cap_seconds,
-    # 30 s); it emits no uncertainty on one host, and 5 s bounds a clock
-    # pairing generously. Unbounded, a claim made
-    # long before a fault was credited to it, and one in a negative run's
-    # exposure was taken by a later episode.
+    # 30 s by default; a wider override is clipped here and counted); it
+    # emits no uncertainty on one host, and 5 s bounds a clock pairing
+    # generously. Unbounded, a claim made long before a fault was credited
+    # to it, and one in a negative run's exposure was taken by a later
+    # episode.
     max_resolution_ns: int = 30_000_000_000
     max_uncertainty_ns: int = 5_000_000_000
 
