@@ -411,9 +411,11 @@ def _blind_of(cleanup: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 def _cleanups(output: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
     """Every cleanup the experiment recorded: each run's server and
-    treatments, and each prelude's server."""
+    treatments, and each prelude's server. A record a killed runner tore
+    is passed over: its attempt is still ``.partial``, and its journal
+    stands for its launches."""
     for path in sorted((output / "runs").glob("*/run.json")):
-        record = json.loads(path.read_text())
+        record = _read_object(path)
         if record.get("cleanup"):
             yield path.parent.name, record["cleanup"]
         for process in record.get("processes", []):
@@ -421,7 +423,16 @@ def _cleanups(output: Path) -> Iterator[tuple[str, Mapping[str, Any]]]:
                 yield f"{path.parent.name} {process['name']}", process["cleanup"]
     for name in ("cleanup.json", "step-cleanup.json"):
         for path in sorted((output / "preludes").glob(f"*/{name}")):
-            yield f"prelude {path.parent.name}", json.loads(path.read_text())
+            yield f"prelude {path.parent.name}", _read_object(path)
+
+
+def _read_object(path: Path) -> dict[str, Any]:
+    """A JSON object from a file, or an empty one if it cannot be read."""
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _interrupted_labels(runs: Path) -> set[str]:

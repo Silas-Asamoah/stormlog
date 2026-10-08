@@ -452,6 +452,24 @@ def test_an_attempt_that_recorded_its_state_keeps_it_on_resume(
     assert index.count(f'"{label}"') == 1
 
 
+def test_a_run_json_a_killed_runner_tore_is_read_past_on_resume(
+    tmp_path: Path,
+) -> None:
+    # fable-213-delta's N2: the runner was killed while writing run.json;
+    # its artifacts hold the state, so the attempt keeps it, but reading
+    # the cleanups crashed the resume with a JSONDecodeError.
+    document = _plan(_port(), blocks=1)
+    records = _run(tmp_path, document)
+    exp = tmp_path / "exp"
+    label = next(r["label"] for r in records if r["arm"] == "watch")
+    _unrenamed(exp, label, run_json=True)
+    run_json = exp / "runs" / f"{label}.partial" / "run.json"
+    text = run_json.read_text()
+    run_json.write_text(text[: len(text) // 2])
+    (only,) = _run(tmp_path, document, resume=True)
+    assert (only["label"], only["state"]) == (label, "completed")
+
+
 def test_a_cause_or_an_outcome_must_name_an_interrupted_attempt(
     tmp_path: Path,
 ) -> None:
