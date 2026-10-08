@@ -21,6 +21,7 @@ from stormlog.infer.diagnosis_selection import (
     _Censoring,
     fisher_one_sided,
     nearest_rank,
+    reference_threshold,
     select,
 )
 from tests.diagnosis_scenarios import MS, Engine, build_run, poisson_free
@@ -247,3 +248,19 @@ def test_a_failed_request_is_beyond_every_threshold() -> None:
 
     assert _censoring(request).value(request, E2E, 11 * SECOND) == (FAILED, True)
     assert json.dumps(FAILED)  # an integer: reports can carry it
+
+
+def test_a_failing_reference_still_has_a_latency_threshold() -> None:
+    """100 requests succeeded and 14 failed: the p90 is the successes', so
+    a window of 20 failures is still above it, and flagged."""
+    known = [100 * MS + index * MS for index in range(100)] + [FAILED] * 14
+
+    threshold = reference_threshold(known)
+    reference_above = sum(1 for value in known if value > threshold)
+
+    # Over the failures too, the p90 would be the failure itself.
+    assert nearest_rank(known, 0.9) == FAILED
+
+    assert threshold == 189 * MS
+    assert reference_above == 10 + 14
+    assert fisher_one_sided(20, 0, reference_above, 114 - reference_above) < 0.01
