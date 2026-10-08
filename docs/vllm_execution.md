@@ -436,6 +436,13 @@ output tokens and nothing read from its counters; the coverage block counts
 such steps. A request's `input_tokens` is its prompt at the first sighting;
 a `resumable` request's later prompts are on its memberships.
 
+Each wall stamp the import copies keeps its second read beside it
+(`start_wall_after_ns`, `schedule_end_wall_after_ns` and
+`completed_wall_after_ns` on a step, `admitted_wall_after_ns` and
+`enqueued_wall_after_ns` on a request, and `wall_after_ns` in a finish), so
+a reader can place the stamp on the shared wall clock with a stated bound;
+it is null for a hook from before the field.
+
 Every record the import writes names its epoch and its `source_seq_max` in
 its metadata: the `seq` of the last raw record it was derived from, so an
 import whose read had reached that record could have written it. For a step
