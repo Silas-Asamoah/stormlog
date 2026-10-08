@@ -25,7 +25,7 @@ LOOP_BASELINE_WINDOW_NS = "host_stall.baseline_window_ns"
 LOOP_MIN_BUSY_STEPS = "host_stall.min_busy_steps"
 LOOP_MATCHED_BIN_MIN_STEPS = "host_stall.matched_bin_min_steps"
 LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
-QUEUE_WITNESS_SHARE = "queue_saturation.witness_step_share"
+QUEUE_WITNESS_SHARE = "queue_saturation.witness_request_share"
 QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
 QUEUE_STALL_SHARE = "queue_saturation.stall_excess_share"
 QUEUE_FRONT_SHARE = "queue_saturation.front_excess_share"
@@ -72,6 +72,9 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         LOOP_HEARTBEAT_GRACE_NS: 3_000_000_000.0,
         # A capacity witness: the share of steps spanning the waits that ran
         # at max_num_seqs or at the max_num_batched_tokens budget.
+        # A capacity witness: the share of the subject's requests whose wait
+        # ran mostly through steps at capacity (max_num_seqs, counting slots
+        # freed in the step before, or the max_num_batched_tokens budget).
         QUEUE_WITNESS_SHARE: 0.5,
         # The queue explains the incident when its wait excess is at least
         # this share of the TTFT excess.

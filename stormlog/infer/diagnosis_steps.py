@@ -3,14 +3,15 @@
 A step is one ``schedule()`` call and the output processing that completed
 it: when it started and completed on the engine's monotonic clock, how many
 requests it ran, how many tokens it scheduled, how many it admitted for the
-first time, and how many it preempted. Pauses and resets come from the
-import's stages and from the dated facts it kept in the epoch's summary.
+first time, how many it preempted, and how many slots the step before freed
+that it did not refill. Pauses and resets come from the import's stages and
+from the dated facts it kept in the epoch's summary.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from statistics import median
 from typing import Any, Sequence
 
@@ -33,6 +34,10 @@ class Step:
     admitted: int  # requests first scheduled in it
     preempted: int
     line: Line
+    # Requests that finished in the step before and do not run in this one:
+    # under async scheduling a slot freed at a step's end is refilled one
+    # step late, so a full engine's step can run that many short.
+    refill: int = 0
 
 
 @dataclass(frozen=True)
@@ -204,12 +209,34 @@ def _loop_step(
 def steps_of(view: RunView, producer: str) -> Steps:
     """The steps, pause transitions and admissions of one engine."""
     admitted = _first_sightings(view, producer)
-    steps = [
-        _step(line, iteration, admitted.get(iteration.iteration_ref.id, 0))
-        for ref, (line, iteration) in view.iterations.items()
-        if ref.producer_id == producer and iteration.start_ns is not None
-    ]
+    steps = sorted(
+        (
+            _step(line, iteration, admitted.get(iteration.iteration_ref.id, 0))
+            for ref, (line, iteration) in view.iterations.items()
+            if ref.producer_id == producer and iteration.start_ns is not None
+        ),
+        key=lambda step: step.start_ns,
+    )
+    sets = _attempt_sets(view, producer)
+    owed = refills(
+        [frozenset(sets["members"].get(step.iteration, ())) for step in steps],
+        [frozenset(sets["finished"].get(step.iteration, ())) for step in steps],
+    )
+    steps = [replace(step, refill=n) for step, n in zip(steps, owed)]
     return Steps(producer, steps, _pauses(view, producer))
+
+
+def refills(
+    members: Sequence[frozenset[str]], finished: Sequence[frozenset[str]]
+) -> list[int]:
+    """Per step, in schedule order, the requests that finished in the step
+    before and are not among its members. A request vLLM could not foresee
+    finishing (an end of sequence) was already planned into the next step,
+    where it is discarded, so it is a member there and not counted twice."""
+    owed = [0] * len(members)
+    for index in range(1, len(members)):
+        owed[index] = len(finished[index - 1] - members[index])
+    return owed
 
 
 def _step(line: Line, iteration: IterationEvent, admitted: int) -> Step:
@@ -295,5 +322,6 @@ __all__ = [
     "Steps",
     "loop_steps",
     "merge_intervals",
+    "refills",
     "steps_of",
 ]
