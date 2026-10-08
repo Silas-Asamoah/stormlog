@@ -332,6 +332,52 @@ def test_coverage_is_where_heartbeats_show_nothing_lost(tmp_path: Path) -> None:
     assert first["start_wall_ns"] == T0 + WALL_OFFSET
 
 
+def _backlog(
+    *, read_to: int | None = None, dropped_after: bool = False
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Heartbeat 2 was written ahead of two records accepted before its
+    stamp (``pending``): they take seqs 3 and 4, then heartbeat 5."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=2),  # 2
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND - 5),  # 3: accepted before 2
+        pause("PAUSED_ALL", "UNPAUSED", T0 + SECOND - 4),  # 4
+        heartbeat(
+            T0 + 2 * SECOND,
+            4,
+            pending=0,
+            dropped={"pause": 1} if dropped_after else {},
+        ),  # 5
+    ]
+    return records[: read_to + 1] if read_to is not None else records, {}
+
+
+def test_a_span_reaches_past_the_records_its_heartbeat_was_ahead_of(
+    tmp_path: Path,
+) -> None:
+    records, _ = _backlog()
+    coverage = _coverage(tmp_path, records)
+    # 1 to 2 vouches for every record accepted by 2's stamp, through seq 4;
+    # 2 to 5 joins it.
+    assert _spans(coverage) == [(1, 5)]
+
+
+def test_a_span_is_not_whole_until_its_pending_records_are_read(
+    tmp_path: Path,
+) -> None:
+    """A live read that ends at heartbeat 2, before the pause it was ahead
+    of, must not vouch that no pause happened before 2's stamp."""
+    records, _ = _backlog(read_to=2)
+    assert _spans(_coverage(tmp_path, records)) == []
+
+
+def test_a_pending_record_lost_at_write_breaks_the_span(tmp_path: Path) -> None:
+    """A record lost while being written counts only in a later heartbeat."""
+    records, _ = _backlog(dropped_after=True)
+    assert _spans(_coverage(tmp_path, records)) == []
+
+
 def test_coverage_needs_every_record_between_two_heartbeats(tmp_path: Path) -> None:
     records = [
         hello("engine", PID, START),  # 0: a hook that does not say what it observes
