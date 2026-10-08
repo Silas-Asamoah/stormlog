@@ -47,6 +47,7 @@ from tests.vllm_execution_helpers import (
     member,
     pause,
     scheduled,
+    stamp,
     terminal,
     write_epoch,
 )
@@ -605,3 +606,31 @@ def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> No
     # refer to: it stays a dated fact, and its preemption refers to the request.
     assert stage.iteration_ref is None
     assert after.summary["epochs"][EPOCH]["unanchored"][0]["seq"] == 3
+
+
+# ---------------------------------------------------------------- brackets
+
+
+def test_records_keep_each_stamp_s_second_wall_read(tmp_path: Path) -> None:
+    step = scheduled(0, T0, [member(OWN0, scheduled=8)])
+    step.update(stamp(T0, "start_"), **stamp(T0 + 200_000, "end_"))
+    result = _reduce(
+        tmp_path,
+        _run(
+            {**alias(OWN0, f"chatcmpl-{X0}", T0 - 30), **stamp(T0 - 30)},
+            step,
+            {**terminal(OWN0, T0 + SECOND - 5), **stamp(T0 + SECOND - 5)},
+            {**completed(0, T0 + SECOND, [done(OWN0)]), **stamp(T0 + SECOND)},
+            heartbeat(T0 + 2 * SECOND, 5),
+        ),
+    )
+
+    (iteration,) = _of(result, IterationEvent)
+    after = WALL_OFFSET + 800
+    assert iteration.metadata["start_wall_after_ns"] == T0 + after
+    assert iteration.metadata["schedule_end_wall_after_ns"] == T0 + 200_000 + after
+    assert iteration.metadata["completed_wall_after_ns"] == T0 + SECOND + after
+    (request,) = _of(result, RequestEvent)
+    assert request.metadata["admitted_wall_after_ns"] == T0 - 30 + after
+    (membership,) = _of(result, MembershipEvent)
+    assert membership.metadata["finish"]["wall_after_ns"] == T0 + SECOND - 5 + after

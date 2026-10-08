@@ -720,6 +720,7 @@ class _EpochReducer:
             "admission_seq": execution.alias_seq,
             "admission_seen": execution.alias is not None,
             "admitted_wall_ns": _integer(alias.get("wall_ns")),
+            "admitted_wall_after_ns": _integer(alias.get("wall_after_ns")),
             # Entering the scheduler's waiting queue, on the engine thread;
             # null when the hook does not record it or the record was lost.
             "enqueued_mono_ns": _integer(enqueued.get("mono_ns")),
@@ -994,6 +995,7 @@ def _finish(terminal: dict[str, Any], *, in_step: bool) -> dict[str, Any]:
         "output_tokens": terminal.get("output_tokens"),
         "mono_ns": terminal.get("mono_ns"),
         "wall_ns": terminal.get("wall_ns"),
+        "wall_after_ns": terminal.get("wall_after_ns"),
         "in_step": in_step,
     }
 
@@ -1012,9 +1014,12 @@ def _iteration_metadata(
         "epoch": item.scheduled.epoch,
         "source_seq_max": item.final_seq,
         "start_wall_ns": data.get("start_wall_ns"),
+        "start_wall_after_ns": data.get("start_wall_after_ns"),
         "schedule_end_wall_ns": data.get("end_wall_ns"),
+        "schedule_end_wall_after_ns": data.get("end_wall_after_ns"),
         "schedule_end_mono_ns": data.get("end_mono_ns"),
         "completed_wall_ns": done.get("wall_ns"),
+        "completed_wall_after_ns": done.get("wall_after_ns"),
         "update_failed": _update_failed(item),
         "scheduler_residence_ns": (
             end - start if start is not None and end is not None else None

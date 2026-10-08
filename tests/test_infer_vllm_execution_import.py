@@ -201,24 +201,37 @@ def _newer_hook(record: dict[str, Any]) -> dict[str, Any]:
 
 
 # What the import takes from a later hook's records: stages, the request's
-# enqueue, and each record's source sequence, which the inserted records shift.
+# enqueue, the second wall read of each stamp, and each record's source
+# sequence, which the inserted records shift.
 _LATER_REQUEST_FIELDS = (
     "enqueued_mono_ns",
     "enqueued_wall_ns",
     "enqueued_wall_after_ns",
     "structured_output",
 )
+_LATER_WALL_AFTER = (
+    "admitted_wall_after_ns",
+    "start_wall_after_ns",
+    "schedule_end_wall_after_ns",
+    "completed_wall_after_ns",
+)
 
 
 def _without_later_evidence(record: dict[str, Any]) -> dict[str, Any]:
     if "metadata" not in record:
         return record  # not the import's: the client's own v1 records
-    dropped = ["source_seq_max"]
+    dropped = ["source_seq_max", *_LATER_WALL_AFTER]
     if record["event_type"] == "infer.request":
         dropped.extend(_LATER_REQUEST_FIELDS)
     metadata = {
         key: value for key, value in record["metadata"].items() if key not in dropped
     }
+    if isinstance(metadata.get("finish"), dict):
+        metadata["finish"] = {
+            key: value
+            for key, value in metadata["finish"].items()
+            if key != "wall_after_ns"
+        }
     return {**record, "metadata": metadata}
 
 
