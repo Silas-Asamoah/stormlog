@@ -525,6 +525,36 @@ def test_a_recovery_that_can_never_hold_ends_the_episode_at_once(
     assert (decision, slept) == (TIMEOUT, [])
 
 
+def test_the_baseline_is_measured_with_the_plans_thresholds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The run measured its baseline with the design's default thresholds,
+    # so a plan's long_gap_factor never reached which baseline gaps were
+    # long (the allowance) or too long (the dose check). Gaps of 20 ms with
+    # one in 100 of 50 ms: long at a factor of 2 (over 40 ms) are the 50 ms
+    # ones; at a factor of 3 (over 60 ms), none.
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+    from stormlog.infer.qualify.recovery import Signals
+
+    second, ms = 1_000_000_000, 1_000_000
+    gaps = [50 if index % 100 == 50 else 20 for index in range(2000)]
+    steps = [sum(gaps[:index]) * ms for index in range(len(gaps) + 1)]
+    signals = Signals(in_flight=[(0, 10**18)], step_starts=steps)
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    for factor, long in ((2.0, 20), (3.0, 0)):
+        thresholds = {**record["thresholds"], "long_gap_factor": factor}
+        plan = parse_plan({**record, "thresholds": thresholds})
+        run = InjectionRun(
+            plan,
+            RunDirectory(tmp_path / "runs", "q221-w"),
+            Server("", "m", tmp_path, {}),
+        )
+        monkeypatch.setattr(run, "_signals", lambda: signals)
+        assert run._measure_baseline(0, 45 * second).steps.long_count == long
+
+
 def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
     from examples.qualification.__main__ import _targets
 
