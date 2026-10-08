@@ -315,6 +315,31 @@ def test_an_instrumentation_warning_exits_3_without_a_fault_claim(
     assert report["verdict"]["exit_code"] == 3
 
 
+def test_a_frontend_stall_with_most_sends_unplaced_is_no_fault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only 60 of the subject's 160 sends can be placed (a wall clock
+    discontinuity across the others' brackets, say), all of them slow: the
+    excess of those that can is no bound on the subject's."""
+    context = _context(tmp_path, _slow_front(), Engine(max_num_seqs=64))
+    subject = context.subjects()[0]
+    slow = [r for r in subject.requests if r.startswith("s")]
+    unplaced = set(subject.requests) - set(slow[:60])
+    values = context.segment_values
+
+    def placed_only(request_ids: list[str], name: str) -> list[float]:
+        if name == "send_to_ingress":
+            request_ids = [r for r in request_ids if r not in unplaced]
+        return values(request_ids, name)
+
+    monkeypatch.setattr(context, "segment_values", placed_only)
+
+    (finding,) = assess_api_server(context, subject).findings
+
+    assert finding.gates["bounded_placement"] is False
+    assert finding.claim == "observation"
+
+
 def test_a_frontend_stall_says_how_many_requests_it_placed(tmp_path: Path) -> None:
     # The wall clock steps 50 ms back during the slow stretch: a send before
     # the step cannot be paired with an admission after it.
