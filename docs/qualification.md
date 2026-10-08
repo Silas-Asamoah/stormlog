@@ -279,14 +279,19 @@ probe, 0.8% prefill steps of 250 ms recovered at the `SIGCONT` in 3 of 20,
 and timed out in 8. Recovery checks G0's dose check itself, on every run:
 a series whose baseline gaps too long for a hold (past twice its p99 and
 past the cap) recur at one or more per cadence hold, at the baseline's
-rate, never recovers, and `recovery_blocked` says so (`dose_check_failed:
-16 of 2021 busy step gaps in the baseline are too long for a hold, …: 3.6
-per 10 s hold`). With 250 ms prefill steps at 0.4% every seed of 20 is
-refused; at 0.8%, 19, and the one whose p99 is itself a prefill step
-recovers at once. G2's baseline with three 1 s pauses has 0.67 such gaps
-per hold, and passes.
-If G0 fails the check, step kinds go into `Signals`, and prefill steps
-are left out of the hold instead. Where twice the p99 exceeds 300 ms (2%
+rate (`DOSE_CHECK_TOO_LONG_PER_HOLD`, 1.0), never recovers, and
+`recovery_blocked` says so (`dose_check_failed: 16 of 2021 busy step gaps
+in the baseline are too long for a hold, …: 3.6 per 10 s hold`). Which
+engines it blocks: with 250 ms prefill steps at 0.4%, every seed of 20; at
+0.8%, 19 (the one whose p99 is itself a prefill step recovers at once); a
+5 ms engine with nine 250 ms stalls in its 45 s baseline (2 per hold).
+Which it passes: 25 ms prefill steps; G2's baseline with three 1 s pauses
+(0.67 per hold); and the fake engine at its defaults, as in the end-to-end
+runs. The episode is published `recovery_incomplete` with that reason,
+the episodes the timeout skips say `dose_check_failed`, and the scorer
+counts it as not evaluable (`not_evaluable_reason`): never a miss, never a
+pass. If G0 fails the check, step kinds go into `Signals`, and prefill
+steps are left out of the hold instead. Where twice the p99 exceeds 300 ms (2%
 prefill steps of 250 ms), no gap is too long for a hold, the check
 passes, and 300 ms stalls every 2 s pass in 15 of 20, as they did before
 the tolerance: G0's step times still have to show every dose longer than
@@ -460,8 +465,8 @@ a coverage gap.
 
 | Claim | Population | Gate |
 | --- | --- | --- |
-| Accuracy per episode type (top-1 at L2) | `valid` fault episodes, one stratum for every type the support matrix (`ScoreConfig.supported_types`, required) declares. A declared stratum with no valid episode has no bound and fails; each records its excluded episodes by status | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
-| False-positive rate | negative runs: a run holding exactly one `valid` episode of C.5's eight negative types (T1, T2, T3, T3b, H0, W1, P, N). A run's false claims are counted over its whole negative exposure: the measured window less the priming and the span of every attempted fault or instrumentation episode, from its onset to its effect end plus the longest grace of any kind (a finding of any kind is assigned to the episode up to its own grace). A claim's window is clipped to the measured window and placed when at least half of what is left lies in the exposure, wherever it starts: a claim over the whole run is the plainest false positive. A claim with no window counts unless one of the run's injected faults expects its kind; then it may be about that fault, and is reported as unplaced (never credited to it either). A claim on another clock than the run's can't be placed, so it counts (failing closed), and the run's problems say how many findings were off its clock. I1 and outages are not negatives; a run with two negatives is reported, not counted. A unit needs at least `ScoreConfig.min_exposure_ns` (60 s) of exposure, and its negative episode's own window wholly inside it. Every run with a negative that isn't a unit is counted by why (its episode's status, `protocol_failure`, `several_negatives`, `exposure_below_minimum` or `negative_outside_exposure`) in `excluded_negative_runs`, since each one shrinks the denominator: 0 of 52 bounds the rate at 0.056 | upper bound ≤ 0.05 |
+| Accuracy per episode type (top-1 at L2) | `valid` fault episodes, one stratum for every type the support matrix (`ScoreConfig.supported_types`, required) declares. A declared stratum with no valid episode has no bound and fails; each records its excluded episodes by status, and, under `not_evaluable`, those whose recovery could never hold by why (`dose_check_failed`, `baseline_too_thin`): an engine the rules can't judge is not evaluable, never a miss and never a pass | Clopper–Pearson lower bound ≥ 0.78 in every stratum |
+| False-positive rate | negative runs: a run holding exactly one `valid` episode of C.5's eight negative types (T1, T2, T3, T3b, H0, W1, P, N). A run's false claims are counted over its whole negative exposure: the measured window less the priming and the span of every attempted fault or instrumentation episode, from its onset to its effect end plus the longest grace of any kind (a finding of any kind is assigned to the episode up to its own grace). A claim's window is clipped to the measured window and placed when at least half of what is left lies in the exposure, wherever it starts: a claim over the whole run is the plainest false positive. A claim with no window counts unless one of the run's injected faults expects its kind; then it may be about that fault, and is reported as unplaced (never credited to it either). A claim on another clock than the run's can't be placed, so it counts (failing closed), and the run's problems say how many findings were off its clock. I1 and outages are not negatives; a run with two negatives is reported, not counted. A unit needs at least `ScoreConfig.min_exposure_ns` (60 s) of exposure, and its negative episode's own window wholly inside it. Every run with a negative that isn't a unit is counted by why (its episode's status, or why it was not evaluable, `protocol_failure`, `several_negatives`, `exposure_below_minimum` or `negative_outside_exposure`) in `excluded_negative_runs`, since each one shrinks the denominator: 0 of 52 bounds the rate at 0.056 | upper bound ≤ 0.05 |
 | False claims per negative hour | the same claims over the same exposure, summed over the negative runs | descriptive: the exact Poisson bound |
 | Incident attribution | fault episodes with victim impact | descriptive |
 | Condition localization | fault episodes. An eligible finding of the label's kind at its location counts, in any role, cause or severity | descriptive |
