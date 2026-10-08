@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from stormlog._export import otlp_http
 from stormlog._export.otlp_encoding import JsonEncoding, ProtobufEncoding
 from stormlog._export.otlp_http import (
     AMBIGUOUS,
@@ -37,6 +38,7 @@ from stormlog._export.otlp_http import (
 )
 from stormlog._export.resolver import Resolver
 from stormlog._export.spans import KIND_CLIENT, Scope, Span
+from stormlog._export.watchdog import Watchdog
 from tests.fake_otlp_collector import (
     DRIBBLE,
     RESET,
@@ -49,6 +51,22 @@ from tests.fake_otlp_collector import (
 pb2 = pytest.importorskip("opentelemetry.proto.collector.trace.v1.trace_service_pb2")
 
 SCOPE = Scope("stormlog.infer", "0")
+
+
+@pytest.fixture(autouse=True)
+def _stop_watchdogs(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # Each transport starts its own watchdog thread. In a run HttpSink.close
+    # stops it; these tests use transports alone, so their end does.
+    made: list[Watchdog] = []
+
+    def watchdog(**kw: Any) -> Watchdog:
+        made.append(Watchdog(**kw))
+        return made[-1]
+
+    monkeypatch.setattr(otlp_http, "Watchdog", watchdog)
+    yield
+    for dog in made:
+        dog.stop()
 
 
 def _body(count: int = 3, encoding: Any = None) -> bytes:
