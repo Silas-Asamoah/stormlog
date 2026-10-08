@@ -73,6 +73,78 @@ class InferenceRequestEvent:
 
 
 @dataclass(frozen=True)
+class InferenceDispatchEvent:
+    """A request leaving the client: written when it is sent, before any
+    outcome, so a reader of a growing artifact sees requests in flight."""
+
+    session_id: str
+    request_id: str
+    x_request_id: str | None
+    case_id: str
+    phase: str
+    intended_at_ns: int | None
+    started_at_ns: int
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record.update(
+            {
+                "schema_version": INFER_SCHEMA_VERSION,
+                "event_type": "infer.dispatch",
+                "timestamp_ns": self.started_at_ns,
+            }
+        )
+        return record
+
+
+@dataclass(frozen=True)
+class InferenceFirstContentEvent:
+    """A streamed request's first content piece reaching the client, written
+    when it arrives, so its time to first token is known before it ends."""
+
+    session_id: str
+    request_id: str
+    x_request_id: str | None
+    case_id: str
+    phase: str
+    first_content_at_ns: int
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record.update(
+            {
+                "schema_version": INFER_SCHEMA_VERSION,
+                "event_type": "infer.first_content",
+                "timestamp_ns": self.first_content_at_ns,
+            }
+        )
+        return record
+
+
+@dataclass(frozen=True)
+class InferencePhaseStartEvent:
+    """A phase beginning to send: written at its start, while the phase's
+    ``infer.phase_window`` record is written only once it has drained."""
+
+    session_id: str
+    case_id: str
+    phase: str
+    arrival_mode: str
+    started_at_ns: int
+
+    def to_record(self) -> dict[str, Any]:
+        record = asdict(self)
+        record.update(
+            {
+                "schema_version": INFER_SCHEMA_VERSION,
+                "event_type": "infer.phase_start",
+                "timestamp_ns": self.started_at_ns,
+            }
+        )
+        return record
+
+
+@dataclass(frozen=True)
 class InferenceSystemSample:
     """Best-effort telemetry from the machine running the endpoint client."""
 
@@ -134,6 +206,10 @@ class JsonlEventWriter:
         if self._handle is not None:
             self._handle.close()
             self._handle = None
+
+    @property
+    def is_open(self) -> bool:
+        return self._handle is not None
 
     def append(self, record: dict[str, Any]) -> None:
         if self._handle is None:

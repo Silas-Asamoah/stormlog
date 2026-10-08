@@ -3,6 +3,7 @@
 import json
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +38,12 @@ class SleepingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        on_sent: Callable[[int], None] | None = None,
+        on_first_content: Callable[[int], None] | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
+        if on_sent is not None:
+            on_sent(started_at_ns)
         with self.lock:
             self.calls += 1
             self.active += 1

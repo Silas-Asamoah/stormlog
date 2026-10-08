@@ -10,7 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 
 
 class EndpointHTTPError(RuntimeError):
@@ -219,11 +219,17 @@ class OpenAIChatCompletionsClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        on_sent: Callable[[int], None] | None = None,
+        on_first_content: Callable[[int], None] | None = None,
     ) -> ChatCompletionResult:
         """Send one chat completion.
 
         ``request_id`` goes out as ``X-Request-Id``, which vLLM embeds in its
         own request id and in the ``gen_ai.request.id`` of the request span.
+        ``on_sent`` is called with the send's wall stamp just before the
+        request goes out, and ``on_first_content`` with the first streamed
+        content piece's arrival on that clock (the send stamp plus the TTFT);
+        both run on the calling thread, so they must return quickly.
         """
         payload = {
             **self.extra_body,
@@ -254,6 +260,8 @@ class OpenAIChatCompletionsClient:
 
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()
+        if on_sent is not None:
+            on_sent(started_at_ns)
         try:
             with self._opener.open(
                 request,
@@ -264,6 +272,7 @@ class OpenAIChatCompletionsClient:
                         response=response,
                         started_at_ns=started_at_ns,
                         started_perf=started_perf,
+                        on_first_content=on_first_content,
                     )
                 return self._read_json_response(
                     response=response,
@@ -312,6 +321,7 @@ class OpenAIChatCompletionsClient:
         response: Any,
         started_at_ns: int,
         started_perf: float,
+        on_first_content: Callable[[int], None] | None = None,
     ) -> ChatCompletionResult:
         content_parts: list[str] = []
         first_chunk_perf: float | None = None
@@ -338,6 +348,10 @@ class OpenAIChatCompletionsClient:
             content_parts.append(piece)
             if first_content_perf is None:
                 first_content_perf = now_perf
+                if on_first_content is not None:
+                    on_first_content(
+                        started_at_ns + round((now_perf - started_perf) * 1e9)
+                    )
             if previous_content_perf is not None:
                 chunk_interarrival_ms.append(
                     (now_perf - previous_content_perf) * 1000.0
@@ -351,16 +365,8 @@ class OpenAIChatCompletionsClient:
             started_at_ns=started_at_ns,
             ended_at_ns=ended_at_ns,
             e2e_latency_ms=(ended_perf - started_perf) * 1000.0,
-            ttft_ms=(
-                (first_content_perf - started_perf) * 1000.0
-                if first_content_perf is not None
-                else None
-            ),
-            first_chunk_latency_ms=(
-                (first_chunk_perf - started_perf) * 1000.0
-                if first_chunk_perf is not None
-                else None
-            ),
+            ttft_ms=_elapsed_ms(started_perf, first_content_perf),
+            first_chunk_latency_ms=_elapsed_ms(started_perf, first_chunk_perf),
             chunk_interarrival_ms=chunk_interarrival_ms,
             usage=usage,
             finish_reason=finish_reason,
@@ -390,6 +396,10 @@ def _first_choice(payload: Any) -> dict[str, Any]:
         return {}
     first = choices[0]
     return first if isinstance(first, dict) else {}
+
+
+def _elapsed_ms(started_perf: float, perf: float | None) -> float | None:
+    return None if perf is None else (perf - started_perf) * 1000.0
 
 
 def _validate_http_endpoint(endpoint: str) -> None:
