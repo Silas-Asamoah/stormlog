@@ -63,6 +63,7 @@ class FakeRequest:
     # A streaming-input request: on a stop its next input is appended instead.
     resumable: bool = False
     next_input: int = 0
+    use_structured_output: bool = False
 
     def is_finished(self) -> bool:
         return self.finished
@@ -158,6 +159,10 @@ def _fake_vllm() -> dict[str, types.ModuleType]:
 
         def set_pause_state(self, pause_state: PauseState) -> None:
             self._pause_state = pause_state
+
+        def add_request(self, request: Any) -> None:
+            # A live ID's later add is a streaming-input request's next input.
+            self.requests.setdefault(request.request_id, request)
 
         def schedule(self, throttle_prefills: bool = False) -> SchedulerOutput:
             assert self.next_output is not None
@@ -520,7 +525,7 @@ def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> 
     assert refused.pause_state is PauseState.PAUSED_ALL
     records = _records(vllm["root"], "engine")
     hellos = _of(records, "hello")
-    assert [hello["observes"] for hello in hellos] == [["pause"], []]
+    assert [hello["observes"] for hello in hellos] == [["enqueued", "pause"], []]
     pauses = _of(records, "pause")
     assert [(p["from"], p["to"]) for p in pauses] == [
         ("UNPAUSED", "PAUSED_NEW"),
@@ -529,6 +534,24 @@ def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> 
     ]
     assert all(p["wall_ns"] <= p["wall_after_ns"] for p in pauses)
     assert _of(records, "scheduled")[0]["pause_state"] == "PAUSED_NEW"
+
+
+def test_a_request_entering_the_scheduler_is_stamped_once(vllm: dict[str, Any]) -> None:
+    scheduler = vllm["Scheduler"](vllm_config())
+    scheduler.add_request(FakeRequest("s-1", 4, resumable=True))
+    scheduler.add_request(FakeRequest("s-1", 6, resumable=True))  # its next input
+    scheduler.add_request(FakeRequest("g-1", 3, use_structured_output=True))
+    scheduler.add_request(types.SimpleNamespace(request_id="u-1"))  # flags unknown
+    refused = vllm["Scheduler"](vllm_config(pp=2))
+    refused.add_request(FakeRequest("r-1", 2))
+
+    assert list(scheduler.requests) == ["s-1", "g-1", "u-1"]
+    assert list(refused.requests) == ["r-1"]
+    enqueued = _of(_records(vllm["root"], "engine"), "enqueued")
+    assert [
+        (e["internal"], e["structured_output"], e["resumable"]) for e in enqueued
+    ] == [("s-1", False, True), ("g-1", True, False), ("u-1", None, None)]
+    assert all(e["wall_ns"] <= e["wall_after_ns"] for e in enqueued)
 
 
 def test_a_method_vllm_lacks_is_neither_patched_nor_claimed() -> None:
@@ -718,7 +741,7 @@ def test_hello_records_the_layout_the_profiler_and_the_process(
             "parent_process_start_ticks": parent * 10,
             "parent_process_start_ns": parent * 1_000,
         }
-    assert (engine["enabled"], engine["observes"]) == (True, ["pause"])
+    assert (engine["enabled"], engine["observes"]) == (True, ["enqueued", "pause"])
     assert _of(_records(vllm["root"], "worker"), "hello")[0]["observes"] == []
     worker_config = _of(_records(vllm["root"], "worker"), "hello")[0]["config"]
     # A worker has no scheduler: its layout is the configured one.

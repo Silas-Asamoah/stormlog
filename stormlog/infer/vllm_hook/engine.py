@@ -60,6 +60,21 @@ class EngineRecorder:
             },
         )
 
+    def on_enqueue(self, request: Any, at: dict[str, int]) -> None:
+        """A request entering the scheduler's waiting queue, stamped just
+        before ``add_request`` ran."""
+        self.writer.emit(
+            "enqueued",
+            {
+                "internal": str(request.request_id),
+                "structured_output": _optional_bool(
+                    getattr(request, "use_structured_output", None)
+                ),
+                "resumable": _optional_bool(getattr(request, "resumable", None)),
+                **at,
+            },
+        )
+
     # ------------------------------------------------------------ schedule
 
     def on_schedule(self, scheduler: Any, output: Any, start: dict[str, int]) -> None:
@@ -352,6 +367,10 @@ def _state_name(state: Any) -> str | None:
         return None
     name = getattr(state, "name", None)
     return name if isinstance(name, str) else str(state)
+
+
+def _optional_bool(value: Any) -> bool | None:
+    return None if value is None else bool(value)
 
 
 def _optional_str(value: Any) -> str | None:

@@ -176,6 +176,7 @@ def _patch_engine(settings: _Settings) -> None:
     setattr(Scheduler, "_free_request", scheduler_free)
     setattr(EngineCore, "preprocess_add_request", engine_admit)
     _patch_optional(Scheduler, "set_pause_state", "pause", _wrap_set_pause_state)
+    _patch_optional(Scheduler, "add_request", "enqueued", _wrap_add_request)
 
 
 def _patch_optional(cls: Any, name: str, kind: str, wrap: Callable[[Any], Any]) -> None:
@@ -200,6 +201,25 @@ def _wrap_set_pause_state(set_pause_state: Any) -> Any:
         return result
 
     return scheduler_set_pause_state
+
+
+def _wrap_add_request(add_request: Any) -> Any:
+    def scheduler_add_request(
+        self: Any, request: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        recorder = getattr(self, RECORDER_ATTRIBUTE, None)
+        if recorder is None:
+            return add_request(self, request, *args, **kwargs)
+        # A streaming-input request's later inputs reuse its live ID; only
+        # its first add enters it into the scheduler.
+        new = _guard(recorder, lambda: str(request.request_id) not in self.requests)
+        at = stamp()
+        result = add_request(self, request, *args, **kwargs)
+        if new:
+            _guard(recorder, lambda: recorder.on_enqueue(request, at))
+        return result
+
+    return scheduler_add_request
 
 
 def _enable_engine(scheduler: Any, vllm_config: Any, settings: _Settings) -> None:
