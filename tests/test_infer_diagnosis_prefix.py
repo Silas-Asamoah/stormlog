@@ -75,6 +75,18 @@ def test_concurrent_first_use_of_a_group_is_not_warm(tmp_path: Path) -> None:
     )
 
 
+def test_a_thin_subject_is_too_few_to_measure_not_unobserved(tmp_path: Path) -> None:
+    """12 warm requests that each found nothing of their 64-token prefix,
+    against a reference that found all of it: below 20 per side the
+    difference cannot be measured, which is not the absence of a loss."""
+    assessment = _assess(tmp_path, _cold()[:12])
+
+    assert (assessment.status, assessment.reasons) == (
+        "partial",
+        ["insufficient_samples"],
+    )
+
+
 def test_a_working_set_that_outgrew_the_cache_is_not_ruled_out(
     tmp_path: Path,
 ) -> None:

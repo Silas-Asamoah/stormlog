@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Any
 
-from .diagnosis_context import ASSESSED, UNSUPPORTED, Assessment, Context
+from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
 from .diagnosis_inputs import Line
 from .diagnosis_model import (
     NOT_RULED_OUT,
@@ -34,7 +34,7 @@ from .diagnosis_model import (
     met,
 )
 from .diagnosis_selection import Subject
-from .diagnosis_stats import Difference, median_difference
+from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
 from .diagnosis_thresholds import PREFIX_WORKING_SET_RATIO, resolve_threshold
 from .diagnosis_vocabulary import COMPONENT_PREFIX_CACHE, PREFIX_CACHE_LOSS
 
@@ -42,7 +42,6 @@ NOT_OBSERVED = "not_observed"
 NO_CACHE_EVIDENCE = "no_per_request_cache_evidence"
 NO_DECLARED_SHARING = "no_declared_sharing"
 TOO_FEW_WARM = "too_few_warm_requests"
-MIN_WARM = 3
 
 
 @dataclass
@@ -73,16 +72,25 @@ def assess_prefix(context: Context, subject: Subject) -> Assessment:
     warmth = _warmth(context, groups)
     subject_warm = _warm_cached(context, subject.requests, groups, warmth)
     reference_warm = _warm_cached(context, subject.reference, groups, warmth)
-    if len(subject_warm) < MIN_WARM:
+    if not subject_warm:
+        # Nothing was cached for these requests to find, as at first use.
         return _verdict(subject, ASSESSED, TOO_FEW_WARM)
     expected = _expected(reference_warm, groups)
     deficits = _deficits(subject_warm, groups, expected)
     reference_deficits = _deficits(reference_warm, groups, expected)
     excess = median_difference(deficits, reference_deficits)
     if excess is None or excess.low <= 0:
-        return _verdict(subject, ASSESSED, NOT_OBSERVED)
+        return _no_loss_measured(subject, excess)
     finding = _finding(context, subject, producer, groups, subject_warm, excess)
     return Assessment(PREFIX_CACHE_LOSS, subject.key, ASSESSED, [], [finding])
+
+
+def _no_loss_measured(subject: Subject, excess: Difference | None) -> Assessment:
+    """Too few warm requests on a side to tell a loss from none, or a
+    shortfall whose interval does not exclude zero."""
+    if excess is None:
+        return _verdict(subject, PARTIAL, INSUFFICIENT_SAMPLES)
+    return _verdict(subject, ASSESSED, NOT_OBSERVED)
 
 
 def _verdict(subject: Subject, status: str, reason: str) -> Assessment:
