@@ -499,7 +499,11 @@ engine progress (a step completed inside at least half of the stalled
 requests' send-to-admission intervals) and a bounded placement of
 `send_to_ingress` for at least half the subject's requests; the metrics say
 how many were placed (`send_to_ingress_placed` of `subject_requests`), since
-an unplaced one, across a wall clock step say, is left out of the excess. Two competitors are indispensable: a scheduler paused for
+an unplaced one, across a wall clock step say, is left out of the excess.
+The client stamps a send before it connects and writes, so a client too
+starved of CPU to write promptly also lengthens `send_to_ingress`, and no
+competitor rules that out yet: a client on a busy host should check its own
+CPU before giving the API server more. Two competitors are indispensable: a scheduler paused for
 new requests, which looks the same from the client and is ruled out only by
 pause records with nothing lost over every stalled request's interval (each
 placed on the engine's clock, ending at its admission), and a capture
