@@ -227,7 +227,7 @@ class EpochWriter:
                 return
             seq = self._counters.last_seq + 1
         if kind == "goodbye":
-            body = _dumps({**_stamp(), "last_seq": seq})
+            body = _dumps({**stamp(), "last_seq": seq})
         common = {"format": FORMAT, "kind": kind, "epoch": self.epoch, "seq": seq}
         line = _join(_dumps(common), body)
         with self._condition:
@@ -261,7 +261,7 @@ class EpochWriter:
         with self._condition:
             counters = self._counters
             status: dict[str, Any] = {
-                **_stamp(),
+                **stamp(),
                 "last_seq": counters.last_seq,
                 "dropped": dict(counters.dropped),
                 "errors": counters.errors,
@@ -414,8 +414,12 @@ def _write_all(fd: int, data: bytes) -> bool:
     return True
 
 
-def _stamp() -> dict[str, int]:
-    return {"wall_ns": time.time_ns(), "mono_ns": time.monotonic_ns()}
+def stamp() -> dict[str, int]:
+    """A monotonic read bracketed by two wall reads: the wall time at the
+    monotonic read lies between ``wall_ns`` and ``wall_after_ns``."""
+    wall = time.time_ns()
+    mono = time.monotonic_ns()
+    return {"wall_ns": wall, "mono_ns": mono, "wall_after_ns": time.time_ns()}
 
 
 def _write_key(path: Path) -> bytes:
@@ -455,4 +459,4 @@ def _unlink(path: Path) -> None:
         pass
 
 
-__all__ = ["FORMAT", "EpochWriter", "WriterLimits", "remove_old_epochs"]
+__all__ = ["FORMAT", "EpochWriter", "WriterLimits", "remove_old_epochs", "stamp"]
