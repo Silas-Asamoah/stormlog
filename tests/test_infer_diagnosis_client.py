@@ -198,3 +198,43 @@ def test_without_the_stop_request_stamp_a_capture_pause_is_unsupported(
         "unsupported",
         ["no_stop_request_stamp"],
     )
+
+
+def test_a_stop_that_held_the_waits_explains_them(tmp_path: Path) -> None:
+    # The server blocks for the 2 s stop, as a real profiler stop does.
+    calm = poisson_free(1000, 10 * SECOND, 100 * MS, prefix="a")
+    stop = _trace_window(
+        stop_requested_at_ns=AT + WALL_OFFSET,
+        stopped_at_ns=AT + WALL_OFFSET + SECOND * 2,
+    )
+    context = _context(
+        tmp_path,
+        calm,
+        Engine(max_num_seqs=64, stall=(AT, 2 * SECOND)),
+        windows=[stop],
+        declared=((AT + WALL_OFFSET, AT + WALL_OFFSET + 2 * SECOND),),
+    )
+
+    (finding,) = assess_capture_pause(context, _only(context)).findings
+
+    assert "explains_ttft_excess" in finding.contribution.met
+    assert finding.metrics["stop_duration_ms"] == 2000.0
+    assert finding.observations[-1].value == pytest.approx(950.0, abs=60)
+
+
+def test_a_brief_stop_explains_none_of_a_queue_s_waits(
+    tmp_path: Path, burst_requests: list[SimRequest]
+) -> None:
+    """A 2 ms stop inside a burst that queued for hundreds of ms: it overlapped
+    many requests, but held the median one back by no more than 2 ms."""
+    stop = _trace_window(
+        stop_requested_at_ns=AT + WALL_OFFSET + 700 * MS,
+        stopped_at_ns=AT + WALL_OFFSET + 702 * MS,
+    )
+    context = _context(tmp_path, burst_requests, Engine(max_num_seqs=4), windows=[stop])
+
+    (finding,) = assess_capture_pause(context, _only(context)).findings
+
+    assert finding.metrics["requests_across_stop"] > 50
+    assert "explains_ttft_excess" in finding.contribution.unmet
+    assert finding.contribution_lower is not None and finding.contribution_lower <= 2.0
