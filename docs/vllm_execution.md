@@ -437,8 +437,9 @@ when a span ends is not vouched against.
 heard from, under `basis` `heartbeat_gaps/1`: the number of heartbeats, the
 `first` and `last` (each a `seq`, `mono_ns` and `wall_ns`), the longest
 interval between two (`max_interval_ns`), and the `gaps` between consecutive
-heartbeats more than `gap_ns` apart, each from the heartbeat before to the
-heartbeat after. The writer beats once a second, but under load its thread
+heartbeats more than `gap_ns` apart, each from the heartbeat before
+(`start_seq`, `start_mono_ns`, `start_wall_ns`) to the heartbeat after
+(`end_seq`, `end_mono_ns`, `end_wall_ns`). The writer beats once a second, but under load its thread
 slips: on real vLLM 0.30.0 runs the longest interval was 2.3 s with nothing
 lost, so `gap_ns` is 5 s. An interval between the first and the last that no
 gap overlaps had a writer beating throughout; whether anything was lost there

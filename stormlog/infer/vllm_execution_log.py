@@ -191,8 +191,8 @@ class EpochRead:
             "gap_ns": HEARTBEAT_GAP_NS,
             "heartbeats": len(beats),
             "max_interval_ns": max(intervals) if intervals else None,
-            "first": _span_start(beats[0]) if beats else None,
-            "last": _span_end(beats[-1]) if beats else None,
+            "first": _heard(beats[0]) if beats else None,
+            "last": _heard(beats[-1]) if beats else None,
             "gaps": gaps,
         }
 
@@ -539,6 +539,14 @@ def _pending(heartbeat: dict[str, Any]) -> int:
         if value is not None:
             return value
     return 0
+
+
+def _heard(record: RawRecord) -> dict[str, int]:
+    return {
+        "seq": record.seq,
+        "mono_ns": _integer(record.data.get("mono_ns")) or 0,
+        "wall_ns": _integer(record.data.get("wall_ns")) or 0,
+    }
 
 
 def _span_start(record: RawRecord) -> dict[str, int]:
