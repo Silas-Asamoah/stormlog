@@ -223,8 +223,20 @@ def _journal(path: Path, launched: Launched) -> None:
         "started_at_ns": launched.started_at_ns,
         "identity": launched.identity,
     }
-    with path.open("a") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
+    _append_line(path, entry)
+
+
+def _append_line(path: Path, entry: Mapping[str, Any]) -> None:
+    """Append one JSON line on a line of its own: after a line a crash tore
+    (the file does not end in a newline), a newline first, so the next
+    entry never joins the torn one and goes unread."""
+    line = json.dumps(entry, sort_keys=True).encode() + b"\n"
+    with path.open("a+b") as handle:
+        if handle.seek(0, os.SEEK_END) > 0:
+            handle.seek(-1, os.SEEK_END)
+            if handle.read(1) != b"\n":
+                line = b"\n" + line
+        handle.write(line)
 
 
 def end_journaled(launched: Launched, cleanup: Cleanup) -> None:
@@ -236,8 +248,7 @@ def end_journaled(launched: Launched, cleanup: Cleanup) -> None:
 
 def end_launch(journal: Path, mark: str) -> None:
     """Journal the end of the launch with this mark."""
-    with journal.open("a") as handle:
-        handle.write(json.dumps({"ended": mark}) + "\n")
+    _append_line(journal, {"ended": mark})
 
 
 def journaled(path: Path) -> list[dict[str, Any]]:
