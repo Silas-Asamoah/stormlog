@@ -27,6 +27,7 @@ from stormlog.infer.profile import (
     _ctrl_c_held,
 )
 from tests.export_conformance import check_exposition
+from tests.markers import needs_non_root
 from tests.test_infer_profile import _fake_server
 
 
@@ -618,6 +619,7 @@ def test_a_run_that_fails_after_the_export_started_still_ends_it(
     assert not list(metrics_dir.glob("*.tmp"))
 
 
+@needs_non_root
 def test_a_textfile_directory_it_cannot_write_is_refused_before_it_sends(
     tmp_path: Path,
 ) -> None:
