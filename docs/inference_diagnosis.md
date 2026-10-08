@@ -32,6 +32,29 @@ change to the diagnosis payload's schema.
 A cause is one of `fault`, `workload_change`, `instrumentation` and
 `undetermined`.
 
+## Citing records
+
+A diagnosis cites the artifact records behind each finding. It reads the
+artifact once, by physical line: a line's number counts from 0 and includes
+blank lines, and each line is kept with its SHA-256 (of its bytes without the
+newline) and the record's ID. The ID says what the record is, so a reader can
+find it again if the file changed; the whole file's size, SHA-256 and line
+count are recorded with the diagnosis so a reader can tell.
+
+| Record | `record_id` |
+| --- | --- |
+| any v2 record (`schema_version` 2 or 3) | its `event_id` |
+| `infer.request`, `infer.dispatch`, `infer.first_content` | `<event_type>/<request_id>` |
+| `infer.phase_start`, `infer.phase_window` | `<event_type>/<case_id>/<phase>` |
+| `infer.trace_window` | `infer.trace_window/<case_id>/<phase>/<started_at_ns>` |
+| `infer.vllm_span` | `infer.vllm_span/<trace_id>/<span_id>` |
+| `infer.vllm_scrape` | `infer.vllm_scrape@<observed_at_ns>` |
+| `infer.telemetry_sample` | `infer.telemetry_sample@<observed_at_ns>` |
+| any other v1 record | `<event_type>@<timestamp_ns>` |
+
+A record without the fields its ID needs has none, and is cited by line
+alone.
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,
