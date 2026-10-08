@@ -1635,6 +1635,28 @@ def test_a_record_is_pending_from_before_its_last_stamp(
         assert pending_at[last] == pending + 1, record["kind"]
 
 
+def test_a_heartbeat_says_how_many_pending_records_are_still_reserved(
+    tmp_path: Path,
+) -> None:
+    """A reserved record is pending but not queued, so another thread's
+    later record can be queued ahead of it: the heartbeat says how many
+    such records it counts, and the reader holds its span for them."""
+    writer = EpochWriter(
+        tmp_path, "engine", limits=WriterLimits(heartbeat_seconds=0.05)
+    )
+    status = writer.directory / "status.json"
+
+    def beat() -> dict[str, Any]:
+        return json.loads(status.read_text()) if status.exists() else {}
+
+    with writer.reserve() as reservation:
+        _wait(lambda: beat().get("reserved") == 1)
+        assert beat()["pending"] == 1
+        reservation.emit("pause", {"from": "UNPAUSED", "to": "PAUSED_ALL"})
+    _wait(lambda: beat().get("reserved") == 0 and beat().get("pending") == 0)
+    writer.close()
+
+
 def test_emit_never_lets_go_of_a_record_it_has_not_queued(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
