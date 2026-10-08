@@ -566,6 +566,50 @@ def test_a_baseline_too_thin_to_recover_is_named_not_a_bare_timeout(
     assert skipped.injected["skipped"] == "baseline_too_thin"
 
 
+def test_an_engine_whose_prefill_steps_outlast_a_dose_is_not_evaluable(
+    tmp_path: Path,
+) -> None:
+    # The lead's note on Astra's H4, end to end. A fake engine whose victim
+    # prefill steps take about 90 ms, past the 60 ms smallest dose, and come
+    # about once in 200 busy steps (0.5 a second, long outputs) fails G0's
+    # dose check: F4a can't recover, its record says dose_check_failed, the
+    # N it skips says so, and the scorer counts it as not evaluable. At its
+    # default prefill cost (about 2 ms a step) the engine passes the check:
+    # the first e2e's F4a is valid. (With prefill steps over 1% of the busy
+    # steps, twice the p99 is a prefill step and the check passes: the 2%
+    # residual the guide leaves to G0's step times.)
+    from stormlog.infer.qualify.ground_truth import load_run
+    from stormlog.infer.qualify.scoring import ScoreConfig, score_run
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    record["victim"].update(rate_per_second=0.5, output_tokens=512)
+    record["timeline"].update(baseline=15, recovery_timeout=10)
+    record["thresholds"]["cadence_hold"] = 4
+    record["episodes"] = [{"type": "F4a"}, {"type": "N"}]
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps(record))
+    arguments = [
+        "--step-seconds", "0.002",
+        "--prefill-token-seconds", "0.004",
+        "--hook-dir", str(tmp_path / "hook"),
+    ]  # fmt: skip
+    with FakeEngineProcess(arguments) as server:
+        _inject(server, tmp_path, plan, "--target", f"engine_core={server.pid}")
+    run = tmp_path / "runs" / "q221-00000000000000bb"
+    assert verify(run) == []
+    stall, null = load_injections(run / "truth" / "injections.jsonl")
+    assert stall.validity.actuation == "ok"
+    (reason,) = stall.injected["recovery_blocked"]
+    assert reason.startswith("dose_check_failed: ") and "busy step gaps" in reason
+    assert stall.status == "recovery_incomplete"
+    assert null.injected["skipped"] == "dose_check_failed"
+    nothing: dict[str, Any] = {"payload": {"findings_detail": {}, "coverage": {}}}
+    config = ScoreConfig(supported_types=frozenset({"F4a"}))
+    truth = load_run(run / "truth" / "run.json")
+    scored = score_run(truth, [stall, null], nothing, config)
+    assert scored.episodes[0].not_evaluable == "dose_check_failed"
+
+
 def _inject(server: FakeEngineProcess, tmp_path: Path, plan: Path, *extra: str) -> int:
     return main(
         [

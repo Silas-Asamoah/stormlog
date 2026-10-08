@@ -292,7 +292,9 @@ rate (`DOSE_CHECK_TOO_LONG_PER_HOLD`, 1.0), never recovers, and
 in the baseline are too long for a hold, …: 3.6 per 10 s hold`). Which
 engines it blocks: with 250 ms prefill steps at 0.4%, every seed of 20; at
 0.8%, 19 (the one whose p99 is itself a prefill step recovers at once); a
-5 ms engine with nine 250 ms stalls in its 45 s baseline (2 per hold).
+5 ms engine with nine 250 ms stalls in its 45 s baseline (2 per hold);
+and, end to end, the fake engine with prefill steps of about 90 ms once in
+some 200 busy steps.
 Which it passes: 25 ms prefill steps; G2's baseline with three 1 s pauses
 (0.67 per hold); and the fake engine at its defaults, as in the end-to-end
 runs. The episode is published `recovery_incomplete` with that reason,
