@@ -88,6 +88,7 @@ from .experiment_process import (
     Launched,
     clean_up_after,
     end_journaled,
+    end_launch,
     journaled,
     launch,
     listens,
@@ -384,7 +385,8 @@ def _stop_left_launches(output: Path) -> None:
     Every launch of an unfinished attempt or a prelude is in its journal by
     boot, PID, start time and mark, and ends there once its cleanup
     verified. Each one that has not ended is stopped as far as the journal
-    ties it to the launch (``stop_journaled``), and must be verified gone.
+    ties it to the launch (``stop_journaled``), must be verified gone, and
+    then ends in its journal too, so no later resume judges it again.
     """
     journals = [
         *sorted((output / "runs").glob(f"*.partial/{LAUNCHES}")),
@@ -399,6 +401,7 @@ def _stop_left_launches(output: Path) -> None:
                     f"{journal.parent.name} {entry.get('name')}: the runner was "
                     f"stopped and left {left} running; stop them, then resume"
                 )
+            end_launch(journal, str(entry.get("mark")))
 
 
 def _blind_of(cleanup: Mapping[str, Any]) -> list[Mapping[str, Any]]:
