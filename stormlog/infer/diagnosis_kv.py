@@ -197,6 +197,7 @@ def _finding(
             "change": "rerun with a larger gpu_memory_utilization, or a smaller max_num_seqs, same seed",
             "prediction": "no allocation preemption, and end-to-end latency falls by the resume waits",
         },
+        explains="explains_e2e_excess",
     )
     finding.support = [line for line, _ in preemptions] + _client_lines(
         context, [cost.request_id for cost in costs]

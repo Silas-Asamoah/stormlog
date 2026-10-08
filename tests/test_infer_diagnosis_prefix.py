@@ -52,6 +52,10 @@ def test_warm_requests_finding_nothing_cached_are_a_prefix_loss(
     }
     assert finding.eligible
     assert finding.detail["token_count_provenance"] == "engine_cached_at_admission"
+    # The toy engine prefills as fast without the cache: TTFT never rose, so
+    # the loss explains no incident and is no warning.
+    assert finding.contribution.unmet == ("ttft_rose",)
+    assert (finding.severity, finding.claim) == ("info", "condition")
 
 
 def test_concurrent_first_use_of_a_group_is_not_warm(tmp_path: Path) -> None:

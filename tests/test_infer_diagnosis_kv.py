@@ -51,11 +51,33 @@ def test_allocation_preemptions_with_no_reset_are_kv_pressure(
     assert [(a.kind, a.status) for a in finding.alternatives] == [
         ("prefix_cache_reset", "ruled_out")
     ]
-    assert finding.eligible and finding.severity == "warning"
+    # The burst queued for seconds; the resume waits are a small part of it.
+    assert finding.eligible and finding.severity == "info"
+    assert finding.contribution.unmet == ("explains_e2e_excess",)
     metrics = finding.metrics
     assert metrics["allocation_preemptions"] and metrics["affected_requests"]
     assert metrics["recomputed_positions"] and metrics["resume_wait_p50_ms"]
     assert finding.observations[2].metric == "preemption_to_resume_entry_p50_ms"
+
+
+def test_preemptions_that_explain_the_excess_are_a_kv_fault(tmp_path: Path) -> None:
+    """Long outputs outgrow a small KV budget with slots to spare: requests
+    are preempted again and again, and their resume waits make up the
+    end-to-end excess."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a", output=100)
+    heavy = poisson_free(100, AT, 200 * MS, prefix="b", output=100)
+    view = join(
+        read_input(
+            build_run(tmp_path, calm + heavy, Engine(max_num_seqs=64, kv_tokens=300))
+        )
+    )
+    context = Context(view, select(view))
+    (subject,) = context.subjects()
+
+    (finding,) = assess_kv(context, subject).findings
+
+    assert "explains_e2e_excess" in finding.contribution.met
+    assert (finding.severity, finding.claim) == ("warning", "fault")
 
 
 def test_without_reset_records_the_cause_is_unknown(tmp_path: Path) -> None:

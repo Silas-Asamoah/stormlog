@@ -67,6 +67,25 @@ def test_a_full_engine_s_waits_are_a_queue_fault(burst: Assessment) -> None:
     assert finding.support and len(finding.display) <= 8
 
 
+def test_a_queue_that_explains_little_of_the_ttft_rise_is_no_warning(
+    tmp_path: Path,
+) -> None:
+    """The same burst, but each response takes 4 s to reach the client: the
+    queue is real and eligible, yet explains a sixth of the TTFT rise."""
+    assessment = _assess(
+        tmp_path, _requests(delivery_ns=4 * SECOND), Engine(max_num_seqs=4)
+    )
+
+    (finding,) = assessment.findings
+    assert finding.eligible
+    assert finding.contribution.unmet == ("explains_ttft_excess",)
+    assert (finding.severity, finding.cause, finding.claim) == (
+        "info",
+        "undetermined",
+        "condition",
+    )
+
+
 def test_the_witness_counts_steps_while_someone_waited(tmp_path: Path) -> None:
     """A subject's window can begin in calm traffic before the burst, as the
     first real run's did: its early requests wait some microseconds for an

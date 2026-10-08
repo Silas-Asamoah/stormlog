@@ -11,8 +11,11 @@ and an experiment that would confirm it. Three rules keep a finding honest:
 - **Confidence** is ordinal and per claim: whether the mechanism occurred
   (condition), and whether it explains the incident (contribution). Its
   level is the lower of the two.
-- **Severity.** ``warning`` needs an eligible claim, a contribution of at
-  least medium and an incident subject; only then is the cause ``fault``.
+- **Severity.** ``warning`` needs an eligible claim, an incident subject,
+  a condition and a contribution of at least medium, and the contribution
+  criterion that says the mechanism explains the incident (``explains``)
+  met: one unmet criterion may lower confidence, never that one. Only then
+  is the cause ``fault``.
 
 Findings are ranked in one total order, so a scorer's top three is never a
 tie broken by chance.
@@ -168,6 +171,9 @@ class Finding:
     role: str = PRIMARY
     secondary_to: list[str] = field(default_factory=list)
     incident: bool = False  # whether the subject's impact is supported
+    # The contribution criterion that says the mechanism explains the
+    # incident; a kind without one never warns.
+    explains: str | None = None
 
     def __post_init__(self) -> None:
         check_kind(self.kind)
@@ -198,8 +204,11 @@ class Finding:
     def severity(self) -> str:
         if self.kind in WORKLOAD_KINDS or not self.eligible:
             return "info"
-        strong = _LEVELS.index(self.contribution.level) >= _LEVELS.index(MEDIUM)
-        return "warning" if strong and self.incident else "info"
+        explained = self.explains is not None and self.explains in self.contribution.met
+        strong = _at_least(self.condition.level, MEDIUM) and _at_least(
+            self.contribution.level, MEDIUM
+        )
+        return "warning" if explained and strong and self.incident else "info"
 
     @property
     def cause(self) -> str:
@@ -255,6 +264,10 @@ class Finding:
             (self.window or {}).get("start_ns") or 0,
             finding_id,
         )
+
+
+def _at_least(level: str, floor: str) -> bool:
+    return _LEVELS.index(level) >= _LEVELS.index(floor)
 
 
 def met(**criteria: bool) -> Criteria:
