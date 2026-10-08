@@ -437,7 +437,10 @@ def test_a_healthy_engine_whose_records_arrive_late_is_not_hung(
     )  # fmt: skip
     run.directory.create()
     lag = None if measured_ms is None else measured_ms * 1_000_000
-    run.channel = cast(Any, SimpleNamespace(record_lag_ns=lambda *_: lag))
+    run.channel = cast(
+        Any,
+        SimpleNamespace(record_lag_ns=lambda *_: lag, stop_noting_lags=lambda: None),
+    )
     run._measure_record_lag(0, 45 * second)
     # The lag used, and where it came from, is on record.
     used = json.loads((run.directory.probes / "record-lag.json").read_text())

@@ -185,6 +185,12 @@ def _segments(directory: Path) -> list[tuple[int, Path]]:
     return sorted(found.items())
 
 
+def _is_engine_step(record: dict[str, Any]) -> bool:
+    return record.get("kind") == "scheduled" and str(
+        record.get("epoch", "")
+    ).startswith("engine-")
+
+
 def _firstseen(record: dict[str, Any], path: Path, now_ns: int) -> dict[str, Any]:
     return {
         "epoch": record.get("epoch"),
@@ -508,8 +514,10 @@ class ReferenceChannel:
         self._victim_finished: set[str] = set()
         self.bad_records = 0
         # Each engine step's start, and how long after it its record was
-        # first seen: (start, lag), in ns.
+        # first seen: (start, lag), in ns; noted until the run has measured
+        # the baseline's (``stop_noting_lags``), the only window read.
         self.step_lags: list[tuple[int, int]] = []
+        self._noting_lags = True
 
     def poll(self, *, scrape: bool = True) -> None:
         """Read new hook records, and take one scrape unless told not to. A
@@ -527,9 +535,7 @@ class ReferenceChannel:
                         "seen_ns": time.time_ns()}  # fmt: skip
                 _append_lines(self.tailer.problems, [note])
                 continue
-            if record.get("kind") == "scheduled" and str(
-                record.get("epoch", "")
-            ).startswith("engine-"):
+            if self._noting_lags and _is_engine_step(record):
                 start = int(record["start_wall_ns"])
                 self.step_lags.append((start, max(0, seen - start)))
         if scrape:
@@ -545,6 +551,12 @@ class ReferenceChannel:
         lags = [lag for start, lag in self.step_lags if start_ns <= start < end_ns]
         found = quantile(lags, 0.99)
         return None if found is None else int(found)
+
+    def stop_noting_lags(self) -> None:
+        """Note no more step lags, and drop those noted: a run reads only
+        its baseline's, and would otherwise keep every step of the run."""
+        self._noting_lags = False
+        self.step_lags.clear()
 
     def signals(self) -> Signals:
         """The series so far. ``in_flight`` comes from the victim's finished
