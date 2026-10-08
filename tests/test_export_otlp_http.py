@@ -27,6 +27,7 @@ from stormlog._export.otlp_http import (
     REDIRECT,
     REFUSED,
     RESET_AFTER_SEND,
+    RESOLVE_AFTER_FAILURES,
     SEND_FAILED,
     THROTTLED,
     TIMEOUT_AFTER_SEND,
@@ -334,6 +335,60 @@ def test_a_refused_address_falls_through_to_the_next_one() -> None:
         assert resolver.candidates()[0].address == ("127.0.0.1", port)
         assert transport.send(_body(), spans=3).kind == CONFIRMED
     assert len(collector.received) == 2
+
+
+def _resolving_to(ports: list[int], calls: list[int]) -> Any:
+    """A getaddrinfo that answers with the last port in ``ports``, and counts."""
+
+    def getaddrinfo(*_args: Any, **_kw: Any) -> list[Any]:
+        calls.append(ports[-1])
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", ports[-1]))]
+
+    return getaddrinfo
+
+
+def test_a_collector_that_moved_is_found_after_three_failed_attempts() -> None:
+    # As a recreated service: the name now resolves to another address. The
+    # name is resolved again once RESOLVE_AFTER_FAILURES attempts in a row
+    # have reached none of the addresses known, not on every failure.
+    with running() as collector:
+        ports = [_closed_port()]
+        calls: list[int] = []
+        destination = Destination.parse(collector.url)
+        resolver = Resolver(
+            "collector.test", destination.port, getaddrinfo=_resolving_to(ports, calls)
+        )
+        transport = OtlpHttpTransport(
+            destination, media_type="application/x-protobuf", resolver=resolver
+        )
+        assert transport.start()
+        for _ in range(RESOLVE_AFTER_FAILURES):
+            assert transport.send(_body(), spans=3).category == CONNECT_REFUSED
+        assert len(calls) == 1
+        ports.append(destination.port)
+        assert transport.send(_body(), spans=3).kind == CONFIRMED
+        assert len(calls) == 2
+    assert len(collector.received) == 1
+
+
+def test_a_destination_that_stays_down_is_resolved_again_once_per_three_attempts() -> (
+    None
+):
+    calls: list[int] = []
+    port = _closed_port()
+    resolver = Resolver(
+        "collector.test", port, getaddrinfo=_resolving_to([port], calls)
+    )
+    transport = OtlpHttpTransport(
+        Destination.parse(f"http://127.0.0.1:{port}"),
+        media_type="application/x-protobuf",
+        resolver=resolver,
+    )
+    assert transport.start()
+    for _ in range(2 * RESOLVE_AFTER_FAILURES + 1):
+        assert transport.send(_body(), spans=3).category == CONNECT_REFUSED
+    # At the start, and before the 4th and the 7th attempts.
+    assert len(calls) == 3
 
 
 @contextlib.contextmanager

@@ -445,6 +445,11 @@ The `export.otlp` record lists the
 transitions (`first_failure`, `breaker_open`, `first_success`,
 `breaker_closed`, at most 64), each with its time and reason.
 
+The endpoint's name is resolved when the capture starts, and again after 3
+attempts in a row reach none of its addresses, so a collector whose address
+changes, such as a recreated service, is found again. An attempt waits at
+most 2 s for a resolution, which keeps running in its own thread.
+
 A proxy set in `HTTP_PROXY` or `HTTPS_PROXY` is not used: spans go straight
 to the endpoint, and a non-loopback endpoint with a proxy variable set
 prints one warning.
