@@ -330,10 +330,11 @@ identifier, an ID Stormlog made, a value from a closed set, or a number:
   count.
 - **Status:** `timeout`, `rejected`, `error`, `unreachable` and
   `delivery_unknown` are ERROR, with `error.type` set to the status, the HTTP
-  status code, or the exception's class name. `cancelled`, where Stormlog stopped waiting at its
-  own drain deadline, leaves the status unset; `stormlog.request.status`
-  says what happened. A trace window whose profiler call failed is ERROR.
-  Only an ERROR span has a status message, as OpenTelemetry asks.
+  status code, or the exception's class name. `cancelled`, where Stormlog
+  stopped waiting at its own drain deadline, leaves the status unset;
+  `stormlog.request.status` says what happened. A trace window whose
+  profiler call failed is ERROR. Only an ERROR span has a status message, as
+  OpenTelemetry asks.
 - **A server's error** is reduced to its OpenAI-style `type` and `code`,
   each mapped to a known value or `other`: `stormlog.error.api_type` and
   `stormlog.error.api_code`. Its message and `param` are left out.
