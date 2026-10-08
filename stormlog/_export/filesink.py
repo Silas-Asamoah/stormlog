@@ -64,7 +64,9 @@ class LineFileSink:
         self._consecutive = 0
 
     def open(self) -> None:
-        """Open for appending; an ``OSError`` reaches the caller."""
+        """Open for appending, creating the file's directory if it is missing;
+        an ``OSError`` reaches the caller."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         self._size = os.fstat(self._fd).st_size
         # A full file is left as it is: no line can follow the broken one.
