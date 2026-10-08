@@ -69,7 +69,9 @@ The harness writes one record per attempted episode into a run's
 ```
 
 A null location field means "not specified". Kinds, components, causes and
-severities are #218's closed vocabulary.
+severities are #218's closed vocabulary: the kinds, components and causes
+imported from `stormlog.infer.diagnosis_vocabulary`, and the two severities
+a diagnosis finding takes, `info` below `warning`.
 
 `parse_injection` refuses a record that would be scored wrongly, listing
 every problem:
