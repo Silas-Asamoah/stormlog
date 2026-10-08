@@ -12,6 +12,7 @@ Stormlog's own profiler.
 
 from __future__ import annotations
 
+from statistics import median
 from typing import Any
 
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
@@ -372,6 +373,8 @@ def _capture_finding(
 ) -> Finding:
     excess = context.total_excess(subject, "ttft")
     duration_ms = round((stop[1] - stop[0]) / 1e6, 3)
+    held = _held_by_stop(context, subject, stop)
+    explains = _explains_ns(held, excess, context)
     return Finding(
         kind=CAPTURE_PAUSE,
         component=COMPONENT_PROFILER,
@@ -380,8 +383,12 @@ def _capture_finding(
         message=f"The stop took {duration_ms:.1f} ms and {len(requests)} requests waited across it.",
         gates={"stop_request_stamp": True},
         condition=met(direct_evidence=True, sufficient_samples=len(requests) >= 3),
-        contribution=met(excess_ci_excludes_zero=excess is not None and excess.low > 0),
-        contribution_lower=None if excess is None else excess.low / 1e6,
+        contribution=met(
+            excess_ci_excludes_zero=excess is not None and excess.low > 0,
+            explains_ttft_excess=explains,
+        ),
+        # The stop can hold a request back by no more than it overlapped it.
+        contribution_lower=None if excess is None else min(held, excess.low) / 1e6,
         observations=[
             Observation(
                 "o1",
@@ -394,6 +401,13 @@ def _capture_finding(
                 f"{len(requests)} subject requests were waiting for their first content across it.",
                 "requests_across_stop",
                 len(requests),
+            ),
+            Observation(
+                "o3",
+                f"The median subject request spent {held / 1e6:.1f} ms of its wait for first content inside the stop.",
+                "median_wait_inside_stop_ms",
+                round(held / 1e6, 3),
+                n=len(subject.requests),
             ),
         ],
         location={"component": COMPONENT_PROFILER},
@@ -416,6 +430,19 @@ def _capture_finding(
             "prediction": "the stall around the stop shrinks or disappears",
         },
     )
+
+
+def _held_by_stop(context: Context, subject: Subject, stop: tuple[int, int]) -> float:
+    """The median, over the subject's requests, of how much of each one's
+    wait for first content the stop overlapped: the most of the median TTFT
+    excess the stop can explain."""
+    overlaps = []
+    for request_id in subject.requests:
+        request = context.view.client[request_id]
+        sent, first = request.sent_at_ns, request.first_content_at_ns
+        if sent is not None and first is not None:
+            overlaps.append(max(0, min(first, stop[1]) - max(sent, stop[0])))
+    return float(median(overlaps)) if overlaps else 0.0
 
 
 def _stop(line: Line) -> tuple[int, int] | None:
@@ -443,13 +470,13 @@ def _trace_spans(context: Context) -> list[tuple[int, int]]:
 def _explains(
     excess: Difference | None, total: Difference | None, context: Context
 ) -> bool:
+    return excess is not None and _explains_ns(excess.estimate, total, context)
+
+
+def _explains_ns(part: float, total: Difference | None, context: Context) -> bool:
+    """Whether ``part`` is at least the threshold share of the excess."""
     share = resolve_threshold(QUEUE_CONTRIBUTION, context.thresholds)[0]
-    return (
-        excess is not None
-        and total is not None
-        and total.estimate > 0
-        and excess.estimate / total.estimate >= share
-    )
+    return total is not None and total.estimate > 0 and part / total.estimate >= share
 
 
 def _raw(context: Context, request_id: str) -> dict[str, Any]:

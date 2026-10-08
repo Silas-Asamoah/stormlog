@@ -386,9 +386,14 @@ the engine loop and the workers are not assessed yet, so `host_stall` is
 
 **`capture_pause`** (cause `instrumentation`): a profiler stop, which
 blocks the server while it writes the trace, lay across requests waiting for
-their first content. It needs the stop request's own stamp,
-`stop_requested_at_ns` on the `infer.trace_window` record; without it the
-class is `unsupported/no_stop_request_stamp`, and a run without profiler
+their first content. A stop can hold a request back by no more than the
+part of its wait for first content the stop overlapped, so the contribution
+claim asks that the median of that overlap, over the subject's requests, be
+at least half the TTFT excess, and the contribution's lower bound is that
+median (or the excess's lower bound, when smaller): a 2 ms stop inside a
+long queue explains 2 ms of it at most. It needs the stop request's own
+stamp, `stop_requested_at_ns` on the `infer.trace_window` record; without it
+the class is `unsupported/no_stop_request_stamp`, and a run without profiler
 windows has nothing to assess (`no_trace_windows`).
 
 ## Workload changes
