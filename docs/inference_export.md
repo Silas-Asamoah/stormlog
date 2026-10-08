@@ -553,9 +553,12 @@ silently. Anything else exits 2.
 `examples/observability/` holds configs and scripts for three setups, from
 no services at all to a collector in front of a trace store.
 
-**No services.** Write both exports to files:
+**No services.** Write both exports to files. The textfile directory must
+already exist, as for any textfile run; the span file's directory is
+created:
 
 ```bash
+mkdir -p artifacts/metrics
 stormlog infer profile ... --output artifacts/infer.jsonl \
   --prometheus-textfile-dir artifacts/metrics \
   --otlp-file artifacts/spans.jsonl
