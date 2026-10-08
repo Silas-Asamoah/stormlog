@@ -119,6 +119,30 @@ def test_continuity_allows_slew_and_splits_at_a_jump() -> None:
     assert segments[0].max_gap_ns == SECOND
 
 
+@pytest.mark.parametrize("held_ns", [19_770, 100 * MS])
+def test_a_wide_bracket_is_no_jump(held_ns: int) -> None:
+    """A thread descheduled between its wall and monotonic reads (run 1's
+    iteration 13465, 19.77 us; or a 100 ms SIGSTOP pulse) reads its wall
+    clock early: its offset interval is wide, and still holds the offset."""
+    reads = [
+        (0, 1000, 1800),
+        (MS, MS + 1000 - held_ns, MS + 1000 + 100),
+        (2 * MS, 2 * MS + 1000, 2 * MS + 1800),
+    ]
+    assert len(continuity_segments(reads)) == 1
+    # Without second reads the early wall read looks like two jumps.
+    assert len(continuity_segments([read[:2] for read in reads])) == 3
+
+
+def test_a_jump_after_a_wide_bracket_still_splits() -> None:
+    reads = [
+        (0, 1000, 1800),
+        (MS, MS + 1000, MS + 1000 + 100 * MS),  # wide: allows the jump and none
+        (2 * MS, 2 * MS + 1000 + 50 * MS, 2 * MS + 1800 + 50 * MS),
+    ]
+    assert [s.samples for s in continuity_segments(reads)] == [2, 1]
+
+
 def test_an_older_log_merges_ingress_and_the_queue_wait(tmp_path: Path) -> None:
     requests = poisson_free(2, 10 * SECOND, MS)
     path = build_run(tmp_path, requests, Engine())

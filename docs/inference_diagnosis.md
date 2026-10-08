@@ -176,10 +176,14 @@ interval too, and exists only when every segment does. A request with more
 than one engine execution, or none, is not decomposed.
 
 **Continuity.** The engine's `wall - mono` offset, from every step's
-schedule entry and completion, splits its log into continuity segments:
-consecutive samples stay in one segment while the offset moves by at most
-100 ppm of the time between them (and never less than 10 us), which covers
-NTP's normal slewing. A client read pairs with an engine read only when it
+schedule entry and completion, splits its log into continuity segments. A
+bracketed sample allows an interval of offsets, from its first wall read to
+its second; a segment keeps the offsets all its samples allow, each widened
+by 100 ppm of the time since (and never less than 10 us), which covers
+NTP's normal slewing, and ends where a sample allows none of them. A thread
+descheduled between its reads (19.77 us once in run 1's 55,668 samples, or
+a whole SIGSTOP pulse) widens its own interval, which is no jump; a sample
+without a second read allows its one offset. A client read pairs with an engine read only when it
 lies within the wall span of the engine read's segment, or, before the
 first sample or after the last, within one sample gap of it. Two jumps that
 cancel between two samples cannot be seen, so a segment is monitored to

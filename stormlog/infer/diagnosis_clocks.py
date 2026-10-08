@@ -11,13 +11,18 @@ A pair of reads, one by the client and one by the engine, is only comparable
 if the wall clock did not jump between them. The engine's ``wall - mono``
 offset, sampled at every step it records, splits each epoch into continuity
 segments where that offset stayed within slew; a pair whose client read falls
-outside the engine read's segment is withheld. Two jumps that cancel between
-two samples cannot be seen, so a segment is ``monitored`` to within its
-largest sample gap, never verified.
+outside the engine read's segment is withheld. A bracketed sample's offset
+is an interval, ``[wall - mono, wall_after - mono]``: a thread descheduled
+between its reads widens it, which says nothing about a jump, so a segment
+ends only where a sample's interval leaves every offset the segment's
+earlier samples allow, widened by slew. Two jumps that cancel between two
+samples cannot be seen, so a segment is ``monitored`` to within its largest
+sample gap, never verified.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -133,22 +138,32 @@ class EngineClock:
         return None
 
 
-def continuity_segments(samples: list[tuple[int, int]]) -> list[Segment]:
-    """Split (mono, wall) samples where the offset moved beyond slew."""
+Sample = tuple[int, ...]  # (mono, wall) or (mono, wall, wall_after)
+
+
+def continuity_segments(samples: Sequence[Sample]) -> list[Segment]:
+    """Split (mono, wall[, wall_after]) samples where the offset moved
+    beyond slew: where a sample's offset interval misses the offsets the
+    segment's samples so far allow, each widened by slew since."""
     ordered = sorted(set(samples))
     segments: list[Segment] = []
     start = 0
+    allowed = _offsets(ordered[0]) if ordered else (0, 0)
     for index in range(1, len(ordered) + 1):
-        if index < len(ordered) and _continuous(ordered[index - 1], ordered[index]):
-            continue
+        if index < len(ordered):
+            narrowed = _narrowed(allowed, ordered[index - 1], ordered[index])
+            if narrowed is not None:
+                allowed = narrowed
+                continue
+            allowed = _offsets(ordered[index])
         part = ordered[start:index]
         gaps = [b[0] - a[0] for a, b in zip(part, part[1:])]
         segments.append(
             Segment(
                 mono_start=part[0][0],
                 mono_end=part[-1][0],
-                wall_start=min(wall for _, wall in part),
-                wall_end=max(wall for _, wall in part),
+                wall_start=min(sample[1] for sample in part),
+                wall_end=max(sample[1] for sample in part),
                 samples=len(part),
                 max_gap_ns=max(gaps, default=0),
             )
@@ -157,26 +172,51 @@ def continuity_segments(samples: list[tuple[int, int]]) -> list[Segment]:
     return segments
 
 
-def _continuous(before: tuple[int, int], after: tuple[int, int]) -> bool:
-    elapsed = after[0] - before[0]
-    moved = abs((after[1] - after[0]) - (before[1] - before[0]))
-    return moved <= max(SLEW_FLOOR_NS, elapsed * SLEW_PPM // 1_000_000)
+def _offsets(sample: Sample) -> tuple[int, int]:
+    """The ``wall - mono`` offsets a sample allows: one, or with its second
+    wall read the bracket's span."""
+    mono, wall = sample[0], sample[1]
+    after = sample[2] if len(sample) > 2 and sample[2] >= wall else wall
+    return wall - mono, after - mono
 
 
-def _samples(view: RunView, producer: str) -> list[tuple[int, int]]:
-    """Every (mono, wall) pair the import kept for one engine: each step's
-    schedule entry and completion."""
-    samples = []
+def _narrowed(
+    allowed: tuple[int, int], before: Sample, after: Sample
+) -> tuple[int, int] | None:
+    """The offsets still allowed after ``after``: those the segment allowed,
+    widened by slew over the time since ``before``, that ``after``'s own
+    interval also allows; None when there are none."""
+    slew = max(SLEW_FLOOR_NS, (after[0] - before[0]) * SLEW_PPM // 1_000_000)
+    low, high = _offsets(after)
+    low, high = max(low, allowed[0] - slew), min(high, allowed[1] + slew)
+    return (low, high) if low <= high else None
+
+
+def _samples(view: RunView, producer: str) -> list[Sample]:
+    """Every (mono, wall, wall_after) read the import kept for one engine:
+    each step's schedule entry and completion; a read without its second
+    wall read gives (mono, wall)."""
+    samples: list[Sample] = []
     for ref, (_, iteration) in view.iterations.items():
         if ref.producer_id != producer:
             continue
         data = iteration.metadata
-        for mono, wall in (
-            (iteration.start_ns, data.get("start_wall_ns")),
-            (iteration.end_ns, data.get("completed_wall_ns")),
+        for mono, wall, after in (
+            (
+                iteration.start_ns,
+                data.get("start_wall_ns"),
+                data.get("start_wall_after_ns"),
+            ),
+            (
+                iteration.end_ns,
+                data.get("completed_wall_ns"),
+                data.get("completed_wall_after_ns"),
+            ),
         ):
             if isinstance(mono, int) and isinstance(wall, int):
-                samples.append((mono, wall))
+                samples.append(
+                    (mono, wall, after) if isinstance(after, int) else (mono, wall)
+                )
     return samples
 
 
