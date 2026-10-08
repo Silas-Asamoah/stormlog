@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import random
+import shutil
 import stat
 import subprocess
 import sys
@@ -24,6 +25,7 @@ from typing import Any, cast
 import pytest
 
 import stormlog.infer.vllm_hook as hook
+from stormlog.infer.vllm_execution_log import read_execution_log
 from stormlog.infer.vllm_hook import engine as engine_module
 from stormlog.infer.vllm_hook import gate, process
 from stormlog.infer.vllm_hook import writer as writer_module
@@ -1647,7 +1649,7 @@ def test_a_heartbeat_says_how_many_pending_records_are_still_reserved(
     status = writer.directory / "status.json"
 
     def beat() -> dict[str, Any]:
-        return json.loads(status.read_text()) if status.exists() else {}
+        return _status_file(status)
 
     with writer.reserve() as reservation:
         _wait(lambda: beat().get("reserved") == 1)
@@ -1655,6 +1657,58 @@ def test_a_heartbeat_says_how_many_pending_records_are_still_reserved(
         reservation.emit("pause", {"from": "UNPAUSED", "to": "PAUSED_ALL"})
     _wait(lambda: beat().get("reserved") == 0 and beat().get("pending") == 0)
     writer.close()
+
+
+def test_a_record_overtaken_and_then_lost_leaves_no_span_over_its_stamp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Thread A reserves a pause and stamps it; two heartbeats are written;
+    thread B emits an alias, which is queued first; A's pause is then lost
+    at write. Neither a live read taken before A emits nor the full read of
+    the stopped server may have a span covering A's stamp: it would say no
+    pause happened when one did."""
+    write = writer_module._Segment.write
+
+    def lose_pauses(segment: Any, line: bytes) -> bool:
+        return False if b'"kind":"pause"' in line else write(segment, line)
+
+    monkeypatch.setattr(writer_module._Segment, "write", lose_pauses)
+    root = tmp_path / "hook"
+    writer = EpochWriter(root, "engine", limits=WriterLimits(heartbeat_seconds=0.05))
+    writer.emit("hello", {"observes": ["pause"], **writer_module.stamp()})
+    status = writer.directory / "status.json"
+
+    def beat() -> dict[str, Any]:
+        return _status_file(status)
+
+    _wait(lambda: beat().get("last_seq", -1) >= 2)  # heartbeats, nothing held
+    with writer.reserve() as reservation:
+        stamped = writer_module.stamp()
+        after = beat().get("last_seq", 0)
+        _wait(lambda: beat().get("last_seq", 0) >= after + 2)  # two heartbeats
+        other = threading.Thread(
+            target=writer.emit,
+            args=("alias", {"internal": "b-1", **writer_module.stamp()}),
+        )
+        other.start()
+        other.join()
+        queued = beat().get("last_seq", 0)
+        _wait(lambda: beat().get("last_seq", 0) >= queued + 2)  # alias and a beat
+        shutil.copytree(root, tmp_path / "live")
+        reservation.emit("pause", {"from": "UNPAUSED", "to": "PAUSED_ALL", **stamped})
+    _wait(lambda: beat().get("errors") == 1)  # the pause's write failed
+    writer.close()
+
+    for directory, stopped in ((tmp_path / "live", False), (root, True)):
+        (epoch,) = read_execution_log(directory, server_stopped=stopped).engines()
+        assert not any(r.kind == "pause" for r in epoch.records)
+        spans = epoch.coverage()["spans"]
+        covering = [
+            span
+            for span in spans
+            if span["start_mono_ns"] <= stamped["mono_ns"] <= span["end_mono_ns"]
+        ]
+        assert covering == [], directory.name
 
 
 def test_emit_never_lets_go_of_a_record_it_has_not_queued(
@@ -1801,6 +1855,14 @@ def _epoch_records(directory: Path) -> list[dict[str, Any]]:
 def _queued_bytes(writer: EpochWriter) -> int:
     with writer._condition:
         return writer._queued_bytes
+
+
+def _status_file(path: Path) -> dict[str, Any]:
+    """The writer's status file, or nothing before its first heartbeat."""
+    if not path.exists():
+        return {}
+    status: dict[str, Any] = json.loads(path.read_text())
+    return status
 
 
 def _wait(condition: Callable[[], bool], seconds: float = 5.0) -> None:
