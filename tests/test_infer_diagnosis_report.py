@@ -59,9 +59,15 @@ def test_a_queue_incident_is_a_warning_report(burst: Path) -> None:
     assert payload["outcome"] == "findings"
     assert payload["inputs"][0]["sha256"] and payload["inputs"][0]["lines"] > 0
     assert payload["coverage"]["queue_saturation"]["status"] == "assessed"
-    assert payload["coverage"]["host_stall"]["reasons"] == [
-        "not_assessed_by_this_version"
-    ]
+    assert payload["coverage"]["rank_delay"] == {
+        "status": "unsupported",
+        "reasons": ["not_assessed_by_this_version"],
+        "by_subject": {},
+    }
+    assert payload["coverage"]["host_stall"]["status"] == "partial"
+    assert "engine_core_and_worker_not_assessed_by_this_version" in (
+        payload["coverage"]["host_stall"]["reasons"]
+    )
     assert len(finding["evidence"]) <= 8
     first = finding["evidence"][0]
     assert first["pointer"].startswith("/") and first["record_id"]

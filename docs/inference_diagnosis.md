@@ -241,6 +241,37 @@ TTFT excess. Without engine records the class is
 `partial/no_capacity_witness`; with requests on several engines,
 `unsupported/several_engines`.
 
+## Client admission, the API server and capture pauses
+
+**`client_admission`** (cause `instrumentation`): Stormlog's open-loop
+client held requests at its in-flight limit (`held_for_slot`) or dropped
+them, so they went out late. The class counts held and dropped requests and
+compares the subject's dispatch lag (send minus intended arrival) with the
+reference's; the contribution claim asks that the lag excess be at least
+half the excess of first content measured from the intended arrival. A
+closed loop has no intended arrivals: `unsupported/no_intended_arrivals`.
+
+**`host_stall` at `api_server`** (`detail.form: frontend`): requests took
+longer to reach the engine, in `send_to_ingress`, while the engine kept
+stepping, so the time went in HTTP, the API server or its IPC. Its gates are
+engine progress (a step completed inside at least half of the stalled
+requests' send-to-admission intervals) and a bounded placement of
+`send_to_ingress`. Two competitors are indispensable: a scheduler paused for
+new requests, which looks the same from the client and is ruled out only by
+pause records with nothing lost, and a capture pause, ruled out when no
+profiler window overlaps the stalls. Without engine records it is
+`unsupported/no_engine_progress_evidence`; without a placed
+`send_to_ingress`, `unsupported/clock_alignment_required`. Host stalls in
+the engine loop and the workers are not assessed yet, so `host_stall` is
+`partial` in the coverage.
+
+**`capture_pause`** (cause `instrumentation`): a profiler stop, which
+blocks the server while it writes the trace, lay across requests waiting for
+their first content. It needs the stop request's own stamp,
+`stop_requested_at_ns` on the `infer.trace_window` record; without it the
+class is `unsupported/no_stop_request_stamp`, and a run without profiler
+windows has nothing to assess (`no_trace_windows`).
+
 ## Thresholds
 
 Online triggers and the diagnoser read thresholds from one versioned table,

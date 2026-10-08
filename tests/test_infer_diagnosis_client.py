@@ -1,0 +1,200 @@
+"""Client admission, the API server, and the profiler's own stop."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from stormlog.infer.diagnosis_client import (
+    assess_api_server,
+    assess_capture_pause,
+    assess_client_admission,
+)
+from stormlog.infer.diagnosis_context import Context
+from stormlog.infer.diagnosis_inputs import read_input
+from stormlog.infer.diagnosis_join import join
+from stormlog.infer.diagnosis_selection import SelectionOptions, Subject, select
+from tests.diagnosis_scenarios import (
+    MS,
+    SESSION,
+    Engine,
+    SimRequest,
+    build_run,
+    poisson_free,
+)
+from tests.vllm_execution_helpers import SECOND, WALL_OFFSET
+
+AT = 90 * SECOND
+
+
+def _context(
+    tmp_path: Path,
+    requests: list[SimRequest],
+    engine: Engine,
+    windows: list[dict[str, Any]] | None = None,
+    declared: tuple[tuple[int, int], ...] = (),
+) -> Context:
+    view = join(read_input(build_run(tmp_path, requests, engine, windows=windows)))
+    return Context(view, select(view, SelectionOptions(windows=declared)))
+
+
+def _only(context: Context) -> Subject:
+    (subject,) = context.subjects()
+    return subject
+
+
+# ------------------------------------------------------- client admission
+
+
+def _held_burst() -> list[SimRequest]:
+    """A calm run, then arrivals the client sent progressively late."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    late = [
+        SimRequest(
+            f"b{i}",
+            sent_ns=AT + i * 5 * MS + i * 3 * MS,
+            intended_ns=AT + i * 5 * MS,
+            held_for_slot=True,
+        )
+        for i in range(100)
+    ]
+    return calm + late
+
+
+def test_requests_held_at_the_client_are_its_admission(tmp_path: Path) -> None:
+    start = AT + WALL_OFFSET
+    context = _context(
+        tmp_path,
+        _held_burst(),
+        Engine(max_num_seqs=256),
+        declared=((start, start + SECOND),),
+    )
+
+    assessment = assess_client_admission(context, _only(context))
+
+    (finding,) = assessment.findings
+    assert finding.metrics["held_for_slot"] == 100
+    assert finding.eligible and finding.cause == "instrumentation"
+    assert finding.observations[2].metric == "dispatch_lag_excess_ms"
+    assert finding.observations[2].ci is not None and finding.observations[2].ci[0] > 0
+
+
+def test_a_closed_loop_has_no_intended_arrivals(tmp_path: Path) -> None:
+    requests = poisson_free(140, 10 * SECOND, 500 * MS, closed_loop=True)
+    start = 60 * SECOND + WALL_OFFSET
+    context = _context(
+        tmp_path, requests, Engine(), declared=((start, start + 10 * SECOND),)
+    )
+
+    assessment = assess_client_admission(context, _only(context))
+
+    assert (assessment.status, assessment.reasons) == (
+        "unsupported",
+        ["no_intended_arrivals"],
+    )
+
+
+# --------------------------------------------------------------- API server
+
+
+def _slow_front() -> list[SimRequest]:
+    """Background load keeps the engine stepping; then two thirds of the
+    requests take 300 ms to reach it."""
+    background = poisson_free(900, 10 * SECOND, 100 * MS, prefix="g")
+    slow = poisson_free(100, AT, 50 * MS, prefix="s", ingress_ns=300 * MS)
+    return background + slow
+
+
+def test_requests_slow_to_reach_a_stepping_engine_are_a_frontend_stall(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, _slow_front(), Engine(max_num_seqs=64))
+    subject = context.subjects()[0]
+
+    assessment = assess_api_server(context, subject)
+
+    (finding,) = assessment.findings
+    assert (finding.kind, finding.component) == ("host_stall", "api_server")
+    assert finding.detail == {"form": "frontend", "attribution": "host"}
+    assert finding.gates == {"engine_progress": True, "bounded_placement": True}
+    statuses = {alt.kind: alt.status for alt in finding.alternatives}
+    assert statuses == {"scheduler_paused": "ruled_out", "capture_pause": "ruled_out"}
+    assert finding.eligible
+    assert (
+        finding.observations[0].value is not None
+        and finding.observations[0].value > 100
+    )
+
+
+def test_a_frontend_stall_needs_bracketed_engine_stamps(tmp_path: Path) -> None:
+    context = _context(
+        tmp_path, _slow_front(), Engine(max_num_seqs=64, bracketed=False)
+    )
+
+    assessment = assess_api_server(context, context.subjects()[0])
+
+    assert (assessment.status, assessment.reasons) == (
+        "unsupported",
+        ["clock_alignment_required"],
+    )
+
+
+# ------------------------------------------------------------ capture pause
+
+
+def _trace_window(**fields: Any) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "event_type": "infer.trace_window",
+        "session_id": SESSION,
+        "case_id": "c1",
+        "phase": "measured",
+        "requested_at_ns": AT + WALL_OFFSET - SECOND,
+        "started": True,
+        "started_at_ns": AT + WALL_OFFSET - SECOND,
+        "timestamp_ns": AT + WALL_OFFSET + 700 * MS,
+        **fields,
+    }
+
+
+@pytest.fixture(scope="module")
+def burst_requests() -> list[SimRequest]:
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    return calm + poisson_free(300, AT, 5 * MS, prefix="b")
+
+
+def test_a_profiler_stop_across_waiting_requests_is_a_capture_pause(
+    tmp_path: Path, burst_requests: list[SimRequest]
+) -> None:
+    stop = _trace_window(
+        stop_requested_at_ns=AT + WALL_OFFSET + 200 * MS,
+        stopped_at_ns=AT + WALL_OFFSET + 700 * MS,
+    )
+    context = _context(tmp_path, burst_requests, Engine(max_num_seqs=4), windows=[stop])
+
+    assessment = assess_capture_pause(context, _only(context))
+
+    (finding,) = assessment.findings
+    assert finding.cause == "instrumentation"
+    assert finding.metrics["stop_duration_ms"] == 500.0
+    assert finding.metrics["requests_across_stop"] >= 100
+    assert (
+        finding.window is not None
+        and finding.window["start_ns"] == AT + WALL_OFFSET + 200 * MS
+    )
+
+
+def test_without_the_stop_request_stamp_a_capture_pause_is_unsupported(
+    tmp_path: Path, burst_requests: list[SimRequest]
+) -> None:
+    stop = _trace_window(stopped_at_ns=AT + WALL_OFFSET + 700 * MS)
+    context = _context(tmp_path, burst_requests, Engine(max_num_seqs=4), windows=[stop])
+
+    assessment = assess_capture_pause(context, _only(context))
+
+    assert (assessment.status, assessment.reasons) == (
+        "unsupported",
+        ["no_stop_request_stamp"],
+    )
