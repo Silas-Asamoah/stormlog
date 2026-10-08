@@ -36,6 +36,7 @@ from .correlation_events import (
     LegacyInferenceRecord,
     MembershipEvent,
     RequestEvent,
+    StageEvent,
     load_inference_artifact,
 )
 from .errors import InferInputError, InferUsageError
@@ -61,12 +62,13 @@ from .vllm_execution_log import (
 )
 
 SOURCE = "stormlog.infer.import_execution"
-SUPPORTED = ("iterations", "memberships", "requests", "clock_alignment")
+SUPPORTED = ("iterations", "memberships", "requests", "clock_alignment", "stages")
 _COLLECTED_BY = {
     "iterations": IterationEvent,
     "memberships": MembershipEvent,
     "requests": RequestEvent,
     "clock_alignment": ClockAlignmentEvent,
+    "stages": StageEvent,
 }
 
 
@@ -291,40 +293,56 @@ def run_facts_from_records(
 ) -> RunFacts:
     """What an artifact's records tell the reducer about the run."""
     client = _ClientFacts()
-    referenced: set[EntityRef] = set()
-    iterations: set[EntityRef] = set()
-    attempts: set[EntityRef] = set()
-    admissions: dict[tuple[str, int], EntityRef] = {}
-    alignments: set[str] = set()
-    client_clock_domain: str | None = None
+    held = _HeldFacts()
     for record in records:
-        if isinstance(record, ArtifactIdentityEvent):
-            client_clock_domain = record.context.clock_domain
-        elif isinstance(record, ActivityReferenceEvent):
-            if record.iteration_ref is not None:
-                referenced.add(record.iteration_ref)
-        elif isinstance(record, IterationEvent):
-            iterations.add(record.iteration_ref)
-        elif isinstance(record, RequestEvent):
-            if record.attempt_ref is not None:
-                attempts.add(record.attempt_ref)
-                _note_admission(admissions, record)
-        elif isinstance(record, ClockAlignmentEvent):
-            alignments.add(record.event_id)
-        elif isinstance(record, LegacyInferenceRecord):
+        if isinstance(record, LegacyInferenceRecord):
             client.add(record.raw)
+        else:
+            held.add(record)
     return RunFacts(
         run_id=run_id,
         session_id=session_id,
-        client_clock_domain=client_clock_domain,
+        client_clock_domain=held.client_clock_domain,
         requests=client.requests,
         windows=client.all_windows(),
-        referenced_iterations=frozenset(referenced),
-        existing_iterations=frozenset(iterations),
-        existing_attempts=frozenset(attempts),
-        existing_alignments=frozenset(alignments),
-        existing_admissions=admissions,
+        referenced_iterations=frozenset(held.referenced),
+        existing_iterations=frozenset(held.iterations),
+        existing_attempts=frozenset(held.attempts),
+        existing_alignments=frozenset(held.alignments),
+        existing_stages=frozenset(held.stages),
+        existing_admissions=held.admissions,
     )
+
+
+@dataclass
+class _HeldFacts:
+    """What the artifact already holds: entities an import must not write
+    again, and the steps imported GPU activity refers to."""
+
+    client_clock_domain: str | None = None
+    referenced: set[EntityRef] = field(default_factory=set)
+    iterations: set[EntityRef] = field(default_factory=set)
+    attempts: set[EntityRef] = field(default_factory=set)
+    admissions: dict[tuple[str, int], EntityRef] = field(default_factory=dict)
+    alignments: set[str] = field(default_factory=set)
+    stages: set[str] = field(default_factory=set)
+
+    def add(self, record: InferenceRecord) -> None:
+        if isinstance(record, ArtifactIdentityEvent):
+            self.client_clock_domain = record.context.clock_domain
+        elif isinstance(record, ActivityReferenceEvent):
+            if record.iteration_ref is not None:
+                self.referenced.add(record.iteration_ref)
+        elif isinstance(record, IterationEvent):
+            self.iterations.add(record.iteration_ref)
+        elif isinstance(record, RequestEvent):
+            if record.attempt_ref is not None:
+                self.attempts.add(record.attempt_ref)
+                _note_admission(self.admissions, record)
+        elif isinstance(record, ClockAlignmentEvent):
+            self.alignments.add(record.event_id)
+        elif isinstance(record, StageEvent) and record.context.source == SOURCE:
+            self.stages.add(record.event_id)
 
 
 def _note_admission(

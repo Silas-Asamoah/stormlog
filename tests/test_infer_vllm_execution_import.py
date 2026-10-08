@@ -25,6 +25,7 @@ from stormlog.infer.correlation_events import (
     IterationEvent,
     MembershipEvent,
     RequestEvent,
+    StageEvent,
     load_inference_artifact,
 )
 from stormlog.infer.errors import InferInputError
@@ -176,6 +177,7 @@ def test_import_appends_the_reduced_records_and_the_high_water(tmp_path: Path) -
         "memberships": 4,
         "requests": 2,
         "clock_alignment": 1,
+        "stages": 0,
     }
     assert execution["epochs"][EPOCH]["foreign_only_counted"] == 1
     assert execution["epochs"][EPOCH]["foreign_only_placed"] == 1
@@ -198,8 +200,8 @@ def _newer_hook(record: dict[str, Any]) -> dict[str, Any]:
     return newer
 
 
-# What the import takes from a later hook's records: the request's enqueue,
-# and each record's source sequence, which the inserted records shift.
+# What the import takes from a later hook's records: stages, the request's
+# enqueue, and each record's source sequence, which the inserted records shift.
 _LATER_REQUEST_FIELDS = (
     "enqueued_mono_ns",
     "enqueued_wall_ns",
@@ -275,7 +277,7 @@ def test_a_later_hook_s_log_changes_only_what_the_import_reads_from_it(
             [
                 _without_later_evidence(record.to_record())
                 for record in load_inference_artifact(artifact)
-                if not isinstance(record, CapabilityEvent)
+                if not isinstance(record, (CapabilityEvent, StageEvent))
             ]
         )
 
