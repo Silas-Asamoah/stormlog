@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -362,6 +363,16 @@ def test_a_run_record_round_trips(tmp_path: Path) -> None:
     path = tmp_path / "run.json"
     write_run(path, run)
     assert load_run(path) == run
+    # What the harness measured of the baseline goes with it (close-221-
+    # delta, H4: the dose check's per-hold rates, to explain a late
+    # recovery), and a record written before it had any still reads.
+    checks = {"dose_check": {"limit": 1.0, "per_hold": {"busy step gaps": 0.44}}}
+    measured = replace(run, baseline_checks=checks)
+    write_run(path, measured)
+    assert load_run(path).baseline_checks == checks
+    older = run.to_record()
+    del older["baseline_checks"]
+    assert parse_run(older) == run
     record = run.to_record()
     record["priming"] = {"start_ns": 30 * S, "end_ns": 0}
     with pytest.raises(GroundTruthError, match="priming ends before it begins"):

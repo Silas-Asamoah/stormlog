@@ -514,7 +514,10 @@ class RunRecord:
     """One run's truth beside its episodes: the windows the harness
     measured, on the victim's clock, and whether the run itself failed its
     protocol (a failed priming check, say). The scorer derives the run's
-    negative exposure from these and the run's episodes."""
+    negative exposure from these and the run's episodes. ``baseline_checks``
+    holds what the harness measured of the baseline for its rules (each
+    cadence series' dose-check rate, say), so a run's outcomes can be
+    explained; the scorer reads none of it."""
 
     run_id: str
     clock_domain: str | None
@@ -524,6 +527,7 @@ class RunRecord:
     final_recovery: Interval | None = None
     protocol_failure: str | None = None
     actions: tuple[dict[str, Any], ...] = ()
+    baseline_checks: Mapping[str, Any] = field(default_factory=dict)
 
     def problems(self) -> list[str]:
         found = [] if self.run_id else ["a run needs its run_id"]
@@ -569,6 +573,7 @@ class RunRecord:
             "final_recovery": _interval_record(self.final_recovery),
             "protocol_failure": self.protocol_failure,
             "actions": [dict(action) for action in self.actions],
+            "baseline_checks": dict(self.baseline_checks),
         }
 
 
@@ -594,6 +599,7 @@ def parse_run(record: Mapping[str, Any]) -> RunRecord:
             final_recovery=_interval(record.get("final_recovery")),
             protocol_failure=record.get("protocol_failure"),
             actions=tuple(dict(action) for action in record.get("actions") or ()),
+            baseline_checks=dict(record.get("baseline_checks") or {}),
         )
     except (KeyError, TypeError, ValueError) as error:
         raise GroundTruthError([f"malformed run record: {error!r}"]) from error
