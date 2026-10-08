@@ -298,10 +298,21 @@ def test_trace_windows_count_how_they_ended() -> None:
         metrics,
         {"event_type": "infer.trace_window", "stop_reason": None, "started": False},
     )
+    # A start whose outcome is unknown is stopped as start_unknown.
+    _feed(
+        registry,
+        metrics,
+        {
+            "event_type": "infer.trace_window",
+            "stop_reason": "start_unknown",
+            "started": False,
+        },
+    )
     exposition = _exposition(registry)
     windows = "stormlog_trace_windows_total"
     assert exposition.value(windows, stop_reason="time_bound", started="true") == 1
     assert exposition.value(windows, stop_reason="not_started", started="false") == 1
+    assert exposition.value(windows, stop_reason="start_unknown", started="false") == 1
 
 
 def test_a_last_scrape_time_is_absent_until_a_scrape_has_that_outcome() -> None:

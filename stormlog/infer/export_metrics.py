@@ -52,11 +52,13 @@ DIRECTIONS = ("prompt", "output")
 # against it, since a negative count would make a counter go down.
 MAX_TOKEN_COUNT = 2**53
 SCRAPE_OUTCOMES = ("ok", "error")
+# How a trace window ended; trace_capture.py writes the first five.
 TRACE_STOP_REASONS = (
     "phase_end",
     "time_bound",
     "cancelled",
     "stopped_by_server",
+    "start_unknown",
     "not_started",
 )
 BOOLEANS = ("true", "false")
