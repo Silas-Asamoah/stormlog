@@ -7,7 +7,9 @@ and an experiment that would confirm it. Three rules keep a finding honest:
 - **Eligibility.** A kind may claim a fault only when its gates hold and
   every competitor indispensable to it was ruled out; an untestable one
   fails the gate. An ineligible finding is ``claim: observation``, cause
-  ``undetermined``, at ``info``, and lists what failed.
+  ``undetermined``, at ``info``, and lists what failed. A competitor shown
+  to explain a material but minor share is ``contributing``: the finding
+  stays eligible, but it is contested and makes no fault claim.
 - **Confidence** is ordinal and per claim: whether the mechanism occurred
   (condition), and whether it explains the incident (contribution). Its
   level is the lower of the two.
@@ -51,6 +53,7 @@ CLAIM_CONDITION = "condition"
 CLAIM_OBSERVATION = "observation"
 
 RULED_OUT = "ruled_out"
+CONTRIBUTING = "contributing"
 UNTESTABLE = "untestable"
 NOT_RULED_OUT = "not_ruled_out"
 UPSTREAM = "upstream"
@@ -99,7 +102,7 @@ class Alternative:
     """A competing mechanism and what became of it."""
 
     kind: str
-    status: str  # ruled_out, untestable, not_ruled_out, or upstream
+    status: str  # ruled_out, contributing, untestable, not_ruled_out, upstream
     reason: str
     indispensable: bool = False
 
@@ -185,9 +188,20 @@ class Finding:
         failed += [
             f"competitor:{alternative.kind}:{alternative.status}"
             for alternative in self.alternatives
-            if alternative.indispensable and alternative.status != RULED_OUT
+            if alternative.indispensable
+            and alternative.status not in (RULED_OUT, CONTRIBUTING)
         ]
         return failed
+
+    @property
+    def contested(self) -> list[str]:
+        """Indispensable competitors that explain a minor share themselves:
+        the mechanism stands, but not as the fault."""
+        return [
+            f"competitor:{alternative.kind}:{alternative.status}"
+            for alternative in self.alternatives
+            if alternative.indispensable and alternative.status == CONTRIBUTING
+        ]
 
     @property
     def eligible(self) -> bool:
@@ -208,7 +222,8 @@ class Finding:
         strong = _at_least(self.condition.level, MEDIUM) and _at_least(
             self.contribution.level, MEDIUM
         )
-        return "warning" if explained and strong and self.incident else "info"
+        clear = not self.contested
+        return "warning" if explained and strong and clear and self.incident else "info"
 
     @property
     def cause(self) -> str:
@@ -320,6 +335,7 @@ __all__ = [
     "CLAIM_CONDITION",
     "CLAIM_FAULT",
     "CLAIM_OBSERVATION",
+    "CONTRIBUTING",
     "DRIVER_UNDETERMINED",
     "HIGH",
     "LOW",

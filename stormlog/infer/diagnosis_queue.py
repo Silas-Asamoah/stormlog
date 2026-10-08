@@ -22,6 +22,7 @@ from .diagnosis_join import Execution
 from .diagnosis_loop import LoopGapConfig, stalls_over_limit
 from .diagnosis_metrics import aggregate_assessment, subject_signal
 from .diagnosis_model import (
+    CONTRIBUTING,
     NOT_RULED_OUT,
     RULED_OUT,
     UNTESTABLE,
@@ -38,7 +39,9 @@ from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
 from .diagnosis_steps import Step, Steps, loop_steps, merge_intervals
 from .diagnosis_thresholds import (
     LOOP_NO_BASELINE_FLOOR_NS,
+    QUEUE_COMPETITOR_FLOOR,
     QUEUE_CONTRIBUTION,
+    QUEUE_FRONT_SHARE,
     QUEUE_STALL_COVERAGE,
     QUEUE_WITNESS_SHARE,
     resolve_threshold,
@@ -386,19 +389,21 @@ def _engine_ingress(
         return Alternative(
             "engine_ingress", UNTESTABLE, "too few ingress samples", True
         )
-    if ingress.estimate < 0.25 * excess.estimate:
-        return Alternative(
-            "engine_ingress",
-            RULED_OUT,
-            f"engine_ingress excess {ingress.estimate / 1e6:.1f} ms",
-            True,
-        )
-    return Alternative(
-        "engine_ingress",
-        NOT_RULED_OUT,
-        f"engine_ingress excess {ingress.estimate / 1e6:.1f} ms",
-        True,
-    )
+    status = _by_share(context, ingress.estimate / excess.estimate, QUEUE_FRONT_SHARE)
+    reason = f"engine_ingress excess {ingress.estimate / 1e6:.1f} ms"
+    return Alternative("engine_ingress", status, reason, True)
+
+
+def _by_share(context: Context, share: float, cut: str) -> str:
+    """A competitor by the share of the wait excess it explains itself:
+    ruled out below the floor, contributing up to its cut, else not ruled
+    out."""
+    floor = resolve_threshold(QUEUE_COMPETITOR_FLOOR, context.thresholds)[0]
+    if share < floor:
+        return RULED_OUT
+    if share < resolve_threshold(cut, context.thresholds)[0]:
+        return CONTRIBUTING
+    return NOT_RULED_OUT
 
 
 def _preemption(spanning: list[Step]) -> Alternative:
@@ -443,17 +448,9 @@ def _api_server(context: Context, subject: Subject, excess: Difference) -> Alter
         return Alternative(
             "host_stall@api_server", UNTESTABLE, "send_to_ingress not placed"
         )
-    if front.estimate < 0.25 * excess.estimate:
-        return Alternative(
-            "host_stall@api_server",
-            RULED_OUT,
-            f"send_to_ingress excess {front.estimate / 1e6:.1f} ms",
-        )
-    return Alternative(
-        "host_stall@api_server",
-        NOT_RULED_OUT,
-        f"send_to_ingress excess {front.estimate / 1e6:.1f} ms",
-    )
+    status = _by_share(context, front.estimate / excess.estimate, QUEUE_FRONT_SHARE)
+    reason = f"send_to_ingress excess {front.estimate / 1e6:.1f} ms"
+    return Alternative("host_stall@api_server", status, reason)
 
 
 # ---------------------------------------------------------------- helpers

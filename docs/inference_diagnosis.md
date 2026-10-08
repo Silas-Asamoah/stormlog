@@ -238,14 +238,21 @@ version records which test ran.
 
 A finding names a kind at a location for one subject, with its
 observations, the competing mechanisms and what became of each (`ruled_out`,
-`untestable`, `not_ruled_out`, or `upstream` for a cause that comes before
-it), and an experiment that would confirm it.
+`contributing`, `untestable`, `not_ruled_out`, or `upstream` for a cause that
+comes before it), and an experiment that would confirm it. A competitor
+measured by the share of the excess it explains itself is `ruled_out` only
+below a small floor (10%), not merely below the share that would make it
+the explanation instead: between the two it is `contributing`, a real but
+minor second cause.
 
 - **Eligibility.** A kind may claim a fault only when its gates hold and
   every competitor indispensable to it is `ruled_out`; one that is
   `untestable` fails the gate as surely as one that is not ruled out. An
   ineligible finding is `claim: observation`, `cause: undetermined`, at
-  `info`, and `eligibility.failed` lists why. Other competitors only lower
+  `info`, and `eligibility.failed` lists why. An indispensable competitor
+  that is `contributing` leaves the finding eligible but contested
+  (`eligibility.contested`): it stays `claim: condition` at `info`, since
+  the incident had a second cause. Other competitors only lower
   confidence.
 - **Confidence** is ordinal and per claim. *Condition*, that the mechanism
   occurred, asks for direct evidence, enough samples, robustness to clock
@@ -299,10 +306,10 @@ interval); with no excess it reports `not_observed`.
 | `engine_stall` | yes | engine-loop stalls, found by the same rules as the online `engine_loop_gap`, cover less than half of the waiting time |
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms). Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
-| `engine_ingress` | yes | the `engine_ingress` excess is under a quarter of the wait excess (untestable on a log without `enqueued` records) |
+| `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
 | `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream` |
 | `client_admission` | no | no request was held at the client |
-| `host_stall@api_server` | no | the `send_to_ingress` excess is under a quarter of the wait excess |
+| `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 
 The contribution claim also asks that the wait excess be at least half the
 TTFT excess. Without engine records the class is
@@ -473,6 +480,8 @@ The values are provisional until they are read from real runs.
 | `queue_saturation.witness_step_share` | 0.5 | share of the steps scheduled while requests waited at capacity for a witness |
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
 | `queue_saturation.stall_wait_share` | 0.5 | share of the waiting time engine stalls must cover to explain it instead |
+| `queue_saturation.front_excess_share` | 0.25 | share of the wait excess an excess before the queue (engine ingress, the API server) must reach to explain it instead |
+| `queue_saturation.competitor_floor_share` | 0.1 | share of the wait excess below which a competitor is ruled out; above it, up to the competitor's own share, it is contributing |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
 | `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |
