@@ -29,7 +29,7 @@ import statistics
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from stormlog.infer.arrivals import CLOSED, FIXED_RATE
 from stormlog.infer.config import ProfileConfig
@@ -140,8 +140,11 @@ class Neighbor:
             extra_body={"ignore_eos": True},
         )
 
-    def start(self) -> None:
-        """Start sending, on a thread."""
+    def start(
+        self, launch: Callable[[threading.Thread], None] = threading.Thread.start
+    ) -> None:
+        """Start sending, on a thread that ``launch`` starts: the harness
+        starts it with its signals blocked, as it does its poller."""
         profiler = InferenceProfiler(self.config())
 
         def run() -> None:
@@ -151,7 +154,7 @@ class Neighbor:
                 self._error.append(error)
 
         self._thread = threading.Thread(target=run, name=self.run_id, daemon=True)
-        self._thread.start()
+        launch(self._thread)
 
     def join(self, timeout: float | None = None) -> bool:
         """Wait for the neighbor to finish; True once it has."""

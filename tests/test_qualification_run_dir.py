@@ -134,6 +134,101 @@ def test_verify_catches_tampering_and_truncation(tmp_path: Path, tamper: str) ->
     assert verify(run), tamper
 
 
+def test_only_the_run_that_claimed_a_label_publishes_it(tmp_path: Path) -> None:
+    # close-221-final: a label is claimed by one rename of a directory laid
+    # out with the run's nonce; a second run given it can neither claim it
+    # nor publish what is there, and the owner file isn't published.
+    first = RunDirectory(tmp_path, "q221-0000000000000003").create()
+    second = RunDirectory(tmp_path, first.label)
+    with pytest.raises(FileExistsError):
+        second.create()
+    with pytest.raises(FileExistsError):
+        second.publish()
+    assert first.owned() and not second.owned()
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        f".{first.label}.partial"
+    ]
+    published = first.publish()
+    assert verify(published) == [] and not (published / ".owner").exists()
+    with pytest.raises(FileExistsError):
+        first.publish()
+
+
+def test_a_label_published_while_it_is_claimed_is_given_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-final: a run that published between this one's check and
+    # its claim freed the partial directory's name, but the label is its.
+    from examples.qualification import run_dir
+
+    first = RunDirectory(tmp_path, "q221-0000000000000004").create()
+    (first.run / "victim.jsonl").write_text('{"event_type": "infer.request"}\n')
+    real = run_dir._claim
+
+    def published_meanwhile(staging: Path, partial: Path) -> None:
+        first.publish()
+        real(staging, partial)
+
+    monkeypatch.setattr(run_dir, "_claim", published_meanwhile)
+    with pytest.raises(FileExistsError):
+        RunDirectory(tmp_path, first.label).create()
+    assert verify(first.final) == []
+    names = sorted(path.name for path in tmp_path.iterdir())
+    assert names == [first.label, f"{first.label}.sha256"]
+
+
+def test_a_published_label_is_refused_before_anything_is_made(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gate-221-bisect, G3: create() checks for the published run first, so
+    # a taken label makes nothing, not even a staging directory to remove.
+    from examples.qualification import run_dir
+
+    first = RunDirectory(tmp_path, "q221-0000000000000005").create()
+    (first.run / "victim.jsonl").write_text('{"event_type": "infer.request"}\n')
+    first.publish()
+    claims: list[Path] = []
+    real = run_dir._claim
+
+    def claim(staging: Path, partial: Path) -> None:
+        claims.append(staging)
+        real(staging, partial)
+
+    monkeypatch.setattr(run_dir, "_claim", claim)
+    with pytest.raises(FileExistsError):
+        RunDirectory(tmp_path, first.label).create()
+    assert claims == []
+
+
+def test_a_staging_directory_left_behind_never_blocks_the_label(
+    tmp_path: Path,
+) -> None:
+    # gate-221-bisect, G3: each run's staging directory is named by its
+    # nonce, so one a crashed run left behind can't block the label.
+    label = "q221-0000000000000006"
+    (tmp_path / f".{label}.new").mkdir()
+    (tmp_path / f".{label}.0123456789abcdef.new").mkdir()
+    assert RunDirectory(tmp_path, label).create().owned()
+
+
+def test_a_claim_interrupted_as_its_staging_is_made_leaves_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gate-221-bisect, G4: the staging directory was made before the try
+    # that removes it, so a signal handled just after left it behind.
+    real = Path.mkdir
+
+    def mkdir(self: Path, *args: Any, **kwargs: Any) -> None:
+        real(self, *args, **kwargs)
+        if self.name.endswith(".new"):
+            raise KeyboardInterrupt  # handled as the staging mkdir returns
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    with pytest.raises(KeyboardInterrupt):
+        RunDirectory(tmp_path, "q221-0000000000000007").create()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_a_published_run_keeps_its_sums_digest_beside_it(tmp_path: Path) -> None:
     run = _run(tmp_path)
     assert verify(run) == []
