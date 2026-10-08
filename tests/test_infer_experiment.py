@@ -982,6 +982,26 @@ def test_a_resume_ends_in_the_journal_what_it_stopped(tmp_path: Path) -> None:
     assert journaled(journal) == []
 
 
+def test_a_resume_refuses_while_a_journaled_launch_will_not_die(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-213-pr24-cloud's mutant n1_journal_unverified_ok: nothing
+    # failed when a journaled launch that outlived its stop let the resume
+    # go on beside it.
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import Cleanup
+
+    journal = tmp_path / "preludes" / "b00-warm" / "launches.ndjson"
+    journal.parent.mkdir(parents=True)
+    entry = {"name": "server", "pid": 4242, "pgid": 4242, "mark": "c3" * 16}
+    journal.write_text(json.dumps(entry) + "\n")
+    left = Cleanup(False, "proc", ({"pid": 4242},))
+    monkeypatch.setattr(experiment, "stop_journaled", lambda entry: left)
+    with pytest.raises(InferUsageError, match=r"b00-warm server: .* left \[4242\]"):
+        experiment._stop_left_launches(tmp_path)
+    assert journal.read_text() == json.dumps(entry) + "\n"
+
+
 def test_a_second_runner_on_the_same_experiment_refuses_and_touches_nothing(
     tmp_path: Path,
 ) -> None:
@@ -1211,13 +1231,19 @@ def test_a_decision_the_runner_died_before_is_made_on_resume(
 
     monkeypatch.setattr(experiment, "_decide_unhealthy", die)
     document = _against_control(["watch", "off"], args=True)
+    warm = {"name": "warm", "command": ["{python}", "-c", "pass"]}
+    document["block_prelude"] = [warm]
     with pytest.raises(RuntimeError):
         _run(tmp_path, document)
     exp = tmp_path / "exp"
     (watch_dir,) = exp.glob("runs/*-watch-a1")
     assert json.loads((watch_dir / "run.json").read_text())["decided_by"] == "pending"
+    prelude = (exp / "preludes" / "b00-warm" / "launches.ndjson").read_text()
     monkeypatch.undo()
     resumed = _run(tmp_path, document, resume=True, retry_incomplete=True)
+    # Nothing in the block starts an attempt, so its prelude does not run
+    # again (close-213-pr24-cloud's mutant n3_needs_prelude_pending).
+    assert (exp / "preludes" / "b00-warm" / "launches.ndjson").read_text() == prelude
     assert [(r["label"], r["state"], r["decided_by"]) for r in resumed] == [
         (watch_dir.name, "outcome_failure", "arm_launch_differs")
     ]

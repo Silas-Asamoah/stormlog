@@ -487,6 +487,27 @@ def test_a_process_started_after_the_launch_ended_is_not_its(
     assert may(31, since, Path("/proc"), "psutil", lasted_s=None) is True
 
 
+def test_on_linux_a_start_after_the_leader_exited_is_counted_in_ticks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # close-213-pr24-cloud's mutant n6_later_wallclock: on Linux the bound
+    # is how long the leader ran, in ticks since boot, not in seconds.
+    from stormlog.infer import experiment_process as ep
+
+    ticks, launch_ticks = ep._clock_ticks(), 1_000_000
+    _table(
+        monkeypatch,
+        {
+            50: ep._Process(launch_ticks + 5 * ticks, 1, os.getuid()),
+            51: ep._Process(launch_ticks + 20 * ticks, 1, os.getuid()),
+        },
+    )
+    since = {"pid": 1, "start_ticks": launch_ticks}
+    may = ep._may_be_launched
+    assert may(50, since, Path("/proc"), "proc", lasted_s=10.0) is True
+    assert may(51, since, Path("/proc"), "proc", lasted_s=10.0) is False
+
+
 def test_a_launch_knows_how_long_its_leader_ran() -> None:
     launched = launch("step", [sys.executable, "-c", "import time; time.sleep(0.3)"])
     assert launched.lasted_s() is None
@@ -677,6 +698,21 @@ def test_on_linux_a_gone_leaders_group_is_judged_by_its_mark_alone(
         4003,
         4004,
     ]
+
+
+def test_on_linux_a_journaled_group_is_not_signalled_again_once_its_leader_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-213-pr24-cloud's mutant n1_stop_journaled_identity_off: once
+    # the leader has left, its PID may be another's, so the group gets no
+    # SIGKILL; what the group left is killed by PID, as the launch's.
+    proc = tmp_path / "proc"
+    fake_process(proc, 4000, start=500, environ={MARK_VARIABLE: MARK})
+    fake_process(proc, 4001, pgid=4000, sid=4000, start=600, environ={})
+    fake = _FakeLinux(proc, monkeypatch)
+    cleanup = stop_journaled(_journal_entry(4000, 500), timeout_s=0.2, proc=proc)
+    assert (fake.signalled, fake.killed) == ([(4000, signal.SIGTERM)], [4001])
+    assert cleanup.verified
 
 
 def test_on_linux_a_journaled_leader_still_running_has_its_group_stopped(
