@@ -28,6 +28,9 @@ LOOP_HEARTBEAT_GRACE_NS = "host_stall.heartbeat_grace_ns"
 QUEUE_WITNESS_SHARE = "queue_saturation.witness_step_share"
 QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
 QUEUE_STALL_COVERAGE = "queue_saturation.stall_wait_share"
+WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
+WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
+WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
 SELECTION_WINDOW_S = "selection.window_seconds"
 SELECTION_SPAN_CAP_S = "selection.span_cap_seconds"
 SELECTION_MIN_REQUESTS = "selection.min_requests"
@@ -74,6 +77,12 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # Engine stalls explain the waits instead when they cover this share
         # of the waiting time.
         QUEUE_STALL_COVERAGE: 0.5,
+        # Workload changes: arrivals faster by this ratio (interval's lower
+        # bound), prompts or outputs longer by this ratio, or this much less
+        # of the requests declaring a shared prefix.
+        WORKLOAD_RATE_RATIO: 1.25,
+        WORKLOAD_LENGTH_RATIO: 1.1,
+        WORKLOAD_SHARE_DROP: 0.1,
         # Incident selection: base windows of 1 s, joined until each holds
         # 20 requests or spans 30 s.
         SELECTION_WINDOW_S: 1.0,
@@ -127,5 +136,8 @@ __all__ = [
     "SELECTION_SPAN_CAP_S",
     "SELECTION_WINDOW_S",
     "THRESHOLDS_VERSION",
+    "WORKLOAD_LENGTH_RATIO",
+    "WORKLOAD_RATE_RATIO",
+    "WORKLOAD_SHARE_DROP",
     "resolve_threshold",
 ]
