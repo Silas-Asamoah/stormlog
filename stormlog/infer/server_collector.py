@@ -563,10 +563,12 @@ def read_process_rss(process: psutil.Process) -> tuple[str, int | None, str | No
     """Return ``(state, rss, detail)``; only a gone or replaced process is invalid.
 
     ``is_running`` compares the process creation time with the original, so it
-    also detects a PID that the OS reused for another process.
+    also detects a PID that the OS reused for another process. A zombie has
+    ended too: on Linux it still counts as running, with an RSS of 0, until
+    its parent reaps it.
     """
     try:
-        if not process.is_running():
+        if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
             return "invalid", None, _PROCESS_ENDED_DETAIL
         return "valid", int(process.memory_info().rss), None
     except psutil.NoSuchProcess:  # includes ZombieProcess
