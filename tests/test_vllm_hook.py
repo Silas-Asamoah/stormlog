@@ -530,6 +530,7 @@ def test_pause_transitions_and_the_state_each_step_saw(vllm: dict[str, Any]) -> 
     scheduler.schedule()
     scheduler.set_pause_state(PauseState.PAUSED_ALL)
     scheduler.set_pause_state(PauseState.UNPAUSED)
+    scheduler.set_pause_state(PauseState.UNPAUSED)  # a wake-up's resume: no change
     refused = vllm["Scheduler"](vllm_config(pp=2))
     refused.set_pause_state(PauseState.PAUSED_ALL)
 

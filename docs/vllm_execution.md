@@ -312,7 +312,9 @@ exception passes through, and the step's fate was not seen.
 
 One per call to `set_pause_state`, vLLM's single place for changing the
 scheduler's pause state, stamped after the call returns; `from` and `to` are
-the states before and after (`UNPAUSED`, `PAUSED_NEW` or `PAUSED_ALL`).
+the states before and after (`UNPAUSED`, `PAUSED_NEW` or `PAUSED_ALL`). A
+call that leaves the state as it was is not recorded: vLLM resumes the
+scheduler on every `wake_up`, whether or not it was paused.
 `PAUSED_ALL` stops the engine from stepping, so no `scheduled` record shows
 it; `PAUSED_NEW` holds new requests while running ones keep stepping. A call
 that raises is not recorded. Listed in `observes` as `pause`.
