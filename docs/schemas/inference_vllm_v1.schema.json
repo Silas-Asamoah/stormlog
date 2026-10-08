@@ -54,6 +54,7 @@
         "error": { "type": ["string", "null"], "minLength": 1 },
         "content_digest": { "type": ["string", "null"], "minLength": 1 },
         "content_bytes": { "type": ["integer", "null"], "minimum": 0 },
+        "completed_at_ns": { "type": ["integer", "null"], "minimum": 1 },
         "scrape": {
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/compact_scrape" }]
         },

@@ -275,7 +275,8 @@ class VllmMetricsScraper:
         result, compact = _fetch_and_parse(
             self.url, self._timeout(timeout_seconds), self.api_key
         )
-        return self._record(observed_at_ns, marker, case_id, phase, result, compact)
+        sampled = (observed_at_ns, time.time_ns())
+        return self._record(sampled, marker, case_id, phase, result, compact)
 
     async def scrape_async(
         self,
@@ -296,7 +297,10 @@ class VllmMetricsScraper:
             _fetch_and_parse, self.url, self._timeout(timeout_seconds), self.api_key
         )
         result, compact = await _off_loop(fetch)
-        return self._record(observed_at_ns, marker, case_id, phase, result, compact)
+        # Stamped back on the loop, so the interval also covers the time the
+        # fetch thread took to start, which duration_ms does not.
+        sampled = (observed_at_ns, time.time_ns())
+        return self._record(sampled, marker, case_id, phase, result, compact)
 
     def abandoned(
         self,
@@ -319,14 +323,15 @@ class VllmMetricsScraper:
             "run passed while the response was still arriving",
             deadline_seconds * 1000.0,
         )
-        return self._failed(observed_at_ns, marker, case_id, phase, result)
+        sampled = (observed_at_ns, max(observed_at_ns, time.time_ns()))
+        return self._failed(sampled, marker, case_id, phase, result)
 
     def _timeout(self, override: float | None) -> float:
         return self.timeout_seconds if override is None else override
 
     def _record(
         self,
-        observed_at_ns: int,
+        sampled: tuple[int, int],
         marker: str,
         case_id: str | None,
         phase: str | None,
@@ -334,7 +339,7 @@ class VllmMetricsScraper:
         compact: CompactScrape | None,
     ) -> VllmScrapeRecord:
         if compact is None:
-            return self._failed(observed_at_ns, marker, case_id, phase, result)
+            return self._failed(sampled, marker, case_id, phase, result)
         found = discover(compact)
         if self.first_discovery is None:
             self.first_discovery = found
@@ -343,7 +348,8 @@ class VllmMetricsScraper:
         return VllmScrapeRecord(
             session_id=self.session_id,
             run_id=self.run_id,
-            observed_at_ns=observed_at_ns,
+            observed_at_ns=sampled[0],
+            completed_at_ns=sampled[1],
             source_url=self.source_url,
             marker=marker,
             interval_ms=self.interval_ms,
@@ -361,7 +367,7 @@ class VllmMetricsScraper:
 
     def _failed(
         self,
-        observed_at_ns: int,
+        sampled: tuple[int, int],
         marker: str,
         case_id: str | None,
         phase: str | None,
@@ -375,7 +381,8 @@ class VllmMetricsScraper:
         return VllmScrapeRecord(
             session_id=self.session_id,
             run_id=self.run_id,
-            observed_at_ns=observed_at_ns,
+            observed_at_ns=sampled[0],
+            completed_at_ns=sampled[1],
             source_url=self.source_url,
             marker=marker,
             interval_ms=self.interval_ms,

@@ -109,6 +109,13 @@ joins to a request by the recorded value and never by a rebuilt string.
   error instead. About 30 KB per scrape for 0.30.0, most of it the sixteen
   histograms' bucket lists. NaN and infinite sample values are written as
   the strings `NaN`, `+Inf` and `-Inf`, so every line is strict JSON.
+  `observed_at_ns` is stamped before the request goes out and
+  `completed_at_ns` when the response, or the failure, comes back to the
+  scraper, both on the client clock: the server's values were sampled
+  somewhere between the two. For a scrape run on a thread, the second stamp
+  is taken back on the event loop, so the interval also covers the thread's
+  start, which `duration_ms` (timed inside the fetch) does not. Records
+  written before `completed_at_ns` existed lack it.
 - `infer.vllm_span`: one record per span, attributes under their native
   names, timestamps on the exporter's wall clock, and the recovered
   `request_id`. The clock domain is named by the exporter's `host.name`
@@ -183,9 +190,10 @@ two:
 - **Sample intervals.** A scrape sampled the server at some instant between
   its stamp (`observed_at_ns`) and its response. A window's duration is
   measured between the first and last scrapes' interval midpoints, and rates
-  carry the bounds the intervals allow. A scrape bounded only by its
-  `duration_ms` misses the fetch thread's start delay, so its window says
-  `placement: approximate`.
+  carry the bounds the intervals allow. The interval ends at the scrape's
+  `completed_at_ns`; an older record without it is bounded by its
+  `duration_ms`, which misses the fetch thread's start delay, so its window
+  says `placement: approximate`.
 
 A series that more than one label set matches, such as
 `vllm:num_requests_waiting_by_reason` without a `reason`, is

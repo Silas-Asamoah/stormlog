@@ -349,6 +349,8 @@ class TestProfileScrapes:
         assert all(s["status"] == "ok" for s in scrapes)
         assert all(s["observation_scope"] == "engine_aggregate" for s in scrapes)
         assert all(s["interval_ms"] == 100 for s in scrapes)
+        # The server was sampled between the stamp and the response's return.
+        assert all(s["observed_at_ns"] <= s["completed_at_ns"] for s in scrapes)
         # Scrapes sit on the client's clock, like the phase windows.
         windows = _of_type(records, "infer.phase_window")
         measured = [s for s in scrapes if s["phase"] == "measured"]
@@ -400,6 +402,7 @@ class TestProfileScrapes:
         assert scrapes and all(s["status"] == "error" for s in scrapes)
         assert all(s["error"] == "HTTP 503" for s in scrapes)
         assert all(s["scrape"] is None for s in scrapes)
+        assert all(s["observed_at_ns"] <= s["completed_at_ns"] for s in scrapes)
         for scrape in scrapes:
             VALIDATOR.validate(scrape)
         capability = _of_type(records, "infer.capabilities")[0]
@@ -542,6 +545,7 @@ class TestProfileScrapes:
         assert scrapes[-1]["marker"] == MARKER_PHASE_END
         assert scrapes[-1]["status"] == "error"
         assert "deadline" in scrapes[-1]["error"]
+        assert scrapes[-1]["completed_at_ns"] >= scrapes[-1]["observed_at_ns"]
 
     def test_a_real_sigint_during_a_hung_scrape_still_ends_the_artifact(
         self, tmp_path: Path
