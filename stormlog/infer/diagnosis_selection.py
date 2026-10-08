@@ -428,7 +428,7 @@ def _test(
         )
         if found is not None and found[1]
     ]
-    threshold = nearest_rank(known, 0.9)
+    threshold = reference_threshold(known)
     above, below, censored = _count(
         (censoring.value(view.client[r], metric, at) for r in window.requests),
         threshold,
@@ -468,6 +468,14 @@ def _count(
         elif complete:
             below += 1
     return above, below, censored
+
+
+def reference_threshold(known: Sequence[int]) -> int:
+    """The reference's p90 over the requests that succeeded. A failure is
+    beyond any threshold and counts as above on both sides, but it is no
+    latency: in the quantile, a reference with over a tenth failed would
+    make the threshold the failure itself, which nothing can exceed."""
+    return nearest_rank([value for value in known if value != FAILED], 0.9)
 
 
 def nearest_rank(values: Sequence[int], p: float) -> int:
@@ -671,5 +679,6 @@ __all__ = [
     "assignment_ns",
     "fisher_one_sided",
     "nearest_rank",
+    "reference_threshold",
     "select",
 ]

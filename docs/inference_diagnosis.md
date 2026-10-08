@@ -216,7 +216,10 @@ the measured phase:
   the reference's p90 (nearest rank), and a one-sided Fisher's exact test on
   (window above, window below) against (reference above, reference below)
   flags the window at α = 0.01, if at least 3 of its requests are above. A
-  failed request is above any threshold.
+  failed request is above any threshold, on either side, but it is no
+  latency: the p90 is taken over the reference's requests that succeeded,
+  so a reference with over a tenth failed still has a threshold a window
+  of failures can exceed.
 - **Error rate.** α is per window and holds only if requests are
   independent. In a continuous-batching server consecutive requests share
   batch state: in a simulation with the selection's own test, 0.2% of
