@@ -85,7 +85,9 @@ class Pulse:
     """One pulse as it happened. Lengths are measured on the monotonic
     clock; the wall-clock times are one wall reading at ``SIGSTOP`` plus
     those lengths, so a clock step can't bend them. ``held_ns`` runs from
-    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped.
+    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped;
+    the continue's time is read just before ``SIGCONT`` goes, so nothing
+    the target did after it can fall inside the pulse.
     ``continued_by_other`` says the target ran while the pulse held it:
     already running when the pulser came to continue it (the watchdog's
     limit, or an operator), or seen running at one of the hold's checks
@@ -283,15 +285,14 @@ class Pulser:
                 # in this stop nobody to continue its target.
                 self._hold_until(sent + int(seconds * 1e9))
             except BaseException:
-                continued_sent = self._continue()
-                self.cut_short = _cut_short(
-                    wall, sent, stopped, time.monotonic_ns() if continued_sent else None
-                )
+                self.cut_short = _cut_short(wall, sent, stopped, self._continue())
                 raise
             finally:
                 running = self._ran_meanwhile or not process_stopped(self.target.pid)
-                self._continue()
-                continued = time.monotonic_ns()
+                continue_sent = self._continue()
+                continued = (
+                    time.monotonic_ns() if continue_sent is None else continue_sent
+                )
             pulse = Pulse.measured(
                 wall, sent, stopped, continued, continued_by_other=running
             )
@@ -398,12 +399,16 @@ class Pulser:
             )
         os.kill(self.target.pid, signum)
 
-    def _continue(self) -> bool:
-        """Whether SIGCONT was sent: never to a target that is gone."""
+    def _continue(self) -> int | None:
+        """Send SIGCONT, never to a target that is gone; when, on the
+        monotonic clock, read just before it was sent, or None if it wasn't.
+        Read after, a step the target began in between would fall inside
+        the pulse (an F4a not realized, on a loaded host)."""
         if not self.target.is_alive():
-            return False
+            return None
+        sent = time.monotonic_ns()
         os.kill(self.target.pid, signal.SIGCONT)
-        return True
+        return sent
 
     def _confirm_stopped(self, stop_sent: int) -> int:
         """When the stop was seen, on the monotonic clock."""

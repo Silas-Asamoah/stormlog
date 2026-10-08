@@ -466,6 +466,34 @@ def test_a_slow_confirmation_does_not_lengthen_the_pulse(
     assert pulse.held_ns <= 2.1e9
 
 
+def test_a_pulse_ends_no_later_than_its_sigcont(
+    loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Astra's closure of delta 3, H1: the continue's time was read after
+    # SIGCONT, so on a loaded host a step the engine began in between fell
+    # inside the pulse, and F4a came out not realized (1 run in 6). Here the
+    # harness is held up 200 ms right after each SIGCONT: the pulse still
+    # ends no later than its SIGCONT was sent.
+    from examples.qualification import pulser as pulser_module
+
+    real_kill = os.kill
+    sent: dict[int, list[int]] = {signal.SIGSTOP: [], signal.SIGCONT: []}
+
+    def slow_after_sigcont(pid: int, signum: int) -> None:
+        sent[signum].append(time.monotonic_ns())
+        real_kill(pid, signum)
+        if signum == signal.SIGCONT:
+            time.sleep(0.2)
+
+    monkeypatch.setattr(pulser_module.os, "kill", slow_after_sigcont)
+    with Pulser(Target.of(loop.pid), watchdog=False) as pulser:
+        pulse = pulser.pulse(0.1)
+    # The pulse reads its start just after SIGSTOP went, so measured from
+    # the SIGSTOP its end can only come later than the pulse says.
+    stop, cont = sent[signal.SIGSTOP][0], sent[signal.SIGCONT][0]
+    assert stop + pulse.held_ns <= cont
+
+
 def test_a_schedule_that_falls_behind_keeps_the_duty_cap(
     loop: subprocess.Popen[bytes], monkeypatch: pytest.MonkeyPatch
 ) -> None:
