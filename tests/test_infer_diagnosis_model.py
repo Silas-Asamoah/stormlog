@@ -211,6 +211,25 @@ def test_findings_rank_in_one_total_order() -> None:
     assert rank_findings(twins, "r") == rank_findings(list(reversed(twins)), "r")
 
 
+def test_a_fault_claim_outranks_a_more_confident_condition() -> None:
+    """A warning at medium confidence ranks above an info finding at high:
+    a scorer's top finding is the fault when there is one."""
+    fault = _finding(
+        contribution=Criteria(
+            met=("excess_ci_excludes_zero", "explains_ttft_excess"),
+            unmet=("competitors_excluded",),
+        ),
+        subject={"key": "f"},
+    )
+    condition = _finding(incident=False, subject={"key": "c"})
+    assert (fault.claim, fault.confidence_level) == ("fault", "medium")
+    assert (condition.claim, condition.confidence_level) == ("condition", "high")
+
+    ranked = [f for _, f in rank_findings([condition, fault], "r")]
+
+    assert ranked == [fault, condition]
+
+
 def _line(number: int) -> Line:
     return Line(
         number,
