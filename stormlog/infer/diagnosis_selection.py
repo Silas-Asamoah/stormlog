@@ -43,6 +43,7 @@ METRICS = (TTFT, E2E)
 MEASURED = "measured"
 
 DECLARED_BY_CALLER = "caller"
+DECLARED_BY_WATCHER = "incident_window"
 DECLARED = "declared"  # a declared subject has no detection time
 DETECTION_BASIS = "selection_sustained/1"
 INSUFFICIENT_REFERENCE = "insufficient_reference"
@@ -601,9 +602,13 @@ def _declared(
 ) -> list[Subject]:
     flagged = {rid for window in windows if window.flagged for rid in window.requests}
     by_case = _measured(view)
+    declared = list(options.windows)
+    by = DECLARED_BY_CALLER
+    if not declared and not options.request_ids:
+        declared, by = _watched(view), DECLARED_BY_WATCHER
     subjects = [
-        _engine_side(view, _declared_window(by_case, flagged, start, end))
-        for start, end in options.windows
+        _engine_side(view, _declared_window(by_case, flagged, start, end, by), declared)
+        for start, end in declared
     ]
     if options.request_ids:
         known = [rid for rid in options.request_ids if rid in view.client]
@@ -641,22 +646,47 @@ def _earlier(
     return reference
 
 
-def _engine_side(view: RunView, subject: Subject) -> Subject:
+def _watched(view: RunView) -> list[tuple[int, int]]:
+    """An incident watcher's windows after each detection (its ``post``
+    windows); the ``pre`` windows before them serve as their reference."""
+    found = []
+    for line in view.incident_windows:
+        raw = line.raw or {}
+        start, end = raw.get("start_ns"), raw.get("end_ns")
+        if raw.get("window") == "post" and isinstance(start, int):
+            if isinstance(end, int) and end > start:
+                found.append((start, end))
+    return sorted(set(found))
+
+
+def _engine_side(
+    view: RunView, subject: Subject, declared: list[tuple[int, int]]
+) -> Subject:
     """A window no client request arrived in, as in a server-only artifact,
     is the engine's executions admitted in it, against those admitted
-    before it; the engine's wall clock must be the artifact's."""
+    before it and in no other declared window, an earlier incident's
+    included; the engine's wall clock must be the artifact's."""
     if subject.requests or subject.start_ns is None or subject.end_ns is None:
         return subject
     start, end = subject.start_ns, subject.end_ns
     for ref, execution in view.executions.items():
-        admitted = execution.metadata.get("admitted_wall_ns")
-        if not isinstance(admitted, int) or not _same_clock(view, execution):
+        admitted = _admitted(view, execution)
+        if admitted is None:
             continue
         if start <= admitted < end:
             subject.executions.append(ref)
-        elif admitted < start:
+        elif admitted < start and not any(a <= admitted < b for a, b in declared):
             subject.reference_executions.append(ref)
     return subject
+
+
+def _admitted(view: RunView, execution: Any) -> int | None:
+    """An execution's admission on the artifact's clock, when the engine's
+    wall clock is the artifact's."""
+    admitted = execution.metadata.get("admitted_wall_ns")
+    if not isinstance(admitted, int) or not _same_clock(view, execution):
+        return None
+    return admitted
 
 
 def _same_clock(view: RunView, execution: Any) -> bool:
@@ -666,7 +696,11 @@ def _same_clock(view: RunView, execution: Any) -> bool:
 
 
 def _declared_window(
-    by_case: dict[str, list[ClientRequest]], flagged: set[str], start: int, end: int
+    by_case: dict[str, list[ClientRequest]],
+    flagged: set[str],
+    start: int,
+    end: int,
+    by: str = DECLARED_BY_CALLER,
 ) -> Subject:
     """A caller's window: the requests that arrived in it, against every
     earlier unflagged request of their cases."""
@@ -689,7 +723,7 @@ def _declared_window(
         end_ns=end,
         requests=inside,
         reference=reference,
-        declared_by=DECLARED_BY_CALLER,
+        declared_by=by,
         detection_unavailable=DECLARED,
     )
 
@@ -701,6 +735,7 @@ def _at(request: ClientRequest) -> int:
 __all__ = [
     "DECLARED",
     "DECLARED_BY_CALLER",
+    "DECLARED_BY_WATCHER",
     "DETECTION_BASIS",
     "E2E",
     "INSUFFICIENT_REFERENCE",

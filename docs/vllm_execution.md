@@ -560,7 +560,8 @@ across imports.
 **Which steps are kept.** Steps an imported GPU activity references, steps
 with a run member, and steps that preempted a run request are always kept. A step with only other clients'
 requests is kept when the engine's wall clock is the client's (same host
-and boot) and the step lies inside a run phase or trace window; otherwise
+and boot) and the step lies inside a run phase, a trace window or an
+incident watcher's `infer.incident_window`; otherwise
 it is counted in the summary, not written. A phase that has an
 `infer.phase_start` record but no `infer.phase_window` yet runs from its
 start to the session's terminal `infer.session` record, or with no end while

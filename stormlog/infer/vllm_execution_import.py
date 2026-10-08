@@ -369,6 +369,15 @@ def _note_admission(
 _OPEN_END_NS = 2**63 - 1
 
 
+# The client records that are windows: their kind, start and end fields. An
+# incident watcher's window is its capture: every step in it is the bundle's.
+_WINDOWS = {
+    "infer.phase_window": ("phase", "started_at_ns", "drained_at_ns"),
+    "infer.trace_window": ("trace", "started_at_ns", "stopped_at_ns"),
+    "infer.incident_window": ("incident", "start_ns", "end_ns"),
+}
+
+
 @dataclass
 class _ClientFacts:
     """What the client's v1 records say: its requests and its windows."""
@@ -393,11 +402,10 @@ class _ClientFacts:
             started_at_ns = _integer(raw.get("started_at_ns"))
             if started_at_ns is not None:
                 self.begun[_phase_key(raw)] = started_at_ns
-        elif kind == "infer.phase_window":
-            self.begun.pop(_phase_key(raw), None)
-            _add_window(self.windows, "phase", raw, "started_at_ns", "drained_at_ns")
-        elif kind == "infer.trace_window":
-            _add_window(self.windows, "trace", raw, "started_at_ns", "stopped_at_ns")
+        elif kind in _WINDOWS:
+            if kind == "infer.phase_window":
+                self.begun.pop(_phase_key(raw), None)
+            _add_window(self.windows, *_WINDOWS[kind], raw)
         elif kind == "infer.session" and raw.get("status") != "running":
             self.session_end_ns = _integer(raw.get("timestamp_ns"))
 
@@ -435,7 +443,7 @@ def _phase_key(raw: dict[str, Any]) -> tuple[str | None, str | None]:
 
 
 def _add_window(
-    windows: list[Window], kind: str, raw: dict[str, Any], start: str, end: str
+    windows: list[Window], kind: str, start: str, end: str, raw: dict[str, Any]
 ) -> None:
     start_ns, end_ns = _integer(raw.get(start)), _integer(raw.get(end))
     if start_ns is not None and end_ns is not None and end_ns >= start_ns:

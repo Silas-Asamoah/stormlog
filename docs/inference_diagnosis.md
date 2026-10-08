@@ -279,11 +279,23 @@ one worker, so none has a rank yet. An absent field is unspecified.
 incident watcher captures one, can still be diagnosed over a declared
 window: when no client request arrived in it, the subject is the engine's
 executions admitted in it (by their admission's wall stamp, on the same host
-and boot), against those admitted before it (`basis: engine`). The queue and
-KV classes then work from the engine's own segments, the queue with
-`partial/no_client_latency` and its contribution judged against the
-engine's TTFT (admission to the first step that kept a token); the classes
-that need the client report `unsupported/no_client_requests`.
+and boot), against those admitted before it and in no other declared
+window, so an earlier incident is no part of a later one's reference
+(`basis: engine`). The queue and KV classes then work from the engine's own
+segments, the queue with `partial/no_client_latency` and its contribution
+judged against the engine's TTFT (admission to the first step that kept a
+token); the classes that need the client report
+`unsupported/no_client_requests`.
+
+An incident watcher's bundle (#219) says where it looked: its
+`infer.incident_window` records, a `pre` window before each detection and a
+`post` window after it, each with `start_ns` and `end_ns` on the bundle's
+wall clock. The import keeps every engine step inside either, as it does a
+run's phases, and without a declared subject the diagnosis takes each
+`post` window as one (`declared_by: incident_window`), against the
+executions admitted before it, those of its `pre` window among them. A
+bundle without these records keeps another client's steps only inside an
+`infer.phase_start` that never ended, imported without `--server-stopped`.
 
 With a declared SLO the test would compare violations instead; that waits
 for the SLO policies of the comparison work (#213), and the threshold
