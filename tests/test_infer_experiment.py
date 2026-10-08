@@ -470,6 +470,40 @@ def test_a_run_json_a_killed_runner_tore_is_read_past_on_resume(
     assert (only["label"], only["state"]) == (label, "completed")
 
 
+@pytest.mark.parametrize(
+    ("where", "reason"),
+    [
+        ("server", "launch_failed:server"),
+        ("treatment", "launch_failed:treatment:watcher"),
+        ("step", "launch_failed:step:c1"),
+        ("prelude", "prelude_failed:warm:launch_failed"),
+    ],
+)
+def test_a_command_that_cannot_start_is_a_protocol_failure(
+    tmp_path: Path, where: str, reason: str
+) -> None:
+    # fable-213-delta's N3: Popen's FileNotFoundError ended the runner, and
+    # left an attempt .partial with no state, which the next resume refused
+    # as interrupted though no one had killed it.
+    missing = [str(tmp_path / "no-such-command")]
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["watch", "off"]]}
+    if where == "server":
+        document["server"]["command"] = missing
+    elif where == "treatment":
+        document["arms"]["watch"]["treatments"][0]["command"] = missing
+    elif where == "step":
+        document["arms"]["off"]["workload"][0]["command"] = missing
+    else:
+        document["block_prelude"] = [{"name": "warm", "command": missing}]
+    record, _ = _run(tmp_path, document)
+    assert record["arm"] == "watch"
+    assert record["state"] == "protocol_failure" and reason in record["reasons"]
+    assert not list((tmp_path / "exp" / "runs").glob("*.partial"))
+    if where != "prelude":
+        assert any("could not be launched" in note for note in record["notes"])
+
+
 def test_a_cause_or_an_outcome_must_name_an_interrupted_attempt(
     tmp_path: Path,
 ) -> None:

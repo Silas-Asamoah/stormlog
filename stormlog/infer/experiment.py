@@ -1187,7 +1187,11 @@ class _Run:
             self.record.protocol("server_port_in_use", before_treatment=True)
             return False
         command, env = _server_launch(self.plan, self.arm, self.values, self.env)
-        self.server = self._launch("server", command, env, server.cpu_affinity)
+        try:
+            self.server = self._launch("server", command, env, server.cpu_affinity)
+        except OSError as exc:
+            self._launch_failed("server", exc)
+            return False
         self.values["server_pid"] = self.server.pid
         # Read now: the start ticks name this process, and no restart.
         self.server_key = process_key(self.server.pid)
@@ -1421,12 +1425,14 @@ class _Run:
     def _start_treatments(self) -> bool:
         for treatment in self.arm.treatments:
             command = [expand(part, self.values) for part in treatment.command]
-            launched = self._launch(
-                f"treatment:{treatment.name}",
-                command,
-                treatment.env,
-                treatment.cpu_affinity,
-            )
+            name = f"treatment:{treatment.name}"
+            try:
+                launched = self._launch(
+                    name, command, treatment.env, treatment.cpu_affinity
+                )
+            except OSError as exc:
+                self._launch_failed(name, exc)
+                return False
             self.treatments.append((treatment, launched))
             ready = (
                 expand(treatment.ready_file, self.values)
@@ -1484,15 +1490,19 @@ class _Run:
         command = [expand(part, self.values) for part in step.command]
         env = {k: expand(v, self.values) for k, v in step.env.items()}
         self.commands.append(_shell_line(env, command, self.env.secrets))
-        launched, timed_out = run_step(
-            f"step:{step.name}",
-            command,
-            env={**env, **self.env.secrets},
-            cpu_affinity=step.cpu_affinity,
-            timeout_s=step.timeout_s,
-            log_path=self.dir / f"{step.name}.log",
-            journal=self.dir / LAUNCHES,
-        )
+        try:
+            launched, timed_out = run_step(
+                f"step:{step.name}",
+                command,
+                env={**env, **self.env.secrets},
+                cpu_affinity=step.cpu_affinity,
+                timeout_s=step.timeout_s,
+                log_path=self.dir / f"{step.name}.log",
+                journal=self.dir / LAUNCHES,
+            )
+        except OSError as exc:
+            self._launch_failed(f"step:{step.name}", exc)
+            return False
         # Whatever the step left in its group must not run into the next run.
         cleanup = clean_up_after(launched)
         if not cleanup.verified:
@@ -1509,6 +1519,13 @@ class _Run:
             self.record.outcome(f"step_failed:{step.name}:{launched.exit_code}")
             return False
         return True
+
+    def _launch_failed(self, name: str, exc: OSError) -> None:
+        """A command that could not start at all, its executable missing or
+        not runnable: a fault of the plan or the host, whatever ran before
+        it, and so a protocol failure that outranks any outcome."""
+        self.record.protocol(f"launch_failed:{name}", before_treatment=True)
+        self.record.notes.append(f"{name} could not be launched: {exc}")
 
     def _treatments_alive(self) -> bool:
         return all(launched.poll() is None for _, launched in self.treatments)
@@ -1582,20 +1599,26 @@ def _prelude(
             return [f"{prelude.step.name}:server_port_in_use"]
         arm = plan.arms[prelude.server_arm]
         command, server_env = _server_launch(plan, arm, values, env)
-        server = launch(
-            "server",
-            command,
-            env=server_env,
-            cpu_affinity=plan.server.cpu_affinity,
-            log_path=directory / "server.log",
-            journal=directory / LAUNCHES,
-        )
+        try:
+            server = launch(
+                "server",
+                command,
+                env=server_env,
+                cpu_affinity=plan.server.cpu_affinity,
+                log_path=directory / "server.log",
+                journal=directory / LAUNCHES,
+            )
+        except OSError:
+            return [f"{prelude.step.name}:launch_failed"]
+    name = prelude.step.name
+    failure = name
     try:
         ran, step_left = _prelude_ran(plan, prelude, server, values, directory, env)
+    except OSError:
+        ran, step_left, failure = False, False, f"{name}:launch_failed"
     finally:
         left = server is not None and not _stop_prelude_server(plan, server, directory)
-    name = prelude.step.name
-    failures = [] if ran else [name]
+    failures = [] if ran else [failure]
     if left or step_left:
         failures.append(f"{name}:cleanup_unverified")
     return failures
