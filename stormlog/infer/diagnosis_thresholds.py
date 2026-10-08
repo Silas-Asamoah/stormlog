@@ -30,6 +30,7 @@ QUEUE_WITNESS_SHARE = "queue_saturation.witness_request_share"
 QUEUE_CONTRIBUTION = "queue_saturation.ttft_excess_share"
 QUEUE_STALL_SHARE = "queue_saturation.stall_excess_share"
 QUEUE_FRONT_SHARE = "queue_saturation.front_excess_share"
+QUEUE_KV_SHARE = "queue_saturation.kv_hold_share"
 QUEUE_COMPETITOR_FLOOR = "queue_saturation.competitor_floor_share"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
@@ -91,6 +92,10 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # Time before the queue (engine ingress, the API server) explains the
         # excess instead when its own excess is this share of the wait's.
         QUEUE_FRONT_SHARE: 0.25,
+        # The subject's own preempted requests, back at the head of the queue
+        # until they resume, held its waits for this share of the excess: an
+        # eligible KV finding is then upstream of the queue.
+        QUEUE_KV_SHARE: 0.5,
         # Below this share of the wait excess a competitor is ruled out;
         # between it and the competitor's own cut it is contributing, which
         # leaves the queue no fault claim.
@@ -147,6 +152,7 @@ __all__ = [
     "QUEUE_COMPETITOR_FLOOR",
     "QUEUE_CONTRIBUTION",
     "QUEUE_FRONT_SHARE",
+    "QUEUE_KV_SHARE",
     "QUEUE_MEDIAN_WAITING",
     "QUEUE_STALL_SHARE",
     "QUEUE_WITNESS_SHARE",

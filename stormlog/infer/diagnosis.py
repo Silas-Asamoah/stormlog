@@ -35,6 +35,7 @@ from .diagnosis_model import Finding, rank_findings
 from .diagnosis_prefix import assess_prefix
 from .diagnosis_queue import assess_queue
 from .diagnosis_report import envelope_finding, finding_detail, inputs_block
+from .diagnosis_roles import link_roles
 from .diagnosis_selection import SelectionOptions, Subject, select
 from .diagnosis_thresholds import DEFAULT_THRESHOLDS, THRESHOLDS_VERSION
 from .diagnosis_vocabulary import (
@@ -190,6 +191,7 @@ def _report(
 ) -> dict[str, Any]:
     view = context.view
     findings: list[Finding] = [f for a in assessments for f in a.findings]
+    link_roles(findings)
     ranked = rank_findings(findings, view.run_id)
     details = {}
     for rank, (finding_id, finding) in enumerate(ranked, start=1):
