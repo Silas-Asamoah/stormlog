@@ -144,6 +144,20 @@ def test_a_queue_episode_needs_windows_long_enough_for_its_samples() -> None:
     assert parse_plan(_plan({"type": "N"}, timeline=SHORT, thresholds={"hold": 2.5}))
 
 
+def test_a_short_baseline_is_listed_with_the_other_problems() -> None:
+    # Fable's lens-a closure, K2: the sample check ran in a second round, so
+    # a plan with a bad dose and a 3 s baseline learned of the baseline only
+    # once the dose was fixed. With the timeline, victim and thresholds
+    # readable, it runs in the first round.
+    bad_dose = {"type": "F4a", "dose": {"pulse_ms": 3000}}
+    problems = _problems(_plan(QUEUE, bad_dose, timeline=SHORT))
+    assert [problem.split(":")[0] for problem in problems] == [
+        "episodes[1] (F4a)",
+        "timeline.baseline is 3 s",
+        "timeline.baseline is 3 s",
+    ]
+
+
 def test_a_plan_may_lower_the_queue_minimums_as_counts() -> None:
     fewer = {"hold": 3, "min_gauge_samples": 2, "min_wait_samples": 5}
     plan = parse_plan(_plan(QUEUE, timeline=SHORT, thresholds=fewer))
