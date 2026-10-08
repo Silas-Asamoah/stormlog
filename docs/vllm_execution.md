@@ -483,7 +483,8 @@ completion of a later step when its own output never came, or the last
 record of an ended epoch); a membership adds the `terminal` record of a
 finish it carries; a request takes its first final step, its alias and its
 `enqueued` record; a clock alignment takes the hello, or the goodbye that
-bounds it.
+bounds it; a preemption stage, written only with its request, takes the
+later of its own record and its request's.
 
 **Binding.** A request is the run's when its alias `external` is
 `chatcmpl-<x_request_id>` or `cmpl-<x_request_id>-<i>` for an
