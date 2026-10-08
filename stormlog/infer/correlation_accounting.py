@@ -443,11 +443,34 @@ def align_timestamp(
     )
     if len(matches) != 1:
         raise ValueError("no valid clock alignment or multiple ambiguous alignments")
-    alignment = matches[0]
-    return AlignedTimestamp(
-        timestamp_ns + alignment.offset_ns,
-        alignment.uncertainty_ns,
-        to_clock_domain,
+    low, high = alignment_offset_bounds(matches[0])
+    half = (high - low + 1) // 2
+    return AlignedTimestamp(timestamp_ns + high - half, half, to_clock_domain)
+
+
+# Clock alignments ``infer import-execution`` wrote before it recorded an
+# ``alignment_basis``: the offset is the wall read before the monotonic one,
+# so the true offset lies between it and it plus the read's gap.
+_LEGACY_EXECUTION_IMPORT = "stormlog.infer.import_execution"
+
+
+def alignment_offset_bounds(alignment: ClockAlignmentEvent) -> tuple[int, int]:
+    """The interval the true offset lies in: ``offset ± uncertainty``, except
+    for a legacy execution-import alignment, whose offset is the bracket's
+    lower end and whose ``gap_ns`` is its width. Records are never rewritten."""
+    metadata = alignment.metadata
+    gap = metadata.get("gap_ns")
+    if (
+        alignment.context.source == _LEGACY_EXECUTION_IMPORT
+        and "alignment_basis" not in metadata
+        and isinstance(gap, int)
+        and not isinstance(gap, bool)
+        and gap >= 0
+    ):
+        return alignment.offset_ns, alignment.offset_ns + gap
+    return (
+        alignment.offset_ns - alignment.uncertainty_ns,
+        alignment.offset_ns + alignment.uncertainty_ns,
     )
 
 
@@ -490,6 +513,7 @@ __all__ = [
     "UnresolvedReference",
     "account_gpu_time",
     "align_timestamp",
+    "alignment_offset_bounds",
     "covering_alignments",
     "resolve_inference_events",
     "validate_request_shares",

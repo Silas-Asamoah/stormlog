@@ -409,7 +409,14 @@ whose role follows vLLM's `phase` (`context` is `prefill`, `generation` is
 the step's token counts, outcome and, for the step a request was freed in,
 its finish; one `infer.request` per backend execution, holding admission
 facts only; and one `infer.clock_alignment` per epoch from the hello's
-wall/monotonic pair, with half the sampling gap as its uncertainty. The raw
+bracketed read: the wall clock at the monotonic read lies between the wall
+reads before and after it, so the offset is that bracket's midpoint and the
+uncertainty half its width. Its metadata gives `alignment_basis`
+(`hello_bracket_midpoint/1`) and the raw `bracket`. A hello the wall clock
+stepped back across gives no alignment. Earlier imports wrote the offset at
+the bracket's lower end, with no `alignment_basis`; `align_timestamp` reads
+such a record as the interval from its offset to its offset plus `gap_ns`,
+and an existing record is never rewritten. The raw
 log is never registered as an attachment. A step whose `update_from_output`
 raised (`update_failed`) keeps its memberships with outcome `unknown`, no
 output tokens and nothing read from its counters; the coverage block counts
