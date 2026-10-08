@@ -154,6 +154,8 @@
         "declared_by": { "type": ["string", "null"] },
         "first_detectable_ns": { "type": ["integer", "null"] },
         "detection_unavailable": { "type": ["string", "null"] },
+        "onset_ns": { "type": ["integer", "null"] },
+        "resolution_ns": { "type": ["integer", "null"] },
         "windows": { "type": "array" }
       }
     },
