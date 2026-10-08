@@ -445,25 +445,82 @@ def verify_cleanup(
     ``identify`` record, and ``lasted_s``, how long its leader ran, one that
     may be the launch's (``_may_be_launched``) keeps the cleanup from
     verifying, and is never killed, since it may be another's.
+
+    Once a survivor or such a process is seen, it may start another and
+    leave: ``lasted_s`` then clears no process for the rest of the check,
+    and a poll that finds nothing left verifies only when the next one,
+    which starts after anything that left during it, finds nothing either.
     """
     keys = list(remembered)
     method = "proc" if _linux() else "psutil"
     deadline = time.monotonic() + wait_s
     killed: tuple[int, ...] = ()
+    settle = _Settle()
     while True:
-        search = _marked(mark, proc, method)
-        survivors = _survivors(pgid, keys, proc, method) | search.found
-        blind = _blind(search.unclear, since, lasted_s, proc, method)
-        if not survivors and not blind:
-            return Cleanup(True, method, killed=killed, unreadable=search.unreadable)
-        if survivors and not killed:
-            killed = tuple(sorted(survivors))
-            for pid in killed:
-                _kill(pid)
-        if time.monotonic() >= deadline:
-            left = tuple(identify(pid, proc=proc) for pid in sorted(survivors))
-            return Cleanup(False, method, left, killed, search.unreadable, blind)
+        bound = None if settle.seen else lasted_s
+        poll = _look(pgid, keys, proc, method, mark, since, bound)
+        if settle.verifies(poll):
+            return Cleanup(True, method, killed=killed, unreadable=poll.unreadable)
+        killed = killed or _kill_all(poll.survivors)
+        if time.monotonic() >= deadline and not settle.clean:
+            left = tuple(identify(pid, proc=proc) for pid in sorted(poll.survivors))
+            return Cleanup(False, method, left, killed, poll.unreadable, poll.blind)
         time.sleep(POLL_SECONDS)
+
+
+@dataclass(frozen=True)
+class _Poll:
+    """One look at what is left of a launch."""
+
+    survivors: set[int]
+    blind: tuple[dict[str, Any], ...]
+    unreadable: int | None
+
+    @property
+    def clear(self) -> bool:
+        return not self.survivors and not self.blind
+
+
+@dataclass
+class _Settle:
+    """Whether a poll that finds nothing left verifies: at once while nothing
+    has been seen, and otherwise only after a clean poll before it."""
+
+    seen: bool = False
+    clean: bool = False
+
+    def verifies(self, poll: _Poll) -> bool:
+        if poll.clear and (self.clean or not self.seen):
+            return True
+        self.seen, self.clean = self.seen or not poll.clear, poll.clear
+        return False
+
+
+def _look(
+    pgid: int | None,
+    keys: list[tuple[int, int]],
+    proc: Path,
+    method: str,
+    mark: str | None,
+    since: Mapping[str, Any] | None,
+    lasted_s: float | None,
+) -> _Poll:
+    """Survivors, and processes that may be the launch's unseen. Once any is
+    found, a start after the leader's exit clears no process (``lasted_s``)."""
+    search = _marked(mark, proc, method)
+    survivors = _survivors(pgid, keys, proc, method) | search.found
+    blind = _blind(search.unclear, since, lasted_s, proc, method)
+    if lasted_s is not None and (survivors or blind):
+        blind = _blind(search.unclear, since, None, proc, method)
+    return _Poll(survivors, blind, search.unreadable)
+
+
+def _kill_all(pids: set[int]) -> tuple[int, ...]:
+    """Kill each by PID; the PIDs, sorted."""
+    killed = tuple(sorted(pids))
+    for pid in killed:
+        _kill(pid)
+    return killed
 
 
 def identify(pid: int, *, proc: Path = PROC) -> dict[str, Any]:
@@ -627,8 +684,9 @@ def _may_be_launched(
 
     It is not when another user runs it (which includes anything run under
     sudo), when it started more than ``START_SLACK_SECONDS`` before the
-    launch or after its leader had exited (``lasted_s``: nothing of the
-    launch was left to start it, but another orphan, itself judged), or
+    launch or after its leader had exited (``lasted_s``, given only while
+    nothing of the launch has been seen to outlive the leader: nothing of
+    the launch was left to start it, but another orphan, itself judged), or
     when its parent is not ``init``: a launch's process that
     left its group and session is an orphan, adopted by ``init``, and any
     other parent shows whose it is (a launch's own processes are found by
