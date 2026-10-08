@@ -726,6 +726,24 @@ def test_a_reset_with_nothing_running_holds_no_mark(tmp_path: Path) -> None:
     assert result.high_water == {EPOCH: 12}
 
 
+def test_a_pause_s_empty_reset_holds_no_mark_while_nothing_is_scheduled(
+    tmp_path: Path,
+) -> None:
+    """The default pause schedules nothing until it resumes, so no step
+    closes a hold: an empty reset must not open one, or every import of the
+    paused engine holds its mark below the reset."""
+    records = [
+        *_admitted(OWN0, OWN1),  # 0..4
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND + 1),  # 5
+        cache_reset([], T0 + SECOND + 5),  # 6
+        heartbeat(T0 + 2 * SECOND, 6),  # 7
+    ]
+
+    result = _reduce(tmp_path, records, _two_requests())
+
+    assert result.high_water == {EPOCH: 7}
+
+
 def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> None:
     first = [
         hello("engine", PID, START, observes=OBSERVES),  # 0
