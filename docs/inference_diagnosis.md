@@ -351,7 +351,10 @@ minor second cause.
   competitor that is `upstream` (KV preemption, for the queue: it leaves
   requests waiting to resume and keeps new ones out) contests the finding
   like a contributing one: it stays eligible but claims a condition at
-  `info`, since it may be the upstream cause's consequence.
+  `info`, since it may be the upstream cause's consequence. A cause is
+  upstream only when the subject's finding of that kind is eligible; an
+  observation establishes nothing, and leaves the competitor
+  `not_ruled_out`.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
   before observation, confidence, the contribution's lower bound (in ms of
   latency for every kind, so kinds compare), kind,
@@ -389,7 +392,7 @@ interval); with no excess it reports `not_observed`.
 | `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else, without pause records, the longest stretch without an admission while a subject's request waited (the longest pause that could hide there, since a paused scheduler admits nobody) is under 10% of the wait excess; a longer one is `untestable`, since a full engine admits nobody either. Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
-| `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream`, which contests the queue: no fault claim, and the queue is a condition at `info` |
+| `kv_preemption_pressure` | no | the subject's own allocation preemptions held its waits for under 10% of the wait excess: the median request's time waiting behind the subject's preempted requests, which vLLM puts back at the head of the queue until they resume. Another client's preemptions, and a reset's, are no evidence of the subject's KV pressure. Up to half the excess it is `contributing`; above that it is `upstream` when the subject's KV finding is eligible, which contests the queue (no fault claim, a condition at `info`), and otherwise `not_ruled_out`, since an observation of KV pressure establishes nothing upstream |
 | `client_admission` | no | no request was held at the client |
 | `host_stall@api_server` | no | the `send_to_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` |
 
@@ -599,6 +602,7 @@ The values are provisional until they are read from real runs.
 | `queue_saturation.ttft_excess_share` | 0.5 | share of the TTFT excess the wait excess must reach to explain it |
 | `queue_saturation.stall_excess_share` | 0.5 | share of the wait excess the engine stalls during or just before the waits must last to explain it instead |
 | `queue_saturation.front_excess_share` | 0.25 | share of the wait excess an excess before the queue (engine ingress, the API server) must reach to explain it instead |
+| `queue_saturation.kv_hold_share` | 0.5 | share of the wait excess the median request must have waited behind the subject's preempted requests for KV pressure to be upstream of the queue |
 | `queue_saturation.competitor_floor_share` | 0.1 | share of the wait excess below which a competitor is ruled out; above it, up to the competitor's own share, it is contributing |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
