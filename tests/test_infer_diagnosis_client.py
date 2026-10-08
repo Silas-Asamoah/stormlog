@@ -149,6 +149,9 @@ def test_requests_slow_to_reach_a_stepping_engine_are_a_frontend_stall(
     assert (finding.kind, finding.component) == ("host_stall", "api_server")
     assert finding.detail == {"form": "frontend", "attribution": "host"}
     assert finding.gates == {"engine_progress": True, "bounded_placement": True}
+    assert (
+        finding.metrics["send_to_ingress_placed"] == finding.metrics["subject_requests"]
+    )
     statuses = {alt.kind: alt.status for alt in finding.alternatives}
     assert statuses == {"scheduler_paused": "ruled_out", "capture_pause": "ruled_out"}
     assert finding.eligible
@@ -310,3 +313,18 @@ def test_an_instrumentation_warning_exits_3_without_a_fault_claim(
         "condition",
     )
     assert report["verdict"]["exit_code"] == 3
+
+
+def test_a_frontend_stall_says_how_many_requests_it_placed(tmp_path: Path) -> None:
+    # The wall clock steps 50 ms back during the slow stretch: a send before
+    # the step cannot be paired with an admission after it.
+    engine = Engine(max_num_seqs=64, wall_jump=(32 * SECOND, -50 * MS))
+    context = _context(tmp_path, _slow_front(), engine)
+
+    (finding,) = assess_api_server(context, context.subjects()[0]).findings
+
+    assert (
+        finding.metrics["send_to_ingress_placed"],
+        finding.metrics["subject_requests"],
+    ) == (152, 160)
+    assert finding.gates["bounded_placement"]  # most were placed
