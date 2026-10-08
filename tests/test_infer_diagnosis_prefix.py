@@ -49,6 +49,7 @@ def test_warm_requests_finding_nothing_cached_are_a_prefix_loss(
     assert {a.kind: a.status for a in finding.alternatives} == {
         "prefix_cache_reset": "ruled_out",
         "prefix_sharing_drop": "ruled_out",
+        "prefix_working_set_growth": "ruled_out",
     }
     assert finding.eligible
     assert finding.detail["token_count_provenance"] == "engine_cached_at_admission"
@@ -70,6 +71,31 @@ def test_concurrent_first_use_of_a_group_is_not_warm(tmp_path: Path) -> None:
         "assessed",
         ["too_few_warm_requests"],
     )
+
+
+def test_a_working_set_that_outgrew_the_cache_is_not_ruled_out(
+    tmp_path: Path,
+) -> None:
+    """The reference shares 4 prefixes; the subject shares as much, but over
+    40 groups that include those 4. An LRU cache evicts the old prefixes
+    with no fault, so their loss cannot be called one."""
+    reference = poisson_free(200, 10 * SECOND, 100 * MS, prefix="a", **SHARED)
+    for index, request in enumerate(reference):
+        request.prefix_group, request.cached = index % 4, 64 if index >= 4 else 0
+    subject = poisson_free(400, AT, 50 * MS, prefix="b", **SHARED)
+    for index, request in enumerate(subject):
+        request.prefix_group = index % 40
+    view = join(read_input(build_run(tmp_path, reference + subject, Engine())))
+    start = AT + WALL_OFFSET
+    context = Context(
+        view, select(view, SelectionOptions(windows=((start, start + 20 * SECOND),)))
+    )
+
+    assessment = assess_prefix(context, context.subjects()[0])
+
+    (finding,) = assessment.findings
+    growth = {a.kind: a for a in finding.alternatives}["prefix_working_set_growth"]
+    assert growth.status == "not_ruled_out" and not finding.eligible
 
 
 def test_a_workload_that_shares_less_is_not_ruled_out(tmp_path: Path) -> None:

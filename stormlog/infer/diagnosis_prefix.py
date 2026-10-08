@@ -35,6 +35,7 @@ from .diagnosis_model import (
 )
 from .diagnosis_selection import Subject
 from .diagnosis_stats import Difference, median_difference
+from .diagnosis_thresholds import PREFIX_WORKING_SET_RATIO, resolve_threshold
 from .diagnosis_vocabulary import COMPONENT_PREFIX_CACHE, PREFIX_CACHE_LOSS
 
 NOT_OBSERVED = "not_observed"
@@ -186,6 +187,7 @@ def _finding(
     excess: Difference,
 ) -> Finding:
     sharing = _sharing(context, subject, groups)
+    working_set = _working_set(context, subject, groups)
     reset = context.reset_absent(producer, _exposure(warm))
     prefill = context.total_excess(subject, "ttft")
     return Finding(
@@ -195,7 +197,7 @@ def _finding(
         title="Warm requests found less of their shared prefix cached",
         message=f"Warm requests were a median {excess.estimate:.0f} tokens short of their group's cached prefix.",
         gates={"warm_requests": True},
-        alternatives=[reset, sharing],
+        alternatives=[reset, sharing, working_set],
         condition=met(direct_evidence=True, sufficient_samples=excess.n >= 20),
         contribution=met(
             excess_ci_excludes_zero=excess.excludes_zero,
@@ -261,6 +263,33 @@ def _sharing(
     status = RULED_OUT if unchanged else NOT_RULED_OUT
     reason = f"{now[0]:.0%} of requests share a median {now[1]:.0f} tokens, against {before[0]:.0%} sharing {before[1]:.0f}"
     return Alternative("prefix_sharing_drop", status, reason, True)
+
+
+def _working_set(
+    context: Context, subject: Subject, groups: dict[str, tuple[Any, int]]
+) -> Alternative:
+    """The workload's working set grew: its requests declared more distinct
+    shared prefixes (in tokens) than as many of the latest reference
+    requests did, and a cache that evicts the least recently used loses
+    the old prefixes without any fault."""
+    kind = "prefix_working_set_growth"
+    recent = subject.reference[-len(subject.requests) :]
+    if not recent:
+        return Alternative(kind, UNTESTABLE, "no reference requests", True)
+
+    def size(request_ids: list[str]) -> int:
+        return sum(
+            tokens for _, tokens in {groups[r] for r in request_ids if r in groups}
+        )
+
+    now, before = size(subject.requests), size(recent)
+    ratio = resolve_threshold(PREFIX_WORKING_SET_RATIO, context.thresholds)[0]
+    status = RULED_OUT if now <= ratio * before else NOT_RULED_OUT
+    reason = (
+        f"the requests declared {now} distinct shared prefix tokens, against "
+        f"{before} in as many reference requests"
+    )
+    return Alternative(kind, status, reason, True)
 
 
 def _lines(context: Context, request_ids: list[str]) -> list[Line]:
