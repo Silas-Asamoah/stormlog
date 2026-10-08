@@ -217,5 +217,6 @@ def test_a_missing_execution_log_warns_and_records_a_partial_capability(
         "memberships",
         "requests",
         "clock_alignment",
+        "stages",
     ]
     assert "nope" in engine["metadata"]["summary"]["execution"]["failed"]

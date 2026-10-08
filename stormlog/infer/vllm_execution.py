@@ -49,6 +49,7 @@ from .vllm_execution_log import (
     LogRead,
     RawRecord,
 )
+from .vllm_execution_stages import ResetPreemptions, StageBuilder
 
 SOURCE = "stormlog.infer.import_execution"
 OWN = "run"
@@ -107,6 +108,7 @@ class RunFacts:
     existing_iterations: frozenset[EntityRef] = frozenset()
     existing_attempts: frozenset[EntityRef] = frozenset()
     existing_alignments: frozenset[str] = frozenset()  # event ids
+    existing_stages: frozenset[str] = frozenset()  # this import's stage event ids
     # Admissions the artifact already holds, by (epoch, alias seq): a replayed
     # alias continues that attempt instead of becoming a new one.
     existing_admissions: dict[tuple[str, int], EntityRef] = field(default_factory=dict)
@@ -273,6 +275,9 @@ class _EpochReducer:
         # Terminals no step could carry, by record sequence: each is one
         # lost finish however many imports read it.
         self.unattached: list[int] = []
+        # Executions with a member in a step that is not final yet.
+        self.waiting_keys: set[str] = set()
+        self.reset_preemptions = ResetPreemptions(epoch.records)
 
     def reduce(self) -> tuple[list[CorrelationEvent], dict[str, Any]]:
         self._gather()
@@ -288,7 +293,10 @@ class _EpochReducer:
         for item in kept:
             events.extend(self._iteration_events(item))
         events.extend(self._request_events())
-        return events, self._summary(kept, pending)
+        # Last: a stage refers only to records already written.
+        stages = StageBuilder(self, kept)
+        events.extend(stages.build())
+        return events, self._summary(kept, pending, stages)
 
     # ----------------------------------------------------------- gathering
     def _gather(self) -> None:
@@ -410,6 +418,20 @@ class _EpochReducer:
             return candidates[0]
         return self._continue_execution(internal)
 
+    def _attempt_execution(self, internal: str, mono_ns: int | None) -> Execution:
+        """The execution of an internal ID at a time, as ``_execution_for``
+        finds it, without adding one: an ID these records never used is the
+        execution an earlier import knew, or a new one."""
+        known = [e for e in self.executions.values() if e.internal == internal]
+        if known:
+            return self._execution_for(internal, mono_ns)
+        binding = self.binder.bind(internal, None)
+        return Execution(self._latest_known_key(internal, binding), internal, binding)
+
+    def withholds(self, execution: Execution) -> bool:
+        """Another client's, in an epoch whose identities cannot be keyed."""
+        return self.withhold and execution.binding.ownership != OWN
+
     def _attach_terminal(self, record: RawRecord) -> None:
         execution = self._execution_for(
             str(record.data.get("internal")), _integer(record.data.get("mono_ns"))
@@ -460,9 +482,7 @@ class _EpochReducer:
         for execution in executions:
             execution.seen_final = True
         item.ownerships = [e.binding.ownership for e in executions]
-        if ref in self.facts.referenced_iterations:
-            return True
-        if OWN in item.ownerships:
+        if self._the_run_needs(item, ref):
             return True
         if not executions:
             # An idle scheduler step: nothing to attribute, nothing lost.
@@ -476,6 +496,27 @@ class _EpochReducer:
             return True
         self._count("foreign_only_counted")
         return False
+
+    def _the_run_needs(self, item: Iteration, ref: EntityRef) -> bool:
+        """A step GPU activity refers to, one with a run member, or one that
+        preempted a run request (its stage needs the step)."""
+        return (
+            ref in self.facts.referenced_iterations
+            or OWN in item.ownerships
+            or self._preempted_own(item)
+        )
+
+    def _preempted_own(self, item: Iteration) -> bool:
+        preempted = item.scheduled.data.get("preempted")
+        if not isinstance(preempted, list):
+            return False
+        start = _integer(item.scheduled.data.get("start_mono_ns"))
+        by_reset = self.reset_preemptions.of(item)
+        return any(
+            self._attempt_execution(str(internal), start).binding.ownership == OWN
+            for internal in preempted
+            if str(internal) not in by_reset
+        )
 
     def _member_execution(self, member: dict[str, Any], item: Iteration) -> Execution:
         return self._execution_for(
@@ -527,6 +568,7 @@ class _EpochReducer:
             for item in pending
             for m in _members(item.scheduled)
         }
+        self.waiting_keys = waiting
         for execution in self.executions.values():
             seq = execution.terminal_seq
             if execution.terminal is None or seq is None:
@@ -739,15 +781,19 @@ class _EpochReducer:
     def _count(self, name: str) -> None:
         self.counts[name] = self.counts.get(name, 0) + 1
 
-    def _high_water(self, pending: list[Iteration]) -> int | None:
+    def _high_water(
+        self, pending: list[Iteration], holds: list[int] | None = None
+    ) -> int | None:
         """Just below the first record a later import still needs: a pending
-        step, the admission of a request no final step has shown yet, or a
-        sequence not read yet (the mark never passes what was read)."""
+        step, the admission of a request no final step has shown yet, a
+        record whose stages wait (``holds``), or a sequence not read yet (the
+        mark never passes what was read)."""
         consumed = self.epoch.consumed_seq
         before = self.epoch.high_water_before
         if consumed is None or self.epoch.state in (STATE_ENDED, STATE_GONE):
             return consumed
         waiting = [item.scheduled.seq for item in pending]
+        waiting.extend(holds or ())
         waiting.extend(
             e.alias_seq
             for e in self.executions.values()
@@ -757,9 +803,10 @@ class _EpochReducer:
         return mark if before is None else max(mark, before)
 
     def _summary(
-        self, kept: list[Iteration], pending: list[Iteration]
+        self, kept: list[Iteration], pending: list[Iteration], stages: StageBuilder
     ) -> dict[str, Any]:
         summary = self.epoch.summary()
+        summary.update(stages.summary())
         summary.update(
             producer=self.producer,
             reduced=True,
@@ -788,7 +835,7 @@ class _EpochReducer:
                 "memberships": self.counts.get("withheld_memberships", 0),
                 "foreign_only_steps": self.counts.get("foreign_only_withheld", 0),
             },
-            high_water_seq=self._high_water(pending),
+            high_water_seq=self._high_water(pending, stages.holds),
         )
         return summary
 

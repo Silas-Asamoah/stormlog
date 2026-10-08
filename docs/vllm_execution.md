@@ -9,7 +9,8 @@ to the requests that shared it.
 The hook runs inside the vLLM server. It writes a raw log on the server host and
 never writes to the inference artifact itself. The import turns that log into
 `infer.iteration`, `infer.membership`, `infer.request` and
-`infer.clock_alignment` records (see
+`infer.clock_alignment` records, with `infer.stage` records for preemptions,
+cache resets and pauses (see
 [Execution correlation](inference_correlation.md)).
 
 ## Enable it
@@ -471,8 +472,8 @@ A reused internal
 ID (randomization off) is split into one execution per admission, also
 across imports.
 
-**Which steps are kept.** Steps an imported GPU activity references and
-steps with a run member are always kept. A step with only other clients'
+**Which steps are kept.** Steps an imported GPU activity references, steps
+with a run member, and steps that preempted a run request are always kept. A step with only other clients'
 requests is kept when the engine's wall clock is the client's (same host
 and boot) and the step lies inside a run phase or trace window; otherwise
 it is counted in the summary, not written. A phase that has an
@@ -480,6 +481,33 @@ it is counted in the summary, not written. A phase that has an
 start to the session's terminal `infer.session` record, or with no end while
 the session is still running. A step that scheduled no request
 (an idle scheduler call) is counted as empty, not written.
+
+**Stages.** Preemptions, cache resets and pause changes are written as
+`infer.stage` records on the engine's monotonic clock, each with its
+`epoch`, the raw `seq` and its `source_seq_max` in the metadata, and the
+bracketing wall reads:
+
+| `name` | One per | Refers to | Dated by |
+| --- | --- | --- | --- |
+| `engine.preempted` | attempt a step preempted to free memory | the attempt's request (`metadata.attempt`) and that step | the step's `schedule()` call |
+| `engine.cache_reset` | `cache_reset` record | the last step written before it | the reset call |
+| `engine.preempted_by_reset` | request running at a reset with `reset_running_requests` | its request, and the reset's step if it has one | the reset call |
+| `engine.pause_transition` | `pause` record, with `from` and `to` | the last step written before it | its stamp |
+
+vLLM lists a reset's preemptions in the next step's `preempted` along with
+the step's own, so of a step's preemptions those a reset since the previous
+step made are the reset's; until that next step is read, the import holds
+its mark below the reset and reads it again. A reset's preemptions stand
+even when the reset failed, since vLLM preempts before it checks.
+`engine.preempted` says in `reset_observed` whether the hook records resets
+at all: without them, a reset's preemptions look like the step's own. A
+request preempted by a reset whose request record a pending step will
+write waits for it in the same way; another client's that no written step
+ran is counted as `unreferenced`, and one in an epoch without its key as
+`withheld`, in the epoch's `stages` counts. A reset or pause with no step
+written before it goes in the epoch's `unanchored` list with its `seq`, its
+times and its fields. Each stage's ID is fixed by the epoch and the raw
+`seq`, so no import writes one twice.
 
 **Device binding for traces.** A worker hello names the worker's host, pid,
 CUDA ordinal and GPU UUID. `import-trace --vllm-execution-dir DIR` and the
