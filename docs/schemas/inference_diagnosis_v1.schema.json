@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://stormlog.readthedocs.io/en/latest/schemas/inference_diagnosis_v1.schema.json",
+  "title": "Stormlog inference diagnosis payload v1",
+  "description": "The payload of a stormlog.report v1 report whose report_kind is inference_diagnosis: what was diagnosed, how, and every finding with the records it rests on. A new finding kind, component or cause is a new payload version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "diagnoser",
+    "inputs",
+    "outcome",
+    "join",
+    "selection",
+    "coverage",
+    "findings_detail",
+    "thresholds"
+  ],
+  "properties": {
+    "format": { "const": "stormlog.inference_diagnosis" },
+    "schema_version": { "const": 1 },
+    "diagnoser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "config_digest", "generated_at_ns", "metrics_from_engine"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1 },
+        "config_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "generated_at_ns": { "type": "integer", "minimum": 0 },
+        "metrics_from_engine": { "type": "boolean" }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "path", "size", "sha256", "lines"],
+        "properties": {
+          "kind": { "const": "inference_jsonl" },
+          "path": { "type": "string", "minLength": 1 },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "lines": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "outcome": { "enum": ["findings", "no_findings", "inconclusive"] },
+    "join": { "type": "object" },
+    "selection": {
+      "type": "object",
+      "required": ["automatic", "windows", "subjects"],
+      "properties": {
+        "automatic": { "type": "boolean" },
+        "windows": { "type": "array" },
+        "subjects": { "type": "array", "items": { "$ref": "#/$defs/subject" } }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/kind" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "reasons", "by_subject"],
+        "properties": {
+          "status": { "enum": ["assessed", "partial", "unsupported"] },
+          "reasons": { "type": "array", "items": { "type": "string" } },
+          "by_subject": { "type": "object" }
+        }
+      }
+    },
+    "findings_detail": {
+      "type": "object",
+      "propertyNames": { "pattern": "^diagnosis\\.[a-z_]+\\.[0-9a-f]{12}$" },
+      "additionalProperties": { "$ref": "#/$defs/finding" }
+    },
+    "memory": { "type": "object" },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "overridden", "values"],
+      "properties": {
+        "version": { "type": "string" },
+        "overridden": { "type": "array", "items": { "type": "string" } },
+        "values": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    }
+  },
+  "$defs": {
+    "kind": {
+      "enum": [
+        "queue_saturation",
+        "kv_preemption_pressure",
+        "prefix_cache_loss",
+        "mixed_prefill_interference",
+        "host_stall",
+        "rank_delay",
+        "transfer_degradation",
+        "capture_pause",
+        "client_admission",
+        "load_increase",
+        "longer_inputs",
+        "longer_outputs",
+        "prefix_sharing_drop"
+      ]
+    },
+    "subject": {
+      "type": "object",
+      "required": ["key", "kind", "requests", "reference_requests", "declared_by"],
+      "properties": {
+        "key": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["window", "requests", "case"] },
+        "case_id": { "type": ["string", "null"] },
+        "start_ns": { "type": ["integer", "null"] },
+        "end_ns": { "type": ["integer", "null"] },
+        "requests": { "type": "integer", "minimum": 0 },
+        "reference_requests": { "type": "integer", "minimum": 0 },
+        "declared_by": { "type": ["string", "null"] },
+        "first_detectable_ns": { "type": ["integer", "null"] },
+        "detection_unavailable": { "type": ["string", "null"] },
+        "windows": { "type": "array" }
+      }
+    },
+    "level": { "enum": ["high", "medium", "low"] },
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "met", "unmet"],
+      "properties": {
+        "level": { "oneOf": [{ "$ref": "#/$defs/level" }, { "type": "null" }] },
+        "met": { "type": "array", "items": { "type": "string" } },
+        "unmet": { "type": "array", "items": { "type": "string" } },
+        "coverage": { "enum": ["observed", "unknown", "known_loss"] }
+      }
+    },
+    "support": {
+      "type": "object",
+      "required": ["support_identity"],
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "required": ["support_identity", "lines"],
+          "properties": {
+            "support_identity": { "const": "triples" },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  { "type": "integer", "minimum": 0 },
+                  { "type": ["string", "null"] },
+                  { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                ],
+                "minItems": 3,
+                "maxItems": 3
+              }
+            }
+          }
+        },
+        {
+          "additionalProperties": false,
+          "required": ["support_identity", "ranges", "count", "digest"],
+          "properties": {
+            "support_identity": { "const": "ranges_only" },
+            "ranges": { "type": "array", "items": { "type": "array", "minItems": 2, "maxItems": 2 } },
+            "count": { "type": "integer", "minimum": 0 },
+            "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "kind", "status", "partial_reasons", "role", "secondary_to", "rank",
+        "severity", "cause", "claim", "driver", "subject", "location", "window",
+        "first_detectable_ns", "segments", "observations", "alternatives",
+        "eligibility", "confidence", "evidence", "evidence_shown", "evidence_total",
+        "support", "detail", "experiment", "thresholds"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^diagnosis\\.[a-z_]+\\.[0-9a-f]{12}$" },
+        "kind": { "$ref": "#/$defs/kind" },
+        "status": { "enum": ["assessed", "partial", "unsupported"] },
+        "partial_reasons": { "type": "array", "items": { "type": "string" } },
+        "role": { "enum": ["primary", "secondary"] },
+        "secondary_to": { "type": "array", "items": { "type": "string" } },
+        "rank": { "type": "integer", "minimum": 1 },
+        "severity": { "enum": ["info", "warning"] },
+        "cause": { "enum": ["fault", "workload_change", "instrumentation", "undetermined"] },
+        "claim": { "enum": ["fault", "condition", "observation"] },
+        "driver": { "type": "string" },
+        "subject": { "$ref": "#/$defs/subject" },
+        "location": {
+          "type": "object",
+          "required": ["component"],
+          "properties": {
+            "component": {
+              "enum": [
+                "client", "api_server", "scheduler", "kv_cache", "prefix_cache",
+                "engine_core", "worker", "interconnect", "profiler", "workload"
+              ]
+            }
+          }
+        },
+        "window": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["start_ns", "end_ns", "clock_domain", "uncertainty_ns", "resolution_ns", "placement"],
+              "properties": {
+                "start_ns": { "type": "integer" },
+                "end_ns": { "type": "integer" },
+                "clock_domain": { "type": ["string", "null"] },
+                "uncertainty_ns": { "type": "integer", "minimum": 0 },
+                "resolution_ns": { "type": "integer", "minimum": 0 },
+                "placement": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "first_detectable_ns": { "type": ["integer", "null"] },
+        "segments": { "type": ["object", "null"] },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "statement", "metric", "value", "provenance"],
+            "properties": {
+              "id": { "type": "string" },
+              "statement": { "type": "string", "minLength": 1 },
+              "metric": { "type": "string" },
+              "value": { "type": ["number", "null"] },
+              "ci": { "type": "array", "minItems": 2, "maxItems": 2 },
+              "n": { "type": "integer", "minimum": 0 },
+              "n_ref": { "type": "integer", "minimum": 0 },
+              "provenance": { "enum": ["observed", "reported", "derived"] }
+            }
+          }
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "status", "reason", "indispensable"],
+            "properties": {
+              "kind": { "type": "string" },
+              "status": { "enum": ["ruled_out", "untestable", "not_ruled_out", "upstream"] },
+              "reason": { "type": "string" },
+              "indispensable": { "type": "boolean" }
+            }
+          }
+        },
+        "eligibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["eligible", "gates", "failed"],
+          "properties": {
+            "eligible": { "type": "boolean" },
+            "gates": { "type": "object", "additionalProperties": { "type": "boolean" } },
+            "failed": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "confidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["level", "condition", "contribution", "driver"],
+          "properties": {
+            "level": { "$ref": "#/$defs/level" },
+            "condition": { "$ref": "#/$defs/criteria" },
+            "contribution": { "$ref": "#/$defs/criteria" },
+            "driver": { "$ref": "#/$defs/criteria" }
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "path", "line", "record_id", "sha256"],
+            "properties": {
+              "kind": { "type": ["string", "null"] },
+              "path": { "type": "string" },
+              "line": { "type": "integer", "minimum": 0 },
+              "record_id": { "type": ["string", "null"] },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        },
+        "evidence_shown": { "type": "integer", "minimum": 0 },
+        "evidence_total": { "type": "integer", "minimum": 0 },
+        "support": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/support" }
+        },
+        "detail": { "type": "object" },
+        "experiment": { "type": ["object", "null"] },
+        "thresholds": {
+          "type": "object",
+          "required": ["version"],
+          "properties": { "version": { "type": "string" } }
+        }
+      }
+    }
+  }
+}
