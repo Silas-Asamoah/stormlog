@@ -16,16 +16,37 @@ the 32 nearest in time are used: only the past, so the design is causal.
 With fewer than 5 the treated unit is unmatched, and the share matched is
 the common support. A treated unit's effect is its cadence minus its
 controls' median.
+
+The interference gate is one pooled statistic: within each epoch, the
+median effect of each dose bin, weighted by the bin's share of the matched
+treated units' prefill tokens, renormalized over the bins that matched;
+across epochs, by the same token share. Per-bin medians are descriptive. A
+decode member's ``estimated_contribution`` is the sum of the effects of the
+treated units it decoded in, never a measured delay.
+
+Uncertainty comes from a circular block bootstrap over each epoch's span,
+from the match window before the subject to its end: 1 s blocks from
+uniformly drawn origins, wrapping past the span's end to its start, laid
+end to end, so every unit, the subject's last included, is drawn equally
+often. Each replicate re-runs the matching on its own resampled units, so
+controls shared by many treated units and the serial dependence of
+neighbouring steps both widen the interval. B = 499 seeded replicates,
+with the Monte Carlo error of the interval's 2.5% quantile reported; the
+bootstrap runs only where an interval could decide the gate.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
+from scipy import sparse
 
+from .diagnosis_stats import SEED
 from .diagnosis_thresholds import (
+    MIXED_BLOCK_NS,
     MIXED_CONTEXT_TOLERANCE,
     MIXED_MATCH_WINDOW_NS,
     MIXED_MIN_CONTROLS,
@@ -42,6 +63,12 @@ EXACT = (*CONTROL_KEY, "bin", "members")
 BANDED = ("context", "dose", "cached", "longest")
 # Cells one look at the pool may hold: rows times width.
 LOOK_CELLS = 2_000_000
+REPLICATES = 499
+# Block lengths reported beside the chosen one, for findings only.
+SENSITIVITY_BLOCKS_NS = (500_000_000, 2_000_000_000)
+SENSITIVITY_REPLICATES = 199
+INSUFFICIENT_SUPPORT = "insufficient_common_support"
+NO_POSITIVE_EFFECT = "no_positive_effect"
 
 
 def dose_bin(tokens: int) -> int:
@@ -126,6 +153,7 @@ class Design:
     tolerance: float = 0.15
     min_controls: int = 5
     nearest: int = 32
+    block_ns: int = 1_000_000_000
 
     @classmethod
     def from_thresholds(cls, overrides: Mapping[str, float] | None) -> Design:
@@ -137,6 +165,7 @@ class Design:
             tolerance=value(MIXED_CONTEXT_TOLERANCE),
             min_controls=int(value(MIXED_MIN_CONTROLS)),
             nearest=int(value(MIXED_NEAREST_CONTROLS)),
+            block_ns=int(value(MIXED_BLOCK_NS)),
         )
 
     @property
@@ -419,8 +448,274 @@ def matched_effects(
     )
 
 
+# ------------------------------------------------------------- bootstrap
+@dataclass(frozen=True)
+class Interval:
+    """A point estimate with a percentile 95% interval from the replicates
+    in which it could be estimated, and the Monte Carlo error of the
+    interval's lower end: half the width of the band its order statistic
+    falls in, 95% of the time, over reruns with other seeds."""
+
+    estimate: float
+    low: float | None = None
+    high: float | None = None
+    replicates: int = 0
+    mc_error: float | None = None
+
+    def above(self, floor: float) -> bool:
+        return self.low is not None and self.low > floor
+
+    def as_dict(self, scale: float = 1.0, digits: int = 3) -> dict[str, Any]:
+        def scaled(value: float | None) -> float | None:
+            return None if value is None else round(value / scale, digits)
+
+        return {
+            "estimate": scaled(self.estimate),
+            "ci": [scaled(self.low), scaled(self.high)],
+            "replicates": self.replicates,
+            "mc_error": scaled(self.mc_error),
+        }
+
+
+def interval(estimate: float, draws: Sequence[float]) -> Interval:
+    values = np.sort(np.asarray([d for d in draws if np.isfinite(d)], dtype=float))
+    count = len(values)
+    if not count:
+        return Interval(estimate)
+    low = float(values[int(0.025 * (count - 1))])
+    high = float(values[int(0.975 * (count - 1))])
+    rank, spread = 0.025 * count, 1.96 * np.sqrt(count * 0.025 * 0.975)
+    band = (
+        values[max(0, int(np.floor(rank - spread)))],
+        values[min(count - 1, int(np.ceil(rank + spread)))],
+    )
+    return Interval(estimate, low, high, count, float(band[1] - band[0]) / 2)
+
+
+def circular_resample(
+    times: np.ndarray, block_ns: int, rng: np.random.Generator
+) -> tuple[np.ndarray, np.ndarray]:
+    """Blocks of ``block_ns`` from origins drawn uniformly over the span,
+    each wrapping past the span's end to its start, laid end to end and cut
+    at the span's length: the rows they hold, and each row's time in the
+    resampled sequence. ``times`` are sorted."""
+    if not len(times):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+    start = int(times[0])
+    length = int(times[-1]) - start + 1
+    offset = times - start
+    blocks = -(-length // block_ns)
+    origins = rng.integers(0, length, size=blocks)
+    ends = origins + block_ns
+    lows = np.stack([origins, np.zeros(blocks, dtype=np.int64)], axis=1).ravel()
+    highs = np.stack([np.minimum(ends, length), np.maximum(ends - length, 0)], axis=1)
+    first = np.searchsorted(offset, lows, side="left")
+    last = np.searchsorted(offset, highs.ravel(), side="left")
+    counts = np.maximum(last - first, 0)
+    placed = np.arange(blocks) * block_ns - origins
+    shifts = np.stack([placed, placed + length], axis=1).ravel()
+    rows = _ranges(first, counts)
+    resampled = times[rows] + np.repeat(shifts, counts)
+    kept = resampled < start + length
+    return rows[kept], resampled[kept]
+
+
+def _ranges(first: np.ndarray, counts: np.ndarray) -> np.ndarray:
+    """The concatenated ranges [first, first + count)."""
+    total = int(counts.sum())
+    if not total:
+        return np.zeros(0, dtype=np.int64)
+    starts = np.repeat(first - np.cumsum(counts) + counts, counts)
+    return np.asarray(starts + np.arange(total), dtype=np.int64)
+
+
+# ----------------------------------------------------------- interference
+@dataclass(frozen=True)
+class Epoch:
+    """One epoch's part of a subject: its span, and which of the subject's
+    requests each unit decoded for (units by requests)."""
+
+    span: Span
+    victims: sparse.csr_matrix
+
+
+@dataclass
+class Interference:
+    """The subject's matched interference: the pooled gate statistic, the
+    dose bins, and what it cost the subject's requests, in ns."""
+
+    treated: int
+    matched: int
+    pooled: Interval | None
+    by_dose: dict[str, Interval]
+    by_dose_n: dict[str, int]
+    victims: Interval | None  # the median request's summed effect
+    contributions: np.ndarray  # each request's summed effect
+    screened: str | None = None  # why no interval was drawn
+    sensitivity: dict[str, Interval] = field(default_factory=dict)
+
+    @property
+    def support(self) -> float | None:
+        return self.matched / self.treated if self.treated else None
+
+
+@dataclass(frozen=True)
+class _Stats:
+    """One replicate's (or the data's) statistics."""
+
+    pooled: float
+    by_dose: dict[int, float]
+    by_dose_n: dict[int, int]
+    contributions: np.ndarray
+
+    @classmethod
+    def of(cls, epochs: Sequence[Epoch], found: Sequence[Effects]) -> _Stats:
+        weighted, weights = 0.0, 0.0
+        pooled_bins: dict[int, list[np.ndarray]] = {}
+        contributions = np.zeros(_requests(epochs))
+        for epoch, effects in zip(epochs, found):
+            columns = epoch.span.columns
+            bins = columns.exact["bin"][effects.rows]
+            doses = columns.banded["dose"][effects.rows]
+            for index in np.unique(bins):
+                mine = bins == index
+                weight = float(doses[mine].sum())
+                weighted += weight * float(np.median(effects.effects[mine]))
+                weights += weight
+                pooled_bins.setdefault(int(index), []).append(effects.effects[mine])
+            per_unit = np.bincount(
+                effects.rows, weights=effects.effects, minlength=len(columns)
+            )
+            contributions += epoch.victims.T @ per_unit
+        return cls(
+            weighted / weights if weights else float("nan"),
+            {b: float(np.median(np.concatenate(v))) for b, v in pooled_bins.items()},
+            {b: sum(len(x) for x in v) for b, v in pooled_bins.items()},
+            contributions,
+        )
+
+    @property
+    def victims(self) -> float:
+        return float(np.median(self.contributions)) if len(self.contributions) else 0.0
+
+
+def _requests(epochs: Sequence[Epoch]) -> int:
+    return int(epochs[0].victims.shape[1]) if epochs else 0
+
+
+def interference(
+    epochs: Sequence[Epoch],
+    design: Design,
+    *,
+    min_support: float,
+    replicates: int = REPLICATES,
+    seed: int = SEED,
+) -> Interference:
+    """The point estimates, and their intervals where they can decide the
+    gate: with common support and a positive pooled effect."""
+    found = [matched_effects(epoch.span, design) for epoch in epochs]
+    point = _Stats.of(epochs, found)
+    requests = _requests(epochs)
+    treated = sum(f.treated for f in found)
+    matched = sum(f.matched for f in found)
+    result = Interference(
+        treated=treated,
+        matched=matched,
+        pooled=None if np.isnan(point.pooled) else Interval(point.pooled),
+        by_dose={bin_name(b): Interval(v) for b, v in sorted(point.by_dose.items())},
+        by_dose_n={bin_name(b): n for b, n in sorted(point.by_dose_n.items())},
+        victims=Interval(point.victims) if requests else None,
+        contributions=point.contributions,
+    )
+    result.screened = _screen(result, min_support)
+    if result.screened is None:
+        _draw(result, epochs, design, replicates, seed, point)
+    return result
+
+
+def _screen(result: Interference, min_support: float) -> str | None:
+    support = result.support
+    if support is None or support < min_support:
+        return INSUFFICIENT_SUPPORT
+    if result.pooled is None or result.pooled.estimate <= 0:
+        return NO_POSITIVE_EFFECT
+    return None
+
+
+def _draw(
+    result: Interference,
+    epochs: Sequence[Epoch],
+    design: Design,
+    replicates: int,
+    seed: int,
+    point: _Stats,
+) -> None:
+    draws = [
+        _Stats.of(epochs, found)
+        for found in _replicates(epochs, design, design.block_ns, replicates, seed)
+    ]
+    result.pooled = interval(point.pooled, [d.pooled for d in draws])
+    result.by_dose = {
+        bin_name(b): interval(v, [d.by_dose.get(b, np.nan) for d in draws])
+        for b, v in sorted(point.by_dose.items())
+    }
+    if _requests(epochs):
+        result.victims = interval(point.victims, [d.victims for d in draws])
+
+
+def _replicates(
+    epochs: Sequence[Epoch], design: Design, block_ns: int, replicates: int, seed: int
+) -> list[list[Effects]]:
+    rng = np.random.default_rng(seed)
+    out = []
+    for _ in range(replicates):
+        found = []
+        for epoch in epochs:
+            picked, times = circular_resample(epoch.span.columns.time, block_ns, rng)
+            found.append(matched_effects(epoch.span, design, picked, times))
+        out.append(found)
+    return out
+
+
+def sensitivity(
+    epochs: Sequence[Epoch],
+    design: Design,
+    pooled: float,
+    *,
+    replicates: int = SENSITIVITY_REPLICATES,
+    seed: int = SEED,
+) -> dict[str, Interval]:
+    """The pooled statistic's interval at the other block lengths."""
+    found = {}
+    for block_ns in SENSITIVITY_BLOCKS_NS:
+        draws = [
+            _Stats.of(epochs, effects).pooled
+            for effects in _replicates(epochs, design, block_ns, replicates, seed)
+        ]
+        found[f"{block_ns / 1e9:g}s"] = interval(pooled, draws)
+    return found
+
+
+def victim_matrix(
+    columns: Columns, index: Mapping[str, int], requests: int
+) -> sparse.csr_matrix:
+    """Units by requests: 1 where the unit decoded for the request, through
+    any of its attempts in ``index``."""
+    rows, cols = [], []
+    for row, unit in enumerate(columns.units):
+        for attempt in unit.decoders:
+            if attempt in index:
+                rows.append(row)
+                cols.append(index[attempt])
+    data = np.ones(len(rows))
+    return sparse.csr_matrix((data, (rows, cols)), shape=(len(columns), requests))
+
+
 __all__ = [
     "BANDED",
+    "INSUFFICIENT_SUPPORT",
+    "NO_POSITIVE_EFFECT",
+    "REPLICATES",
     "CONTROL_KEY",
     "DOSE_BINS",
     "EXACT",
@@ -428,13 +723,21 @@ __all__ = [
     "Columns",
     "Design",
     "Effects",
+    "Epoch",
+    "Interference",
+    "Interval",
     "Match",
     "Side",
     "Span",
     "Window",
     "bin_name",
+    "circular_resample",
     "dose_bin",
+    "interference",
+    "interval",
     "key_ids",
     "matched_effects",
     "nearest_medians",
+    "sensitivity",
+    "victim_matrix",
 ]

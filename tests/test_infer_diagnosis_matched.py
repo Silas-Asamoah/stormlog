@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import numpy as np
 import pytest
+from scipy import stats
 
 from stormlog.infer.diagnosis_context import Context
 from stormlog.infer.diagnosis_inputs import read_input
@@ -14,11 +16,15 @@ from stormlog.infer.diagnosis_matched import (
     Band,
     Columns,
     Design,
+    Epoch,
     Side,
     Span,
     Window,
+    circular_resample,
+    interference,
     matched_effects,
     nearest_medians,
+    victim_matrix,
 )
 from stormlog.infer.diagnosis_selection import select
 from stormlog.infer.diagnosis_units import Prefill, Unit, epoch_units
@@ -134,12 +140,12 @@ def _brute(
     out = []
     for i, at in enumerate(target.time):
         rows = []
-        for j, time in enumerate(pool.time):
+        for j, when in enumerate(pool.time):
             if pool.key[j] != target.key[i]:
                 continue
-            if window.causal and time >= at:
+            if window.causal and when >= at:
                 continue
-            if window.before_ns is not None and time < at - window.before_ns:
+            if window.before_ns is not None and when < at - window.before_ns:
                 continue
             mine = target.bands[i]
             if all(
@@ -147,7 +153,7 @@ def _brute(
                 <= max(b.tolerance * abs(mine[c]), b.slack)
                 for c, b in enumerate(bands)
             ):
-                rows.append((abs(int(time) - int(at)), j))
+                rows.append((abs(int(when) - int(at)), j))
         rows.sort()
         chosen = [pool.value[j] for _, j in rows[:nearest]]
         out.append(float(np.median(chosen)) if len(chosen) >= 3 else float("nan"))
@@ -206,3 +212,201 @@ def test_columns_bin_the_dose_and_keep_times_exact() -> None:
 
     assert list(columns.exact["bin"]) == [-1, 0, 1, 2, -1]
     assert int(columns.time[-1]) == 1_790_000_000_000_000_001
+
+
+# ------------------------------------------------------------- bootstrap
+def synthetic(
+    rng: np.random.Generator,
+    *,
+    seconds: float = 40.0,
+    cadence_ms: float = 3.3,
+    subject_s: tuple[float, float] = (30.0, 40.0),
+    effect_ms: float = 0.0,
+    treated_share: float = 0.1,
+    requests: int = 40,
+) -> Epoch:
+    """An engine at saturation: cadence with serial noise, the async bubble
+    after a finish (one step late, the next after it marked), prefill on a
+    share of steps with ``effect_ms`` more per step, and the subject's
+    requests decoding throughout."""
+    units: list[Unit] = []
+    at, noise, previous_refill = 0.0, 0.0, False
+    while at < seconds * 1000:
+        noise = 0.8 * noise + rng.normal(0, 0.2)
+        refill = bool(rng.random() < 0.05)
+        cadence = cadence_ms + noise + (9.0 if refill else 0.0)
+        dose = int(rng.integers(20, 2000)) if rng.random() < treated_share else 0
+        cadence += effect_ms if dose else 0.0
+        at += max(cadence, 0.5)
+        units.append(
+            Unit(
+                iteration=f"i{len(units)}",
+                completed_ns=int(at * MS),
+                cadence_ns=int(max(cadence, 0.5) * MS),
+                running=8,
+                drafts=0,
+                refill=refill,
+                after_refill=previous_refill,
+                context=100.0 + at / 1000,
+                decoders=tuple(f"a{int(rng.integers(requests))}" for _ in range(7)),
+                prefills=(Prefill("p", dose, 0, 0),) if dose else (),
+            )
+        )
+        previous_refill = refill
+    subject = (int(subject_s[0] * SECOND), int(subject_s[1] * SECOND))
+    span = Span.of(units, subject, Design().window_ns)
+    index = {f"a{k}": k for k in range(requests)}
+    return Epoch(span, victim_matrix(span.columns, index, requests))
+
+
+def test_the_circular_bootstrap_draws_the_span_s_end_as_often_as_its_middle() -> None:
+    """A moving block from origins inside the span draws its last second
+    about half as often as its middle; wrapping draws every unit alike."""
+    times = np.arange(0, 20 * SECOND, 10 * MS)
+    rng = np.random.default_rng(1)
+    drawn = np.zeros(len(times))
+    for _ in range(2000):
+        rows, resampled = circular_resample(times, SECOND, rng)
+        np.add.at(drawn, rows, 1)
+        assert len(rows) == len(times) or abs(len(rows) - len(times)) <= 100
+        assert np.all(np.diff(resampled) > 0)
+
+    last = drawn[times >= 19 * SECOND].mean()
+    middle = drawn[(times >= 9 * SECOND) & (times < 10 * SECOND)].mean()
+    assert last / middle == pytest.approx(1.0, abs=0.08)
+
+
+def test_shared_controls_widen_the_interval() -> None:
+    """R7: twenty treated steps all compared with the same twenty controls,
+    half fast and half slow. Resampling the treated steps alone gives the
+    one effect, 5 ms, twenty times; resampling the controls with them gives
+    an interval that reaches zero."""
+    controls = [unit(k * 1000.0, 5.0 if k % 2 else 15.0) for k in range(20)]
+    treated = [unit(20_000 + k * 1000.0, 15.0, prefill=100) for k in range(20)]
+    span = Span.of([*controls, *treated], (20 * SECOND, 40 * SECOND), 30 * SECOND)
+    epoch = Epoch(span, victim_matrix(span.columns, {}, 0))
+
+    found = interference([epoch], Design(), min_support=0.5)
+
+    assert found.pooled is not None and found.pooled.estimate == pytest.approx(5 * MS)
+    assert found.pooled.low is not None and found.pooled.high is not None
+    assert found.pooled.low <= 0 < found.pooled.high
+
+
+def test_the_bootstrap_is_seeded() -> None:
+    first = interference(
+        [synthetic(np.random.default_rng(3), effect_ms=1.0)],
+        Design(),
+        min_support=0.5,
+        replicates=50,
+    )
+    again = interference(
+        [synthetic(np.random.default_rng(3), effect_ms=1.0)],
+        Design(),
+        min_support=0.5,
+        replicates=50,
+    )
+
+    assert first.pooled == again.pooled and first.victims == again.victims
+    assert first.pooled is not None and first.pooled.mc_error is not None
+
+
+def test_a_known_effect_is_recovered_with_its_victims() -> None:
+    found = interference(
+        [synthetic(np.random.default_rng(4), effect_ms=1.0)],
+        Design(),
+        min_support=0.5,
+        replicates=99,
+    )
+
+    assert found.pooled is not None and found.pooled.above(0)
+    assert found.pooled.estimate == pytest.approx(1.0 * MS, abs=0.2 * MS)
+    assert found.victims is not None and found.victims.estimate > 0
+    assert found.support is not None and found.support > 0.9
+
+
+def _bin_epoch(
+    effect_ms: float, dose: int, count: int, *, extra: list[Unit] | None = None
+) -> Epoch:
+    units = [unit(k * 3.0, 3.0) for k in range(40)]
+    units += [unit(200 + k * 3.0, 3.0 + effect_ms, prefill=dose) for k in range(count)]
+    span = Span.of([*units, *(extra or [])], (190 * MS, 400 * MS), 30 * SECOND)
+    return Epoch(span, victim_matrix(span.columns, {}, 0))
+
+
+def test_the_pooled_statistic_weighs_matched_bins_and_epochs_by_tokens() -> None:
+    """A bin whose steps found no controls is left out, not counted as no
+    effect; a ten-step epoch weighs by its tokens, not as one epoch."""
+    unmatched = [unit(300 + k * 3.0, 30.0, prefill=2000, running=3) for k in range(5)]
+    small = _bin_epoch(1.0, 100, 10, extra=unmatched)  # 1,000 tokens at 1 ms
+    large = _bin_epoch(3.0, 1000, 10)  # 10,000 tokens at 3 ms
+
+    alone = interference([small], Design(), min_support=0.0, replicates=0)
+    both = interference([small, large], Design(), min_support=0.0, replicates=0)
+
+    assert alone.pooled is not None and alone.pooled.estimate == pytest.approx(MS)
+    assert both.pooled is not None
+    assert both.pooled.estimate == pytest.approx((1_000 * 1 + 10_000 * 3) / 11_000 * MS)
+    assert both.by_dose_n == {"1-256": 10, "257-1024": 10}
+
+
+def test_a_request_s_contribution_sums_the_treated_steps_it_decoded_in() -> None:
+    units = [unit(k * 3.0, 3.0) for k in range(40)]
+    units += [unit(200.0, 4.0, prefill=100), unit(203.0, 5.0, prefill=100)]
+    span = Span.of(units, (190 * MS, 210 * MS), 30 * SECOND)
+    epoch = Epoch(span, victim_matrix(span.columns, {"d0": 0, "x": 1}, 2))
+
+    found = interference([epoch], Design(), min_support=0.0, replicates=0)
+
+    assert list(found.contributions / MS) == pytest.approx([3.0, 0.0])
+
+
+def test_no_interval_is_drawn_where_none_could_pass_the_gate() -> None:
+    alone = [unit(200 + k * 3.0, 4.0, prefill=100) for k in range(5)]
+    unmatched = Span.of(alone, (190 * MS, 400 * MS), 30 * SECOND)
+    thin = Epoch(unmatched, victim_matrix(unmatched.columns, {}, 0))
+
+    short = interference([thin], Design(), min_support=0.5)
+    faster = interference([_bin_epoch(-1.0, 100, 10)], Design(), min_support=0.5)
+
+    assert (short.screened, short.pooled) == ("insufficient_common_support", None)
+    assert faster.screened == "no_positive_effect"
+    assert faster.pooled is not None and faster.pooled.low is None
+
+
+def test_null_epochs_rarely_pass_the_gate() -> None:
+    """Prefill that costs nothing, with the bubble on: over 200 seeded
+    epochs, the pooled interval's lower end is above zero at most 5% of the
+    time (one-sided, 2.5% nominal)."""
+    passes = 0
+    for seed in range(200):
+        epoch = synthetic(
+            np.random.default_rng(1000 + seed),
+            seconds=20.0,
+            cadence_ms=30.0,
+            subject_s=(12.0, 20.0),
+            treated_share=0.3,
+        )
+        found = interference(
+            [epoch], Design(), min_support=0.0, replicates=99, seed=seed
+        )
+        passes += bool(found.pooled is not None and found.pooled.above(0))
+
+    bound = stats.beta.ppf(0.975, passes + 1, 200 - passes)
+    assert passes <= 10, f"{passes} of 200 passed (95% upper bound {bound:.3f})"
+
+
+def test_a_subject_s_interference_fits_its_budget() -> None:
+    """Run 1's size: 18k steps over a minute, a 15 s subject, B = 499. The
+    budget is 10 s per subject on the GPU box's CPU; this bound is loose for
+    shared CI runners."""
+    epoch = synthetic(
+        np.random.default_rng(6), seconds=60.0, subject_s=(45.0, 60.0), effect_ms=0.5
+    )
+    started = time.perf_counter()
+
+    found = interference([epoch], Design(), min_support=0.5)
+
+    elapsed = time.perf_counter() - started
+    assert found.pooled is not None and found.pooled.replicates == 499
+    assert elapsed < 30.0, f"{elapsed:.1f} s"

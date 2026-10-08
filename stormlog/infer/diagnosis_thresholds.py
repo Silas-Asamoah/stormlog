@@ -36,6 +36,7 @@ MIXED_MATCH_WINDOW_NS = "mixed_prefill_interference.match_window_ns"
 MIXED_CONTEXT_TOLERANCE = "mixed_prefill_interference.context_tolerance"
 MIXED_MIN_CONTROLS = "mixed_prefill_interference.min_controls"
 MIXED_NEAREST_CONTROLS = "mixed_prefill_interference.nearest_controls"
+MIXED_BLOCK_NS = "mixed_prefill_interference.bootstrap_block_ns"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
 WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
@@ -114,6 +115,8 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # used.
         MIXED_MIN_CONTROLS: 5.0,
         MIXED_NEAREST_CONTROLS: 32.0,
+        # The bootstrap resamples blocks of this length.
+        MIXED_BLOCK_NS: 1_000_000_000.0,
         # Workload changes: arrivals faster by this ratio (interval's lower
         # bound), prompts or outputs longer by this ratio, or this much less
         # of the requests declaring a shared prefix.
@@ -160,6 +163,7 @@ __all__ = [
     "LOOP_NO_BASELINE_FLOOR_NS",
     "LOOP_STALL_FACTOR",
     "LOOP_STALL_FLOOR_NS",
+    "MIXED_BLOCK_NS",
     "MIXED_CONTEXT_TOLERANCE",
     "MIXED_MATCH_WINDOW_NS",
     "MIXED_MIN_CONTROLS",

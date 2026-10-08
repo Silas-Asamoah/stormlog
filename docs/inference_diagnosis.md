@@ -639,6 +639,29 @@ the hook's steps alone.
   share matched is the common support.
 - **Effect.** A treated unit's effect is its cadence minus its controls'
   median.
+- **The pooled statistic.** Within each epoch, the median effect of each
+  dose bin, weighted by the bin's share of the matched treated units'
+  prefill tokens and renormalized over the bins that matched, so a bin
+  whose units found no controls does not pull it toward zero; across
+  epochs, by the same token share, so a ten-step epoch weighs by its
+  tokens. Per-bin medians are descriptive.
+- **Contribution.** A request's `estimated_contribution` is the sum of the
+  effects of the treated units it decoded in: an estimate, never a measured
+  delay.
+- **Uncertainty.** A circular block bootstrap over each epoch's span, from
+  the match window before the subject to its end: blocks of 1 s from
+  origins drawn uniformly over the span, each wrapping past its end to its
+  start, laid end to end, so every unit, the subject's last included, is
+  drawn equally often. Each replicate re-runs the matching on its own
+  resampled units, so controls shared by many treated units and the serial
+  dependence of neighbouring steps both widen the interval. B = 499 seeded
+  replicates; each interval reports its Monte Carlo error (`mc_error`, half
+  the band its 2.5% quantile falls in over reruns with other seeds). The
+  bootstrap runs only where an interval could decide: with common support,
+  and a positive pooled effect. A finding also reports the pooled interval
+  at 0.5 s and 2 s blocks (B = 199), as sensitivity. On 200 null epochs
+  with the async bubble on, the pooled interval's lower end passed zero
+  once (0.5%; 2.5% nominal).
 
 Matching on the running requests rather than on the decode members is
 what keeps the async pipeline's bubble out of the controls. On a real run
@@ -729,6 +752,7 @@ The values are provisional until they are read from real runs.
 | `mixed_prefill_interference.context_tolerance` | 0.15 | a control's mean decode context per decode member lies within this fraction of the treated step's |
 | `mixed_prefill_interference.min_controls` | 5 | controls a treated step needs to be matched |
 | `mixed_prefill_interference.nearest_controls` | 32 | the controls nearest in time that are used |
+| `mixed_prefill_interference.bootstrap_block_ns` | 1 s | the block the matched design's bootstrap resamples |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
 | `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |
