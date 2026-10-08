@@ -756,6 +756,32 @@ def test_a_reset_s_preemption_waits_for_its_request_record(tmp_path: Path) -> No
 # ---------------------------------------------------------------- brackets
 
 
+def test_a_reset_stage_needs_the_records_of_its_request(tmp_path: Path) -> None:
+    """A reset's preemption is written only with its request's record, which
+    its first final step writes; that step completes after the reset, so the
+    stage's source_seq_max is that completion: a prefix import that reaches
+    it writes the stage."""
+    records = [
+        hello("engine", PID, START, observes=OBSERVES),  # 0
+        alias(OWN0, f"chatcmpl-{X0}", T0 - 30),  # 1
+        scheduled(0, T0, [member(OWN0, scheduled=8)]),  # 2: output not in yet
+        cache_reset([OWN0], T0 + 5),  # 3
+        scheduled(1, T0 + 10, [], preempted=[OWN0]),  # 4
+        completed(0, T0 + SECOND, [done(OWN0)]),  # 5
+        completed(1, T0 + SECOND + 10, []),  # 6
+        heartbeat(T0 + 2 * SECOND, 6),  # 7
+    ]
+    full = _reduce(tmp_path / "full", records, _two_requests())
+    (stage,) = _stages(full)["engine.preempted_by_reset"]
+    source = stage.metadata["source_seq_max"]
+    assert source == 5
+
+    prefix = _reduce(tmp_path / "prefix", records[: source + 1], _two_requests())
+    assert stage.event_id in {
+        event.event_id for events in _stages(prefix).values() for event in events
+    }
+
+
 def test_records_keep_each_stamp_s_second_wall_read(tmp_path: Path) -> None:
     step = scheduled(0, T0, [member(OWN0, scheduled=8)])
     step.update(stamp(T0, "start_"), **stamp(T0 + 200_000, "end_"))
