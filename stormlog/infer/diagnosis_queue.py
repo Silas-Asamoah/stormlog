@@ -569,9 +569,8 @@ def _criteria(
     contribution = met(
         excess_ci_excludes_zero=excess.excludes_zero,
         explains_ttft_excess=contribution_share,
-        competitors_excluded=all(
-            a.status in (RULED_OUT, UPSTREAM) for a in alternatives
-        ),
+        # An upstream cause is not excluded: the queue may be its consequence.
+        competitors_excluded=all(a.status == RULED_OUT for a in alternatives),
         witness=witness.held,
     )
     return (
