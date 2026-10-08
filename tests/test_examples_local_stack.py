@@ -43,6 +43,31 @@ def test_the_stack_script_starts_kills_and_stops_by_pid(
         os.kill(int(saved["pid"]), 0)
 
 
+def test_a_relative_binary_override_is_found_from_where_it_was_given(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A service starts in its state directory, so a path relative to the
+    # caller's directory must be made absolute before then.
+    _fake_binary(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("STORMLOG_OTELCOL", "./fake-otelcol")
+    monkeypatch.setenv("STORMLOG_PROMETHEUS", "missing")
+    monkeypatch.setenv("STORMLOG_JAEGER", "missing")
+    state = ["--state-dir", str(tmp_path / "state")]
+    try:
+        assert local_stack.main(["start", *state]) == 0
+        assert "otelcol: started" in capsys.readouterr().out
+        saved = json.loads((tmp_path / "state" / "otelcol.pid.json").read_text())
+        assert Path(saved["cmdline"][0]).is_absolute() or any(
+            Path(part).is_absolute() and part.endswith("fake-otelcol")
+            for part in saved["cmdline"]
+        )
+    finally:
+        local_stack.main(["stop", *state])
+
+
 def test_the_stack_script_never_signals_a_reused_pid(tmp_path: Path) -> None:
     state = tmp_path / "state"
     state.mkdir()
