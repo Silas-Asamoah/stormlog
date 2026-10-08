@@ -40,7 +40,6 @@ from .diagnosis_selection import Subject
 from .diagnosis_stats import INSUFFICIENT_SAMPLES, Difference, median_difference
 from .diagnosis_steps import Step, Steps, loop_steps, merge_intervals
 from .diagnosis_thresholds import (
-    LOOP_NO_BASELINE_FLOOR_NS,
     QUEUE_COMPETITOR_FLOOR,
     QUEUE_CONTRIBUTION,
     QUEUE_FRONT_SHARE,
@@ -152,7 +151,11 @@ def _finding(
     alternatives = [
         _engine_stall(context, producer, waiting, excess),
         _scheduler_paused(
-            context, producer, steps, merge_intervals(_wait_intervals(context, waiting))
+            context,
+            producer,
+            steps,
+            merge_intervals(_wait_intervals(context, waiting)),
+            excess,
         ),
         _blocked_waiting(waiting),
         _engine_ingress(context, subject, waits, excess),
@@ -357,11 +360,18 @@ def _wait_intervals(
 
 
 def _scheduler_paused(
-    context: Context, producer: str, steps: Steps, waits: list[tuple[int, int]]
+    context: Context,
+    producer: str,
+    steps: Steps,
+    waits: list[tuple[int, int]],
+    excess: Difference,
 ) -> Alternative:
     """Ruled out by the hook's pause records where nothing was lost, else by
-    admissions continuing throughout the waits. Each is judged over the
-    stretches in which a subject's request waited, not between them."""
+    admissions: a paused scheduler admits nobody, so the longest stretch
+    without an admission while requests waited is the longest pause that
+    could hide there, and it must be a minor share of the wait excess. Each
+    is judged over the stretches in which a subject's request waited, not
+    between them."""
     kind = "scheduler_paused"
     if not waits:
         return Alternative(kind, UNTESTABLE, "no wait was placed", True)
@@ -372,13 +382,16 @@ def _scheduler_paused(
         return Alternative(
             kind, RULED_OUT, "no pause transition, and nothing lost", True
         )
-    if all(_admissions_continue(context, steps, wait) for wait in waits):
-        return Alternative(
-            kind, RULED_OUT, "admissions continued throughout the waits", True
-        )
-    return Alternative(
-        kind, UNTESTABLE, "no pause records, and admissions stopped", True
+    longest = max(_admission_gap(steps, wait) for wait in waits)
+    floor = resolve_threshold(QUEUE_COMPETITOR_FLOOR, context.thresholds)[0]
+    reason = (
+        f"no pause records; admissions stopped for up to {longest / 1e6:.1f} ms "
+        f"while requests waited, against a wait excess of {excess.estimate / 1e6:.1f} ms"
     )
+    if longest < floor * excess.estimate:
+        return Alternative(kind, RULED_OUT, reason, True)
+    # Without pause records, a full engine admits nobody either.
+    return Alternative(kind, UNTESTABLE, reason, True)
 
 
 def _pause_over(steps: Steps, waits: list[tuple[int, int]]) -> str | None:
@@ -397,13 +410,13 @@ def _pauses_recorded_whole(epoch: Any, waits: list[tuple[int, int]]) -> bool:
     return all(_covered(epoch, wait) for wait in waits)
 
 
-def _admissions_continue(context: Context, steps: Steps, span: tuple[int, int]) -> bool:
-    """Whether some request was admitted at least every stall floor
-    throughout the span: a paused scheduler admits nobody."""
+def _admission_gap(steps: Steps, span: tuple[int, int]) -> int:
+    """The longest stretch of a wait without an admission. The wait ends
+    at the call that admitted its request, so a pause must begin and end
+    inside it."""
     admissions = [step.start_ns for step in steps.between(*span) if step.admitted]
-    floor = resolve_threshold(LOOP_NO_BASELINE_FLOOR_NS, context.thresholds)[0]
     edges = [span[0], *admissions, span[1]]
-    return max(b - a for a, b in zip(edges, edges[1:])) < floor
+    return max(b - a for a, b in zip(edges, edges[1:]))
 
 
 def _blocked_waiting(executions: list[Execution]) -> Alternative:
