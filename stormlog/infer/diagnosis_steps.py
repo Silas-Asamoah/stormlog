@@ -12,7 +12,7 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 from statistics import median
-from typing import Any
+from typing import Any, Sequence
 
 from .correlation_events import IterationEvent
 from .diagnosis_inputs import Line
@@ -63,6 +63,25 @@ class Steps:
         low = bisect_left(self._starts, start_ns)
         high = bisect_right(self._starts, end_ns)
         return self.steps[low:high]
+
+    def within(self, intervals: Sequence[tuple[int, int]]) -> list[Step]:
+        """Steps whose schedule call started inside the union of the
+        half-open ``intervals`` [start, end), each once, in order: for a
+        wait ending at the call that ran the request, the steps run while it
+        still waited."""
+        merged: list[list[int]] = []
+        for start, end in sorted(intervals):
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        return [
+            step
+            for start, end in merged
+            for step in self.steps[
+                bisect_left(self._starts, start) : bisect_left(self._starts, end)
+            ]
+        ]
 
     def cadence_before(self, at_ns: int, window_ns: int) -> float | None:
         """Median interval between completions in the ``window_ns`` before
