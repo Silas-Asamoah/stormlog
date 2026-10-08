@@ -32,6 +32,20 @@ START = "start"
 WAIT = "wait"
 TIMEOUT = "timeout"
 
+DOSE_CHECK_TOO_LONG_PER_HOLD = 1.0
+"""G0's dose check (plan A.4, v3.6): how many gaps too long for a hold (past
+``never_longer``) a cadence hold may expect at the baseline's rate before the
+series can't be judged by cadence. The plan asks that every F4a/F4b dose be
+longer than a typical prefill step, since a hold may hold no gap as long as
+the smallest dose. A healthy engine whose own such gaps come once or more per
+hold recovers only by chance: rev-220-b's E5, 0.8% prefill steps of 250 ms,
+recovered at the last SIGCONT in 3 of 20 and timed out in 8. Under one per
+hold most holds are clean (e^-1 of them at the limit, more below it), and
+recovery comes within seconds: with 250 ms prefill steps at 0.1-0.2%, every
+seed of 20 the check let through recovered within 20 s. At or over it the
+series is a Never whose reason starts ``dose_check_failed``: not evaluable,
+never a pass or a timeout by chance."""
+
 
 @dataclass(frozen=True)
 class Thresholds:
@@ -746,13 +760,13 @@ def _thin(name: str, count: int, needed: int) -> Never:
 def _dose_check(name: str, stats: GapStats, thresholds: Thresholds) -> Never | None:
     """G0's dose check, on every run. A hold may hold no gap longer than
     ``never_longer``, which the smallest dose caps; an engine whose healthy
-    gaps that long recur at one or more per hold, at the baseline's rate
-    (prefill steps longer than a dose), would end nearly every hold, and
-    recovery would time out by chance (E5). Its cadence can't be judged
-    then: the rule never holds, and says why."""
+    gaps that long recur at ``DOSE_CHECK_TOO_LONG_PER_HOLD`` or more per
+    hold, at the baseline's rate (prefill steps longer than a dose), would
+    end nearly every hold, and recovery would time out by chance (E5). Its
+    cadence can't be judged then: the rule never holds, and says why."""
     hold_s = thresholds.cadence_hold_ns / SECOND
     per_hold = stats.too_long_per(hold_s)
-    if per_hold < 1:
+    if per_hold < DOSE_CHECK_TOO_LONG_PER_HOLD:
         return None
     return Never(
         f"dose_check_failed: {stats.too_long_count} of {stats.count} {name} in "
@@ -1216,6 +1230,7 @@ def next_episode(
 
 
 __all__ = [
+    "DOSE_CHECK_TOO_LONG_PER_HOLD",
     "MECHANISMS",
     "SECOND",
     "START",
