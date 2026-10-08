@@ -117,6 +117,26 @@ def test_a_second_writer_of_the_same_slot_is_refused(tmp_path: Path) -> None:
         first.close()
 
 
+def test_a_writer_thread_that_cannot_start_gives_the_slot_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    writer = _writer(tmp_path)
+    real_start = threading.Thread.start
+
+    def refuse(_thread: threading.Thread) -> None:
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        writer.start()
+    monkeypatch.setattr(threading.Thread, "start", real_start)
+    assert not writer.lock_path.exists()
+    writer.close(1.0)  # nothing left to do, and no error
+    second = _writer(tmp_path)
+    second.start()  # the slot is free
+    second.close()
+
+
 def test_writers_of_different_slots_coexist(tmp_path: Path) -> None:
     alpha, beta = _writer(tmp_path, "alpha"), _writer(tmp_path, "beta")
     alpha.start()

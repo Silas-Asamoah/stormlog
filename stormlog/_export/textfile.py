@@ -148,12 +148,21 @@ class TextfileWriter:
         self._lock_owned = True
 
     def start(self) -> None:
-        """Take the lock if not yet taken, then write now and every interval."""
+        """Take the lock if not yet taken, then write now and every interval.
+
+        A writer thread that cannot start gives the slot back before the
+        error reaches the caller.
+        """
         self.acquire()
-        self._thread = threading.Thread(
+        thread = threading.Thread(
             target=self._run, name=f"stormlog-textfile-{self.slot}", daemon=True
         )
-        self._thread.start()
+        try:
+            thread.start()
+        except BaseException:
+            self._free_slot()
+            raise
+        self._thread = thread
 
     def close(self, deadline: float = 5.0) -> None:
         """Write the final file (``stormlog_run_active`` 0) within ``deadline``.
