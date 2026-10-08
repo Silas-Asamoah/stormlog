@@ -22,6 +22,7 @@ from typing import Any
 from ..host_clock import host_boot_id
 from . import gate
 from .engine import EngineRecorder
+from .process import process_fields
 from .worker import RunnerRecorder, worker_identity
 from .writer import EpochWriter, WriterLimits, remove_old_epochs
 
@@ -30,6 +31,9 @@ ENV_NVTX = "STORMLOG_VLLM_HOOK_NVTX"
 ENV_RETAIN_HOURS = "STORMLOG_VLLM_HOOK_RETAIN_HOURS"
 ENV_MAX_BYTES = "STORMLOG_VLLM_HOOK_MAX_BYTES"
 RECORDER_ATTRIBUTE = "_stormlog_recorder"
+# The optional record kinds a patched class emits; only methods the installed
+# vLLM has are patched, so only their kinds are claimed.
+OBSERVES_ATTRIBUTE = "_stormlog_observes"
 
 _LOCK = threading.Lock()
 _PATCHED = False
@@ -178,7 +182,10 @@ def _enable_engine(scheduler: Any, vllm_config: Any, settings: _Settings) -> Non
     result = gate.check(vllm_config, scheduler=scheduler)
     writer = writer_for(settings, "engine")
     producer = producer_name(writer)
-    writer.emit("hello", _hello(writer, result, producer=producer))
+    observes = (
+        getattr(type(scheduler), OBSERVES_ATTRIBUTE, ()) if result.enabled else ()
+    )
+    writer.emit("hello", _hello(writer, result, producer=producer, observes=observes))
     if result.enabled:
         recorder = EngineRecorder(writer, producer)
         setattr(scheduler, RECORDER_ATTRIBUTE, recorder)
@@ -222,7 +229,11 @@ def _enable_worker(worker: Any, settings: _Settings) -> None:
 
 
 def _hello(
-    writer: EpochWriter, result: gate.GateResult, *, producer: str | None
+    writer: EpochWriter,
+    result: gate.GateResult,
+    *,
+    producer: str | None,
+    observes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     wall = time.time_ns()
     mono = time.monotonic_ns()
@@ -233,10 +244,12 @@ def _hello(
         "boot_id": writer.boot_id,
         "pid": writer.pid,
         "start_ns": writer.start_ns,
+        **process_fields(),
         "vllm_version": result.config.get("vllm_version"),
         "enabled": result.enabled,
         "refused": result.refused,
         "producer": producer,
+        "observes": sorted(observes),
         "config": result.config,
         "clock": {"wall_ns": wall, "mono_ns": mono, "gap_ns": wall_after - wall},
     }
