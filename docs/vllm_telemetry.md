@@ -112,7 +112,9 @@ joins to a request by the recorded value and never by a rebuilt string.
   `observed_at_ns` is stamped before the request goes out and
   `completed_at_ns` when the response, or the failure, comes back to the
   scraper, both on the client clock: the server's values were sampled
-  somewhere between the two. For a scrape run on a thread, the second stamp
+  somewhere between the two. The second is the first plus the time the
+  scrape took on the monotonic clock, so a wall clock stepped during a
+  scrape cannot put its end before its start. For a scrape run on a thread, the second stamp
   is taken back on the event loop, so the interval also covers the thread's
   start, which `duration_ms` (timed inside the fetch) does not. Records
   written before `completed_at_ns` existed lack it.

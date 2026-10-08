@@ -228,6 +228,19 @@ async def _off_loop(func: Callable[[], T]) -> T:
     return await future
 
 
+def _started() -> tuple[int, int]:
+    """A scrape's wall stamp, and a monotonic read to time the scrape by."""
+    return time.time_ns(), time.monotonic_ns()
+
+
+def _sampled(started: tuple[int, int]) -> tuple[int, int]:
+    """``(observed_at_ns, completed_at_ns)``: the end is the wall stamp plus
+    the monotonic time since, so a wall clock stepped during the scrape
+    cannot put the end before the start."""
+    wall, mono = started
+    return wall, wall + time.monotonic_ns() - mono
+
+
 class VllmMetricsScraper:
     """Turn metrics responses into records and remember what they exposed."""
 
@@ -271,11 +284,11 @@ class VllmMetricsScraper:
         ``timeout_seconds`` overrides the scraper's own for one scrape, for
         the one taken on the way out of an interrupted run.
         """
-        observed_at_ns = time.time_ns()
+        started = _started()
         result, compact = _fetch_and_parse(
             self.url, self._timeout(timeout_seconds), self.api_key
         )
-        sampled = (observed_at_ns, time.time_ns())
+        sampled = _sampled(started)
         return self._record(sampled, marker, case_id, phase, result, compact)
 
     async def scrape_async(
@@ -292,14 +305,14 @@ class VllmMetricsScraper:
         by cancellation leaves no trace: no counter moves and no record is
         written for it.
         """
-        observed_at_ns = time.time_ns()
+        started = _started()
         fetch = partial(
             _fetch_and_parse, self.url, self._timeout(timeout_seconds), self.api_key
         )
         result, compact = await _off_loop(fetch)
         # Stamped back on the loop, so the interval also covers the time the
         # fetch thread took to start, which duration_ms does not.
-        sampled = (observed_at_ns, time.time_ns())
+        sampled = _sampled(started)
         return self._record(sampled, marker, case_id, phase, result, compact)
 
     def abandoned(
