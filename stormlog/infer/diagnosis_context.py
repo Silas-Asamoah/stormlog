@@ -245,15 +245,18 @@ class Context:
         ]
 
     def window(self, subject: Subject) -> dict[str, Any] | None:
-        """A finding's window: its subject's, on the artifact's clock."""
+        """A finding's window: its subject's, on the artifact's clock, from
+        an incident's onset; its resolution is how finely selection placed
+        that onset (the first flagged window's span), else one base window."""
         if subject.start_ns is None or subject.end_ns is None:
             return None
+        onset = subject.onset_ns
         return {
-            "start_ns": subject.start_ns,
+            "start_ns": subject.start_ns if onset is None else onset,
             "end_ns": subject.end_ns,
             "clock_domain": self.view.clock_domain,
             "uncertainty_ns": 0,
-            "resolution_ns": 1_000_000_000,
+            "resolution_ns": subject.resolution_ns or 1_000_000_000,
             "placement": "client_clock",
         }
 

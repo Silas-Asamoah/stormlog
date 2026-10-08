@@ -124,6 +124,10 @@ class Subject:
     windows: list[Window] = field(default_factory=list)
     first_detectable_ns: int | None = None
     detection_unavailable: str | None = None
+    # When an incident's degradation was first visible, and how finely the
+    # selection placed it: its first flagged window's span.
+    onset_ns: int | None = None
+    resolution_ns: int | None = None
     # For a window without client requests (a server-only artifact): the
     # engine executions admitted in it, and those admitted before it.
     executions: list[EntityRef] = field(default_factory=list)
@@ -155,6 +159,8 @@ class Subject:
             "declared_by": self.declared_by,
             "first_detectable_ns": self.first_detectable_ns,
             "detection_unavailable": self.detection_unavailable,
+            "onset_ns": self.onset_ns,
+            "resolution_ns": self.resolution_ns,
             "windows": [window.as_dict() for window in self.windows],
         }
 
@@ -432,6 +438,7 @@ def _incidents(view: RunView, windows: list[Window]) -> list[Subject]:
 def _incident(view: RunView, run: list[Window]) -> Subject:
     detected = run[1].evaluated_at_ns
     unavailable = None if view.has_dispatch_records() else LEGACY_NO_DISPATCH
+    first = run[0]
     return Subject(
         key=f"window:{run[0].case_id}:{run[0].start_ns}",
         kind="window",
@@ -443,7 +450,29 @@ def _incident(view: RunView, run: list[Window]) -> Subject:
         windows=list(run),
         first_detectable_ns=None if unavailable else detected,
         detection_unavailable=unavailable,
+        onset_ns=_onset(view, first),
+        resolution_ns=first.end_ns - first.start_ns,
     )
+
+
+def _onset(view: RunView, window: Window) -> int | None:
+    """When the first flagged window's degradation was first visible: the
+    earliest instant one of its requests over a flagged threshold had been
+    running longer than that threshold, its send plus the threshold. A
+    window joined forward from calm traffic can begin seconds before the
+    burst that flagged it; this places the incident where it was seen."""
+    censoring = _Censoring(view)
+    late = []
+    for test in window.tests.values():
+        if not test.flagged:
+            continue
+        for request_id in window.requests:
+            request = view.client[request_id]
+            found = censoring.value(request, test.metric, window.evaluated_at_ns)
+            sent = request.sent_at_ns
+            if found is not None and found[0] > test.threshold_ns and sent is not None:
+                late.append(sent + test.threshold_ns)
+    return max(window.start_ns, min(late)) if late else None
 
 
 # --------------------------------------------------------------- declared
