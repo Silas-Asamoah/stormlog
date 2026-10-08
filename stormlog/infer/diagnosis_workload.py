@@ -41,6 +41,8 @@ NO_REFERENCE = "no_reference"
 
 def assess_load(context: Context, subject: Subject) -> Assessment:
     """More arrivals per second than the reference."""
+    if not subject.requests:
+        return _verdict(LOAD_INCREASE, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
     rates = _rates(context, subject)
     if rates is None:
         return _verdict(LOAD_INCREASE, subject, UNSUPPORTED, NO_REFERENCE)
@@ -81,6 +83,8 @@ def assess_outputs(context: Context, subject: Subject) -> Assessment:
 
 def assess_sharing(context: Context, subject: Subject) -> Assessment:
     """Fewer requests declaring a shared prefix than in the reference."""
+    if not subject.requests:
+        return _verdict(PREFIX_SHARING_DROP, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
     shares = [_sharing(context, ids) for ids in (subject.requests, subject.reference)]
     if not subject.requests or not subject.reference or None in shares:
         return _verdict(PREFIX_SHARING_DROP, subject, UNSUPPORTED, NO_REFERENCE)
@@ -170,6 +174,8 @@ def _span(context: Context, request_ids: list[str]) -> tuple[int, float] | None:
 def _lengths(
     context: Context, subject: Subject, kind: str, field: str, noun: str
 ) -> Assessment:
+    if not subject.requests:
+        return _verdict(kind, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
     arms = [
         [
             float(v)
