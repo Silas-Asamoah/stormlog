@@ -25,6 +25,7 @@ from stormlog._export.textfile import (
     validate_slot,
 )
 from tests.export_conformance import check_exposition
+from tests.markers import needs_non_root
 
 # No producer label: the writer cannot add one to a render it is given.
 BODY = b"# HELP stormlog_up Up.\n# TYPE stormlog_up gauge\nstormlog_up 1\n"
@@ -304,6 +305,7 @@ def test_a_lock_file_this_user_cannot_open_is_a_slot_in_use(tmp_path: Path) -> N
         lock.chmod(0o644)
 
 
+@needs_non_root
 def test_a_directory_this_user_cannot_write_is_refused_as_such(
     tmp_path: Path,
 ) -> None:
