@@ -106,6 +106,22 @@ the flaky benchmark memory gates
   epoch where the log is whole (`coverage`) and when its writer was heard
   from (`liveness`), and writes preemptions, cache resets and pause changes
   as `infer.stage` records. (#218)
+- `stormlog infer diagnose ARTIFACT` explains why an inference run got
+  slow, from the evidence its artifact holds (`docs/inference_diagnosis.md`).
+  It selects incident windows itself, judged causally against the earlier
+  windows of each case, or explains declared windows, requests or cases.
+  Each finding names a mechanism at a component, the observations behind
+  it, the competing mechanisms and what became of each, its confidence per
+  claim, an experiment that would confirm it, and every artifact line it
+  used. It assesses queue saturation, KV preemption pressure, prefix-cache
+  loss, client admission, host stalls at the API server, capture pauses and
+  the workload's own changes, and gives a memory ledger that never sums.
+  vLLM's metrics witness a finding only with `--metrics-from-engine`. The
+  command writes a validated `stormlog.report` with `report_kind:
+  inference_diagnosis` (payload `stormlog.inference_diagnosis` v1, schema
+  `docs/schemas/inference_diagnosis_v1.schema.json`) and exits 3 when any
+  finding is a `warning`; `--inspect REPORT FINDING_ID` prints a finding's
+  records again without diagnosing. Its thresholds are provisional. (#218)
 - `stormlog infer import-execution ARTIFACT DIR` reduces the vLLM execution
   hook's raw log (`docs/vllm_execution.md`) into `infer.iteration`,
   `infer.membership`, `infer.request` and `infer.clock_alignment` records:
