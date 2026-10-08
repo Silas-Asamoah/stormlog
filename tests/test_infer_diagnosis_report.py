@@ -226,6 +226,27 @@ def test_an_incident_explained_only_by_a_contested_finding_is_inconclusive(
     assert report["verdict"]["exit_code"] == 0
 
 
+def test_an_incident_its_queue_explains_little_of_is_inconclusive(
+    tmp_path: Path,
+) -> None:
+    """The burst into a full engine, each response taking 4 s to reach the
+    client: the queue is eligible and uncontested but explains a sixth of
+    the TTFT rise, so it explains no incident and the outcome says so."""
+    calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
+    heavy = poisson_free(300, 90 * SECOND, 5 * MS, prefix="b", delivery_ns=4 * SECOND)
+    artifact = build_run(tmp_path, calm + heavy, Engine(max_num_seqs=4))
+
+    report = diagnose_artifact(artifact, options=_options())
+
+    _validate(report)
+    details = report["payload"]["findings_detail"].values()
+    (queue,) = [d for d in details if d["kind"] == "queue_saturation"]
+    assert queue["eligibility"]["contested"] == []
+    assert queue["confidence"]["contribution"]["unmet"] == ["explains_ttft_excess"]
+    assert report["payload"]["outcome"] == "inconclusive"
+    assert "1 incident unexplained" in report["verdict"]["summary"]
+
+
 @pytest.mark.parametrize(
     "windows, options, message",
     [
