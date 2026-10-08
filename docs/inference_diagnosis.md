@@ -289,7 +289,7 @@ interval); with no excess it reports `not_observed`.
 | Competitor | Indispensable | Ruled out when |
 | --- | --- | --- |
 | `engine_stall` | yes | engine-loop stalls, found by the same rules as the online `engine_loop_gap`, cover less than half of the waiting time |
-| `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms) |
+| `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else admissions continued throughout the waits (no gap of 500 ms). Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under a quarter of the wait excess (untestable on a log without `enqueued` records) |
 | `kv_preemption_pressure` | no | the steps scheduled while requests waited preempted nobody; otherwise it is `upstream` |

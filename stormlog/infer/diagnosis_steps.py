@@ -69,15 +69,9 @@ class Steps:
         half-open ``intervals`` [start, end), each once, in order: for a
         wait ending at the call that ran the request, the steps run while it
         still waited."""
-        merged: list[list[int]] = []
-        for start, end in sorted(intervals):
-            if merged and start <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], end)
-            else:
-                merged.append([start, end])
         return [
             step
-            for start, end in merged
+            for start, end in merge_intervals(intervals)
             for step in self.steps[
                 bisect_left(self._starts, start) : bisect_left(self._starts, end)
             ]
@@ -113,6 +107,18 @@ class Steps:
         if current is not None:
             spans.append((current[0], end_of_time, current[1]))
         return spans
+
+
+def merge_intervals(intervals: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The union of ``intervals`` as disjoint intervals, in order; touching
+    intervals join."""
+    merged: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return [(start, end) for start, end in merged]
 
 
 def loop_steps(view: RunView, producer: str) -> list[LoopStep]:
@@ -263,4 +269,12 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
-__all__ = ["PAUSED_STATES", "Pause", "Step", "Steps", "loop_steps", "steps_of"]
+__all__ = [
+    "PAUSED_STATES",
+    "Pause",
+    "Step",
+    "Steps",
+    "loop_steps",
+    "merge_intervals",
+    "steps_of",
+]
