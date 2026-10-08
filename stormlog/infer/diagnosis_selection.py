@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, Iterable, Sequence
 
+from .correlation_events import EntityRef
 from .diagnosis_join import ClientRequest, RunView
 from .diagnosis_thresholds import (
     SELECTION_ALPHA,
@@ -123,6 +124,16 @@ class Subject:
     windows: list[Window] = field(default_factory=list)
     first_detectable_ns: int | None = None
     detection_unavailable: str | None = None
+    # For a window without client requests (a server-only artifact): the
+    # engine executions admitted in it, and those admitted before it.
+    executions: list[EntityRef] = field(default_factory=list)
+    reference_executions: list[EntityRef] = field(default_factory=list)
+
+    @property
+    def basis(self) -> str:
+        """``client`` when the subject is the client's requests, ``engine``
+        when it is only the engine's executions."""
+        return "engine" if self.executions and not self.requests else "client"
 
     @property
     def incident(self) -> bool:
@@ -138,6 +149,9 @@ class Subject:
             "end_ns": self.end_ns,
             "requests": len(self.requests),
             "reference_requests": len(self.reference),
+            "basis": self.basis,
+            "executions": len(self.executions),
+            "reference_executions": len(self.reference_executions),
             "declared_by": self.declared_by,
             "first_detectable_ns": self.first_detectable_ns,
             "detection_unavailable": self.detection_unavailable,
@@ -439,7 +453,8 @@ def _declared(
     flagged = {rid for window in windows if window.flagged for rid in window.requests}
     by_case = _measured(view)
     subjects = [
-        _declared_window(by_case, flagged, start, end) for start, end in options.windows
+        _engine_side(view, _declared_window(by_case, flagged, start, end))
+        for start, end in options.windows
     ]
     if options.request_ids:
         known = [rid for rid in options.request_ids if rid in view.client]
@@ -469,6 +484,30 @@ def _declared(
             )
         )
     return subjects
+
+
+def _engine_side(view: RunView, subject: Subject) -> Subject:
+    """A window no client request arrived in, as in a server-only artifact,
+    is the engine's executions admitted in it, against those admitted
+    before it; the engine's wall clock must be the artifact's."""
+    if subject.requests or subject.start_ns is None or subject.end_ns is None:
+        return subject
+    start, end = subject.start_ns, subject.end_ns
+    for ref, execution in view.executions.items():
+        admitted = execution.metadata.get("admitted_wall_ns")
+        if not isinstance(admitted, int) or not _same_clock(view, execution):
+            continue
+        if start <= admitted < end:
+            subject.executions.append(ref)
+        elif admitted < start:
+            subject.reference_executions.append(ref)
+    return subject
+
+
+def _same_clock(view: RunView, execution: Any) -> bool:
+    domain = execution.event.context.clock_domain
+    wall = domain.removesuffix("/monotonic_ns") + "/unix_epoch_ns"
+    return view.clock_domain is not None and wall == view.clock_domain
 
 
 def _declared_window(

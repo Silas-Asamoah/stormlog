@@ -532,6 +532,7 @@ def build_run(
     *,
     windows: list[dict[str, Any]] | None = None,
     client_host: str = HOST,
+    client: bool = True,
 ) -> Path:
     """Serve ``requests``, write the client artifact, import the hook log."""
     engine = engine or Engine()
@@ -539,7 +540,7 @@ def build_run(
     write_epoch(tmp_path / "hook", "engine", PID, START, [hello_record(engine), *raw])
     lines = [identity_record(client_host)]
     events: list[tuple[int, dict[str, Any]]] = []
-    for request in requests:
+    for request in requests if client else ():
         events.extend((r["timestamp_ns"], r) for r in client_records(request, engine))
     for window in windows or []:
         events.append((window["timestamp_ns"], window))

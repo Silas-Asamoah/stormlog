@@ -61,6 +61,8 @@ class _Warmth:
 
 def assess_prefix(context: Context, subject: Subject) -> Assessment:
     """The prefix-cache class on one subject."""
+    if not subject.requests:
+        return _verdict(subject, UNSUPPORTED, NO_DECLARED_SHARING)
     producer = context.producer_of(subject.requests)
     if producer is None:
         return _verdict(subject, UNSUPPORTED, NO_CACHE_EVIDENCE)

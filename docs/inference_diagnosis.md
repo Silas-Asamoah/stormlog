@@ -209,6 +209,16 @@ the client wrote `infer.dispatch` records, and its TTFT before its end only
 with `infer.first_content` records; without dispatch records, an incident
 has no `first_detectable_ns`, and says `legacy_no_dispatch_records`.
 
+**Server-only artifacts.** An artifact with no client requests, as an
+incident watcher captures one, can still be diagnosed over a declared
+window: when no client request arrived in it, the subject is the engine's
+executions admitted in it (by their admission's wall stamp, on the same host
+and boot), against those admitted before it (`basis: engine`). The queue and
+KV classes then work from the engine's own segments, the queue with
+`partial/no_client_latency` and its contribution judged against the
+engine's TTFT (admission to the first step that kept a token); the classes
+that need the client report `unsupported/no_client_requests`.
+
 With a declared SLO the test would compare violations instead; that waits
 for the SLO policies of the comparison work (#213), and the threshold
 version records which test ran.
