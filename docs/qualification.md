@@ -852,6 +852,10 @@ entered raises into the second, having set the flag itself, and one
 handled as the second is entered is noted. Tests check the bytecode (from
 3.11), raise a signal at the last check before the except, and fail the
 run in a C call that leaves one or two signals pending (on every version).
+The run's directory, its plan, the reference channel and its poller are
+set up inside the same try, so a signal while the run sets up publishes it,
+interrupted, rather than leaving `.partial`; and a signal landing between
+two of the handlers' installs leaves the rest for the finish to install.
 A third is not held: a publish that hangs (a full disk) can still be ended,
 by whatever handled the signal before.
 

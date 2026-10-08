@@ -254,13 +254,7 @@ class InjectionRun:
         An interruption is re-raised once the run is published: SIGTERM and
         SIGHUP become one from the start, not only once a pulser exists."""
         handle_termination()
-        directory = self.directory.create()
-        (directory.truth / "plan.json").write_text(
-            json.dumps(self.plan.to_record(), indent=2, sort_keys=True)
-        )
-        self.channel = self._channel()
         poller = threading.Thread(target=self._poll_loop, name="reference", daemon=True)
-        poller.start()
         progress = _Progress(self.clock())
         victim: subprocess.Popen[bytes] | None = None
         held = _HeldSignals()
@@ -278,8 +272,11 @@ class InjectionRun:
                 # raises past it into the outer one; a passed-on signal sets
                 # ``holding`` itself (_pass_on), so a further one, handled as
                 # the outer except is entered, is noted. Either way the run
-                # is published.
+                # is published. Its directory is made inside the try too, so
+                # a signal while the run sets up is published, not left in
+                # .partial.
                 held.__enter__()
+                self._set_up(poller)
                 victim = self._start_victim()
                 self._episodes(victim, progress)
                 held.holding = True
@@ -290,14 +287,28 @@ class InjectionRun:
                 progress.failure = f"run_failed: {error!r}"  # the run's own failure
         except BaseException:
             held.holding = True
-            # Interrupted: publish what was done, then go on ending.
+            # Interrupted: publish what was done, then go on ending. Before
+            # the run's directory there is nothing to publish.
             progress.failure = "interrupted"
-            self._finish(victim, poller, progress, held)
+            if self.directory.partial.exists():
+                self._finish(victim, poller, progress, held)
+            else:
+                held.__exit__()
             raise
         published, signum = self._finish(victim, poller, progress, held)
         if signum is not None:
             _act_on(signum)
         return published
+
+    def _set_up(self, poller: threading.Thread) -> None:
+        """The run's directory, its plan, the reference channel and its
+        poller."""
+        directory = self.directory.create()
+        (directory.truth / "plan.json").write_text(
+            json.dumps(self.plan.to_record(), indent=2, sort_keys=True)
+        )
+        self.channel = self._channel()
+        poller.start()
 
     def _finish(
         self,
@@ -317,7 +328,9 @@ class InjectionRun:
                 # The victim's drain was cut short: its artifact isn't whole.
                 progress.failure = "interrupted"
             self._close_channel()
-            poller.join(timeout=10)
+            if poller.ident is not None:  # started
+                poller.join(timeout=10)
+            self.directory.lay_out()  # whole, though the set-up was cut short
             if self.channel is not None:
                 # The hook log the replay cuts by first-seen time, in the truth.
                 self.channel.tailer.copy_to(self.directory.reference / "hook")
@@ -870,8 +883,8 @@ class _HeldSignals:
     attribute, so setting it runs no handler: entered at the run's start,
     nothing is left to install when the run ends, which is what left a
     signal room to land unheld (Astra's H6). Handlers can be set only from
-    the main thread; elsewhere nothing is held. Entering again changes
-    nothing. A third held signal is not held: a publish that hangs (a full
+    the main thread; elsewhere nothing is held. Entering again installs
+    only what isn't yet. A third held signal is not held: a publish that hangs (a full
     disk) can still be ended, by the handlers held before, as if nothing
     had been held."""
 
@@ -889,10 +902,14 @@ class _HeldSignals:
         return bool(self._previous)
 
     def __enter__(self) -> _HeldSignals:
-        if self.installed or threading.current_thread() is not threading.main_thread():
+        """Install the note-taker for each signal not yet held: a signal
+        landing between two installs leaves the rest to the next entry
+        (close-221-delta, N1), which the finish makes."""
+        if threading.current_thread() is not threading.main_thread():
             return self
         for signum in self.SIGNALS:
-            self._previous[signum] = signal.signal(signum, self._note)
+            if signum not in self._previous:
+                self._previous[signum] = signal.signal(signum, self._note)
         return self
 
     def __exit__(self, *_exc: object) -> None:

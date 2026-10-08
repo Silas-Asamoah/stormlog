@@ -1118,6 +1118,80 @@ def test_a_third_signal_is_not_held() -> None:
         signal.signal(signal.SIGHUP, previous)
 
 
+def test_a_holder_cut_short_while_installing_installs_the_rest_next_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # close-221-delta, N1: a signal between two installs left __enter__
+    # with SIGTERM held and the rest not; the finish's entry then returned
+    # at once (something was installed), so a Ctrl+C during the publish
+    # was not held. Entering again installs what isn't yet.
+    from examples.qualification import inject as module
+
+    real = signal.signal
+    saved = {signum: signal.getsignal(signum) for signum in module._HeldSignals.SIGNALS}
+    cut = [True]
+
+    def cut_after_sigterm(signum: int, handler: Any) -> Any:
+        if signum == signal.SIGHUP and cut[0]:
+            cut[0] = False
+            raise KeyboardInterrupt  # a Ctrl+C between two installs
+        return real(signum, handler)
+
+    monkeypatch.setattr(module.signal, "signal", cut_after_sigterm)
+    held = module._HeldSignals()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            held.__enter__()
+        assert signal.getsignal(signal.SIGINT) is saved[signal.SIGINT]
+        held.__enter__()
+        assert all(signal.getsignal(s) == held._note for s in held.SIGNALS)
+        held.__exit__()
+        assert {s: signal.getsignal(s) for s in saved} == saved
+    finally:
+        for signum, handler in saved.items():
+            real(signum, handler)
+
+
+def test_a_signal_while_the_run_sets_up_still_publishes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # close-221-delta, N1's pre-existing half: a signal after the run's
+    # directory was made but before its try (the plan written, the channel
+    # and poller starting) left the run in .partial. The set-up is inside
+    # the try now: the run is published, interrupted, with every episode
+    # skipped, and the interruption goes on.
+    from examples.qualification import pulser
+    from examples.qualification.inject import InjectionRun, Server
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "N"}]})
+    directory = RunDirectory(tmp_path / "runs", "q221-s")
+    run = InjectionRun(plan, directory, Server("", "m", tmp_path, {}))
+
+    def interrupted() -> None:
+        raise KeyboardInterrupt  # a Ctrl+C as the channel starts
+
+    saved = {
+        s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    }
+    monkeypatch.setattr(run, "_channel", interrupted)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            run.execute()
+    finally:
+        for saved_signum, handler in saved.items():
+            signal.signal(saved_signum, handler)
+        pulser._HANDLED.clear()
+    assert not directory.partial.exists() and verify(directory.final) == []
+    assert load_run(directory.final / "truth" / "run.json").protocol_failure == (
+        "interrupted"
+    )
+    (skipped,) = load_injections(directory.final / "truth" / "injections.jsonl")
+    assert skipped.injected["skipped"] == "run_ended"
+
+
 def test_a_signal_before_holding_is_passed_on() -> None:
     # Installed for the whole run, the handlers act as the ones they
     # replaced until the run's end sets holding: mid-run, a signal still

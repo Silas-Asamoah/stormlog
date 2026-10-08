@@ -75,9 +75,14 @@ class RunDirectory:
         if self.final.exists():
             raise FileExistsError(self.final)
         self.partial.mkdir(parents=True)
+        self.lay_out()
+        return self
+
+    def lay_out(self) -> None:
+        """Make whatever of the layout is missing under the partial
+        directory: a run interrupted while it was created still publishes."""
         for directory in (self.run, self.truth, self.probes, self.reference):
             directory.mkdir(parents=True, exist_ok=True)
-        return self
 
     def publish(self) -> Path:
         """fsync every file; write ``SHA256SUMS`` over all of them, with its
