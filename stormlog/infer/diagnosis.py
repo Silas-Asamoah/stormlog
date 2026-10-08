@@ -27,6 +27,7 @@ from .diagnosis_client import (
     assess_client_admission,
 )
 from .diagnosis_context import ASSESSED, PARTIAL, UNSUPPORTED, Assessment, Context
+from .diagnosis_driver import driver_of
 from .diagnosis_edges import EDGES_VERSION
 from .diagnosis_edges import table as edge_table
 from .diagnosis_host import assess_engine_core
@@ -178,8 +179,16 @@ def diagnose_artifact(
 
 
 def _assess(assess: Assess, context: Context, subject: Subject) -> Assessment:
+    """One class on one subject; its findings say what drove them, the
+    subject's driver unless the class judged its own."""
     assessment = assess(context, subject)
     assessment.component = CLASS_COMPONENT.get(assess)
+    for finding in assessment.findings:
+        if finding.driver_evidence is None:
+            driver = driver_of(context, subject)
+            finding.driver = driver.driver
+            finding.driver_confidence = driver.confidence
+            finding.driver_evidence = driver.evidence
     return assessment
 
 

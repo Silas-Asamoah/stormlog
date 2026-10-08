@@ -12,6 +12,7 @@ demand, at ``info``, so a finding about the engine is read beside them.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from scipy import stats
@@ -19,7 +20,7 @@ from scipy import stats
 from .diagnosis_context import ASSESSED, UNSUPPORTED, Assessment, Context
 from .diagnosis_model import NOT_DETERMINED, Finding, Observation, met
 from .diagnosis_selection import Subject, assignment_ns
-from .diagnosis_stats import median_difference
+from .diagnosis_stats import Difference, median_difference
 from .diagnosis_thresholds import (
     WORKLOAD_LENGTH_RATIO,
     WORKLOAD_RATE_RATIO,
@@ -39,22 +40,53 @@ NO_CLIENT_REQUESTS = "no_client_requests"
 NO_REFERENCE = "no_reference"
 
 
+@dataclass(frozen=True)
+class RateRatio:
+    """The subject's arrival rate over the reference's, with its exact 95%
+    interval, and whether the interval's lower end passes the threshold."""
+
+    n: int
+    seconds: float
+    n_ref: int
+    seconds_ref: float
+    low: float
+    high: float
+    passes: bool
+
+    @property
+    def ratio(self) -> float:
+        return (self.n / self.seconds) / (self.n_ref / self.seconds_ref)
+
+
+def arrival_ratio(context: Context, subject: Subject) -> RateRatio | None:
+    """None without client requests on either side."""
+    rates = _rates(context, subject) if subject.requests else None
+    if rates is None:
+        return None
+    (n, seconds), (n_ref, seconds_ref) = rates
+    low, high = rate_ratio_interval(n, seconds, n_ref, seconds_ref)
+    needed = resolve_threshold(WORKLOAD_RATE_RATIO, context.thresholds)[0]
+    return RateRatio(n, seconds, n_ref, seconds_ref, low, high, low >= needed)
+
+
 def assess_load(context: Context, subject: Subject) -> Assessment:
     """More arrivals per second than the reference."""
     if not subject.requests:
         return _verdict(LOAD_INCREASE, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
-    rates = _rates(context, subject)
+    rates = arrival_ratio(context, subject)
     if rates is None:
         return _verdict(LOAD_INCREASE, subject, UNSUPPORTED, NO_REFERENCE)
-    (n, seconds), (n_ref, seconds_ref) = rates
-    low, high = rate_ratio_interval(n, seconds, n_ref, seconds_ref)
-    needed = resolve_threshold(WORKLOAD_RATE_RATIO, context.thresholds)[0]
-    if low < needed:
+    if not rates.passes:
         return _verdict(LOAD_INCREASE, subject, ASSESSED, NOT_OBSERVED)
-    ratio = (n / seconds) / (n_ref / seconds_ref)
+    n, seconds, n_ref, seconds_ref = (
+        rates.n,
+        rates.seconds,
+        rates.n_ref,
+        rates.seconds_ref,
+    )
     statement = (
         f"Requests arrived at {n / seconds:.2f}/s against {n_ref / seconds_ref:.2f}/s "
-        f"in the reference: {ratio:.2f}x (95% CI {low:.2f} to {high:.2f})."
+        f"in the reference: {rates.ratio:.2f}x (95% CI {rates.low:.2f} to {rates.high:.2f})."
     )
     return _workload(
         context,
@@ -65,8 +97,8 @@ def assess_load(context: Context, subject: Subject) -> Assessment:
             "o1",
             statement,
             "arrival_rate_ratio",
-            round(ratio, 4),
-            (round(low, 4), round(high, 4)),
+            round(rates.ratio, 4),
+            (round(rates.low, 4), round(rates.high, 4)),
             n,
             n_ref,
         ),
@@ -171,11 +203,21 @@ def _span(context: Context, request_ids: list[str]) -> tuple[int, float] | None:
     return len(times), (times[-1] - times[0]) / 1e9
 
 
-def _lengths(
-    context: Context, subject: Subject, kind: str, field: str, noun: str
-) -> Assessment:
-    if not subject.requests:
-        return _verdict(kind, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
+@dataclass(frozen=True)
+class LengthChange:
+    """The median prompt or output length's change against the reference,
+    and whether it is longer by the threshold's ratio."""
+
+    excess: Difference
+    reference: float
+    passes: bool
+
+
+def length_change(
+    context: Context, subject: Subject, field: str
+) -> LengthChange | None:
+    """``field`` is ``prompt_tokens`` or ``output_tokens``; None without
+    enough of either side."""
     arms = [
         [
             float(v)
@@ -186,11 +228,24 @@ def _lengths(
     ]
     excess = median_difference(arms[0], arms[1])
     if excess is None:
-        return _verdict(kind, subject, UNSUPPORTED, NO_REFERENCE)
+        return None
     reference = sorted(arms[1])[len(arms[1]) // 2]
     needed = resolve_threshold(WORKLOAD_LENGTH_RATIO, context.thresholds)[0]
-    if excess.low <= 0 or reference + excess.estimate < needed * reference:
+    passes = excess.low > 0 and reference + excess.estimate >= needed * reference
+    return LengthChange(excess, reference, passes)
+
+
+def _lengths(
+    context: Context, subject: Subject, kind: str, field: str, noun: str
+) -> Assessment:
+    if not subject.requests:
+        return _verdict(kind, subject, UNSUPPORTED, NO_CLIENT_REQUESTS)
+    change = length_change(context, subject, field)
+    if change is None:
+        return _verdict(kind, subject, UNSUPPORTED, NO_REFERENCE)
+    if not change.passes:
         return _verdict(kind, subject, ASSESSED, NOT_OBSERVED)
+    excess = change.excess
     statement = (
         f"The median of the subject's {noun} grew by {excess.estimate:.0f} tokens "
         f"(95% CI {excess.low:.0f} to {excess.high:.0f})."
@@ -259,9 +314,13 @@ def _raw(context: Context, request_id: str) -> dict[str, Any]:
 
 
 __all__ = [
+    "LengthChange",
+    "RateRatio",
+    "arrival_ratio",
     "assess_inputs",
     "assess_load",
     "assess_outputs",
     "assess_sharing",
+    "length_change",
     "rate_ratio_interval",
 ]

@@ -51,7 +51,7 @@ The payload, `stormlog.inference_diagnosis` v1
 | `join` | what was joined: client requests, dispatch and first-content records, engine executions, engines and their clocks |
 | `selection` | every analysis window with its tests, and the subjects |
 | `coverage` | per kind: `assessed`, `partial` or `unsupported`, with reasons, per subject |
-| `findings_detail` | per finding ID: its claim, cause, role, eligibility, confidence, location, window, detection time and evidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
+| `findings_detail` | per finding ID: its claim, cause, role, what drove it (`driver`, `driver_evidence`), eligibility, confidence, location, window, detection time and evidence, observations, alternatives, experiment, up to 8 display pointers and its full support |
 | `thresholds` | the table version, the overridden keys and every value used |
 
 The envelope's findings carry the verdict, flat metrics and up to 8
@@ -344,9 +344,10 @@ minor second cause.
   (`claim: fault`); for an instrumentation kind (`client_admission`,
   `capture_pause`) it is `instrumentation`, since Stormlog's own client or
   profiler caused it, and the claim is a condition. Either exits 3. An
-  eligible finding at `info` is `claim: condition`, its cause undetermined
-  until a driver says otherwise. Workload kinds are always
-  `workload_change` at `info`; instrumentation kinds are `instrumentation`.
+  eligible finding at `info` is `claim: condition`, its cause
+  `workload_change` when load drove it (see What drove it) and
+  `undetermined` otherwise. Workload kinds are always `workload_change` at
+  `info`; instrumentation kinds are `instrumentation`.
 - **Roles.** A finding is `secondary` to a cause upstream of it, and lists
   that finding's ID in `secondary_to`, when the subject's finding of that
   kind is eligible: an observation establishes nothing, and leaves the
@@ -390,6 +391,45 @@ consecutive values as long as the cube root of the arm's size (7 for 300):
 waits within a burst rise one after another, and resampling single values
 would treat them as independent and give an interval narrower than its
 95%.
+
+## What drove it
+
+Every finding says what drove it (`driver`): more demand than the
+reference (`load`), less capacity at the same work (`capacity`), or
+neither shown (`undetermined`). It is the subject's, one per subject, from
+`stormlog.infer.diagnosis_driver`.
+
+- **Demand**, against the reference (`driver_evidence.demand`): the arrival
+  rate ratio, passing when its exact interval's lower end reaches
+  `load_increase.arrival_rate_ratio`; longer prompts or outputs, judged as
+  the workload kinds judge them; and, from the hook, the share of the
+  steps' members that no request of the run accounts for, passing when it
+  rose by `driver.foreign_share_rise`: another client's load on the same
+  engine. A step that held only other clients' requests is not imported,
+  so that share is the one beside the run's own requests. A server-only
+  subject's arrival rate counts its executions.
+- **Capacity** (`driver_evidence.capacity`): the subject's steps against
+  the reference's at the same work, decode-only steps with decode-only ones
+  at the same batch and treated steps with treated ones at the same
+  prefill (see The matched design), as the median ratio of their cadences.
+  The reference's steps are those up to the subject's first request.
+
+The verdict follows a frozen rubric:
+
+| Driver | When |
+| --- | --- |
+| `capacity` | the ratio's interval lies above `driver.capacity_ratio` (1.10), matched for at least `driver.min_common_support` (80%) of the subject's steps: the engine slowed at the same work |
+| `load` | otherwise, a demand ratio passes against a compatible reference: the same engine epoch, or one of the same config. Without matched support no capacity loss is shown, so it stands, and `confidence.driver` lists `matched_common_support` unmet |
+| `undetermined` | otherwise, including without the hook |
+
+`confidence.driver` grades it like the other claims, on
+`compatible_reference` and `matched_common_support`; it does not enter
+`confidence.level`. The driver explains and never changes a severity: a
+queue saturated by a neighbour at 1.5 times capacity is still the fault,
+with driver `load`. At `info`, an eligible primary finding that load
+drove has cause `workload_change`. Capacity is claimed only at matched
+work: an engine that slowed under the same arrivals usually also runs
+fuller batches than any of the reference's, and then nothing matches.
 
 ## Queue saturation
 
@@ -772,6 +812,9 @@ The values are provisional until they are read from real runs.
 | `mixed_prefill_interference.bootstrap_block_ns` | 1 s | the block the matched design's bootstrap resamples |
 | `mixed_prefill_interference.dose_tolerance` | 0.15 | a subject's treated step against a reference's: dose, cached prefix and longest prefill within this fraction |
 | `mixed_prefill_interference.cached_prefix_slack_tokens` | 64 | or, for the cached prefix, within this many tokens when that is wider |
+| `driver.capacity_ratio` | 1.10 | lower end of the matched cadence ratio's interval above which capacity fell |
+| `driver.min_common_support` | 0.8 | share of the subject's steps the capacity comparison must match |
+| `driver.foreign_share_rise` | 0.1 | rise in the share of step members no request of the run accounts for that is another client's load |
 | `load_increase.arrival_rate_ratio` | 1.25 | lower bound of the arrival rate ratio for a load increase |
 | `workload.length_ratio` | 1.1 | how much longer median prompts or outputs must be |
 | `prefix_sharing_drop.share_drop` | 0.1 | how far the share declaring a shared prefix must fall |

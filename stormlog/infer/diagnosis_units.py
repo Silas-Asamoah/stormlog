@@ -26,7 +26,8 @@ from typing import Any
 
 from .diagnosis_context import Context
 from .diagnosis_inputs import Line
-from .diagnosis_join import RunView
+from .diagnosis_join import Execution, RunView
+from .diagnosis_selection import Subject
 
 DECODE_ROLES = frozenset({"decode", "spec_decode"})
 PREFILL_ROLE = "prefill"
@@ -136,6 +137,63 @@ def _continues(
     if before.isdigit() and iteration.isdigit() and int(iteration) != int(before) + 1:
         return False
     return bool(decoded & decoders)
+
+
+Span = tuple[int, int]
+
+
+def lifetime_spans(context: Context, executions: list[Execution]) -> dict[str, Span]:
+    """Per engine, from the first of the executions to enter its queue (or
+    be admitted) to the last step any of them ran in, on its monotonic
+    clock."""
+    spans: dict[str, Span] = {}
+    for execution in executions:
+        enqueued = execution.metadata.get("enqueued_mono_ns")
+        start = enqueued if isinstance(enqueued, int) else execution.event.start_ns
+        ends = [
+            step[1].end_ns
+            for _, membership in execution.memberships
+            if (step := context.view.iterations.get(membership.iteration_ref))
+            and step[1].end_ns is not None
+        ]
+        if start is None or not ends:
+            continue
+        low, high = spans.get(execution.producer, (start, max(ends)))
+        spans[execution.producer] = (min(low, start), max(high, *ends))
+    return spans
+
+
+def arm_spans(
+    context: Context, subject: Subject, producer: str
+) -> tuple[Span, Span] | None:
+    """The subject's span on one engine, and its reference's up to the
+    subject's start, so no step is in both."""
+    mine = lifetime_spans(context, context.subject_executions(subject))
+    theirs = lifetime_spans(
+        context, context.subject_executions(subject, reference=True)
+    )
+    if producer not in mine or producer not in theirs:
+        return None
+    start = mine[producer][0]
+    reference = (theirs[producer][0], min(theirs[producer][1], start - 1))
+    return (mine[producer], reference) if reference[1] > reference[0] else None
+
+
+def foreign_members(context: Context, producer: str, span: Span) -> tuple[int, int]:
+    """Of the members of the steps started in ``span``, how many no client
+    request of the run accounts for (foreign, unresolved or withheld), and
+    how many there were. A step that held only other clients' requests is
+    not imported, so these are the members beside the run's own."""
+    members = foreign = 0
+    for ref, (_, iteration) in context.view.iterations.items():
+        start = iteration.start_ns
+        if ref.producer_id != producer or start is None:
+            continue
+        if span[0] <= start <= span[1]:
+            data = iteration.metadata
+            members += _int(data.get("members"))
+            foreign += _int(data.get("members")) - _int(data.get("run_members"))
+    return foreign, members
 
 
 @dataclass(frozen=True)
@@ -253,7 +311,11 @@ __all__ = [
     "DECODE_ROLES",
     "EpochUnits",
     "Prefill",
+    "Span",
     "Unit",
+    "arm_spans",
     "epoch_units",
+    "foreign_members",
+    "lifetime_spans",
     "units_of",
 ]

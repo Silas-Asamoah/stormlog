@@ -11,12 +11,7 @@ from ..report import Evidence
 from ..report import Finding as EnvelopeFinding
 from .diagnosis_context import Context
 from .diagnosis_inputs import INPUT_KIND, InputFile, Line
-from .diagnosis_model import (
-    DISPLAY_LIMIT,
-    DRIVER_UNDETERMINED,
-    Finding,
-    support_block,
-)
+from .diagnosis_model import DISPLAY_LIMIT, Finding, support_block
 from .diagnosis_thresholds import THRESHOLDS_VERSION
 
 
@@ -45,7 +40,8 @@ def finding_detail(
         "severity": finding.severity,
         "cause": finding.cause,
         "claim": finding.claim,
-        "driver": DRIVER_UNDETERMINED,
+        "driver": finding.driver,
+        "driver_evidence": finding.driver_evidence,
         "subject": finding.subject,
         "location": finding.location,
         "window": finding.window,
@@ -69,7 +65,7 @@ def finding_detail(
                 **finding.contribution.as_dict(),
                 **({"explains": finding.explains} if finding.explains else {}),
             },
-            "driver": {"level": None, "met": [], "unmet": ["not_determined"]},
+            "driver": finding.driver_confidence.as_dict(),
         },
         "evidence": [_pointer(line, context) for line in display],
         "evidence_shown": len(display),

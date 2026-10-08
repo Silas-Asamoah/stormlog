@@ -129,6 +129,9 @@ class Engine:
     # How long an idle engine takes from a request's entry to its schedule()
     # call; vLLM 0.30.0's loop took 20 us and more on an A30.
     wake_ns: int = 0
+    # (mono_ns, factor): steps scheduled at or after mono_ns take factor
+    # times step_ns, an engine that lost capacity.
+    slower: tuple[int, float] | None = None
 
     def wall(self, mono_ns: int) -> int:
         """The shared wall clock at an engine monotonic time."""
@@ -210,13 +213,19 @@ class Engine:
                 running[request.internal] = (request, tokens)
             total = sum(m["scheduled"] for m in members)
             out.append((now, 1, _scheduled(iteration, now, members, total, preempted)))
-            finished_at = now + self.step_ns + self._slowed(now)
+            finished_at = now + self._step(now) + self._slowed(now)
             out.extend(self._complete(iteration, finished_at, running))
             iteration += 1
             now = finished_at + self.gap_ns
             now += self._stalled(finished_at)
             now = self._profiled(finished_at, now, out)
         return out
+
+    def _step(self, start: int) -> int:
+        slower = self.slower
+        if slower is not None and start >= slower[0]:
+            return int(self.step_ns * slower[1])
+        return self.step_ns
 
     def _slowed(self, start: int) -> int:
         due = [slow for slow in self.slow_steps if start >= slow[0]]

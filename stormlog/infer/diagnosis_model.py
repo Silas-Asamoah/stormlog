@@ -67,6 +67,8 @@ _LEVELS = (LOW, MEDIUM, HIGH)
 # confidence, since a scorer's top finding should be the fault if any.
 _CLAIMS = (CLAIM_FAULT, CLAIM_CONDITION, CLAIM_OBSERVATION)
 DRIVER_UNDETERMINED = "undetermined"
+DRIVER_LOAD = "load"
+DRIVER_CAPACITY = "capacity"
 SUPPORT_LIMIT = 10_000
 DISPLAY_LIMIT = 8
 
@@ -191,6 +193,12 @@ class Finding:
     # The contribution criterion that says the mechanism explains the
     # incident; a kind without one never warns.
     explains: str | None = None
+    # What drove it (``diagnosis_driver``), set before it is graded.
+    driver: str = DRIVER_UNDETERMINED
+    driver_confidence: Criteria = field(
+        default_factory=lambda: Criteria(unmet=("not_determined",), assessed=False)
+    )
+    driver_evidence: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         check_kind(self.kind)
@@ -258,8 +266,7 @@ class Finding:
         """Workload changes are always that; an ineligible finding's cause
         is undetermined; a secondary's is its upstream's (a host stall a
         capture caused is instrumentation, not a fault); a warning is a
-        fault; the driver, which would say whether load drove an info
-        finding, is not yet determined."""
+        fault; at info, a workload change when load drove it."""
         if self.kind in WORKLOAD_KINDS:
             return CAUSE_WORKLOAD_CHANGE
         if not self.eligible:
@@ -270,6 +277,8 @@ class Finding:
             return CAUSE_INSTRUMENTATION
         if self.severity == "warning":
             return CAUSE_FAULT
+        if self.driver == DRIVER_LOAD:
+            return CAUSE_WORKLOAD_CHANGE
         return CAUSE_UNDETERMINED
 
     @property
@@ -375,6 +384,8 @@ __all__ = [
     "CLAIM_FAULT",
     "CLAIM_OBSERVATION",
     "CONTRIBUTING",
+    "DRIVER_CAPACITY",
+    "DRIVER_LOAD",
     "DRIVER_UNDETERMINED",
     "HIGH",
     "LOW",

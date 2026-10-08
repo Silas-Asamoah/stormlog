@@ -66,6 +66,26 @@ def test_an_eligible_strong_incident_finding_is_a_fault_warning() -> None:
 
 
 @pytest.mark.parametrize(
+    ("driver", "incident", "cause"),
+    [
+        ("load", False, "workload_change"),
+        ("capacity", False, "undetermined"),
+        ("undetermined", False, "undetermined"),
+        ("load", True, "fault"),
+    ],
+)
+def test_load_makes_an_info_finding_a_workload_change_never_a_warning(
+    driver: str, incident: bool, cause: str
+) -> None:
+    """The driver explains: an eligible info finding load drove is a
+    workload change; a warning stays the fault, whatever drove it."""
+    finding = _finding(driver=driver, incident=incident)
+
+    assert finding.cause == cause
+    assert finding.severity == ("warning" if incident else "info")
+
+
+@pytest.mark.parametrize(
     "changes, failed",
     [
         ({"gates": {"capacity_witness": False}}, ["capacity_witness"]),

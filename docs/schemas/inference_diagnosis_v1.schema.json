@@ -275,7 +275,8 @@
         "severity": { "enum": ["info", "warning"] },
         "cause": { "enum": ["fault", "workload_change", "instrumentation", "undetermined"] },
         "claim": { "enum": ["fault", "condition", "observation"] },
-        "driver": { "type": "string" },
+        "driver": { "enum": ["capacity", "load", "undetermined"] },
+        "driver_evidence": { "type": ["object", "null"] },
         "subject": { "$ref": "#/$defs/subject" },
         "location": {
           "type": "object",

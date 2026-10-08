@@ -39,6 +39,9 @@ MIXED_NEAREST_CONTROLS = "mixed_prefill_interference.nearest_controls"
 MIXED_BLOCK_NS = "mixed_prefill_interference.bootstrap_block_ns"
 MIXED_DOSE_TOLERANCE = "mixed_prefill_interference.dose_tolerance"
 MIXED_CACHED_SLACK = "mixed_prefill_interference.cached_prefix_slack_tokens"
+DRIVER_CAPACITY_RATIO = "driver.capacity_ratio"
+DRIVER_MIN_SUPPORT = "driver.min_common_support"
+DRIVER_FOREIGN_RISE = "driver.foreign_share_rise"
 WORKLOAD_RATE_RATIO = "load_increase.arrival_rate_ratio"
 WORKLOAD_LENGTH_RATIO = "workload.length_ratio"
 WORKLOAD_SHARE_DROP = "prefix_sharing_drop.share_drop"
@@ -124,6 +127,14 @@ DEFAULT_THRESHOLDS: Mapping[str, float] = MappingProxyType(
         # prefix also within this many tokens when that is wider.
         MIXED_DOSE_TOLERANCE: 0.15,
         MIXED_CACHED_SLACK: 64.0,
+        # The driver: capacity fell when the subject's steps were slower than
+        # the reference's at the same batch by this ratio (the interval's
+        # lower end), matched for at least this share of them;
+        DRIVER_CAPACITY_RATIO: 1.10,
+        DRIVER_MIN_SUPPORT: 0.8,
+        # demand rose when the share of step members no request of the run
+        # accounts for rose by this much: another client's load.
+        DRIVER_FOREIGN_RISE: 0.1,
         # Workload changes: arrivals faster by this ratio (interval's lower
         # bound), prompts or outputs longer by this ratio, or this much less
         # of the requests declaring a shared prefix.
@@ -162,6 +173,9 @@ def resolve_threshold(
 
 __all__ = [
     "DEFAULT_THRESHOLDS",
+    "DRIVER_CAPACITY_RATIO",
+    "DRIVER_FOREIGN_RISE",
+    "DRIVER_MIN_SUPPORT",
     "KV_PREEMPTIONS",
     "LOOP_BASELINE_WINDOW_NS",
     "LOOP_HEARTBEAT_GRACE_NS",
