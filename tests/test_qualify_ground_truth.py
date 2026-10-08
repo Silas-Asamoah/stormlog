@@ -257,11 +257,19 @@ def test_impact_is_partial_when_slo_evidence_is_thin() -> None:
     assert empty.status == IMPACT_PARTIAL
 
 
-def test_the_vocabulary_matches_218s_when_present() -> None:
-    theirs = pytest.importorskip("stormlog.infer.diagnosis_vocabulary")
-    assert dict(vocabulary.KIND_COMPONENTS) == dict(theirs.KIND_COMPONENTS)
-    assert vocabulary.CAUSES == theirs.CAUSES
-    assert vocabulary.WORKLOAD_KINDS == theirs.WORKLOAD_KINDS
+def test_the_vocabulary_is_218s() -> None:
+    # fable-221-delta, N1: #218's diagnosis_vocabulary reached release/dev,
+    # so by the module's own rule the labels import it; only what #218's
+    # later PRs add (roles, claims, the severity order, the edges) is copied.
+    from stormlog import report
+    from stormlog.infer import diagnosis_vocabulary as theirs
+
+    assert vocabulary.KIND_COMPONENTS is theirs.KIND_COMPONENTS
+    assert vocabulary.KINDS is theirs.KINDS
+    assert vocabulary.CAUSES is theirs.CAUSES
+    assert vocabulary.WORKLOAD_KINDS is theirs.WORKLOAD_KINDS
+    assert set(vocabulary.SEVERITIES) < report.SEVERITIES
+    assert vocabulary.SEVERITIES == (report.SEVERITY_INFO, report.SEVERITY_WARNING)
 
 
 @pytest.mark.parametrize(
