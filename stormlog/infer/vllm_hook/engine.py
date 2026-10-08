@@ -286,11 +286,13 @@ class EngineRecorder:
     # ------------------------------------------------------------ pauses
 
     def on_pause(self, before: Any, after: Any) -> None:
-        """A call to ``set_pause_state``, stamped once it has returned."""
-        self.writer.emit(
-            "pause",
-            {"from": _state_name(before), "to": _state_name(after), **stamp()},
-        )
+        """A call to ``set_pause_state``, stamped once it has returned. One
+        that left the state as it was (vLLM resumes on every ``wake_up``,
+        paused or not) changed nothing and is not recorded."""
+        was, now = _state_name(before), _state_name(after)
+        if was is not None and was == now:
+            return
+        self.writer.emit("pause", {"from": was, "to": now, **stamp()})
 
     # ------------------------------------------------------------ cache resets
 
