@@ -79,7 +79,11 @@
         "properties": {
           "status": { "enum": ["assessed", "partial", "unsupported"] },
           "reasons": { "type": "array", "items": { "type": "string" } },
-          "by_subject": { "type": "object" }
+          "by_subject": { "type": "object" },
+          "components": {
+            "type": "object",
+            "additionalProperties": { "enum": ["assessed", "partial", "unsupported"] }
+          }
         }
       }
     },

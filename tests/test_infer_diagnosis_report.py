@@ -71,6 +71,13 @@ def test_a_queue_incident_is_a_warning_report(burst: Path) -> None:
     assert "engine_core_and_worker_not_assessed_by_this_version" in (
         payload["coverage"]["host_stall"]["reasons"]
     )
+    # Per component: the API server assessed; the engine loop and workers
+    # not by this version.
+    assert payload["coverage"]["host_stall"]["components"] == {
+        "api_server": "assessed",
+        "engine_core": "unsupported",
+        "worker": "unsupported",
+    }
     assert len(finding["evidence"]) <= 8
     first = finding["evidence"][0]
     assert first["pointer"].startswith("/") and first["record_id"]

@@ -40,6 +40,9 @@ from .diagnosis_thresholds import DEFAULT_THRESHOLDS, THRESHOLDS_VERSION
 from .diagnosis_vocabulary import (
     CAPTURE_PAUSE,
     CLIENT_ADMISSION,
+    COMPONENT_API_SERVER,
+    COMPONENT_ENGINE_CORE,
+    COMPONENT_WORKER,
     HOST_STALL,
     KINDS,
     KV_PREEMPTION_PRESSURE,
@@ -83,6 +86,12 @@ CLASSES: dict[str, tuple[Assess, ...]] = {
 # Parts of a kind this version does not assess yet.
 NOT_YET: dict[str, str] = {
     HOST_STALL: "engine_core_and_worker_not_assessed_by_this_version",
+}
+# For a kind spanning components: those this version assesses, and those
+# it does not, so a reader can tell "assessed, nothing found" at one from
+# a gap at another without parsing a reason.
+COMPONENTS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    HOST_STALL: ((COMPONENT_API_SERVER,), (COMPONENT_ENGINE_CORE, COMPONENT_WORKER)),
 }
 
 
@@ -298,14 +307,22 @@ def _coverage(context: Context, assessments: list[Assessment]) -> dict[str, Any]
 def _kind_coverage(kind: str, mine: list[Assessment]) -> dict[str, Any]:
     statuses = {a.status for a in mine}
     reasons = {r for a in mine for r in a.reasons}
+    assessed = _overall(statuses)
     if kind in NOT_YET:  # a part of the kind this version does not assess
         statuses.add(PARTIAL)
         reasons.add(NOT_YET[kind])
-    return {
+    coverage: dict[str, Any] = {
         "status": _overall(statuses),
         "reasons": sorted(reasons),
         "by_subject": {a.subject_key: a.as_dict() for a in mine},
     }
+    if kind in COMPONENTS:
+        done, not_yet = COMPONENTS[kind]
+        coverage["components"] = {
+            **{component: assessed for component in done},
+            **{component: UNSUPPORTED for component in not_yet},
+        }
+    return coverage
 
 
 def _overall(statuses: set[str]) -> str:

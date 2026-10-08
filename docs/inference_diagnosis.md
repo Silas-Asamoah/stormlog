@@ -510,7 +510,8 @@ pause, ruled out when no profiler window overlaps the stalls. Without engine rec
 `unsupported/no_engine_progress_evidence`; without a placed
 `send_to_ingress`, `unsupported/clock_alignment_required`. Host stalls in
 the engine loop and the workers are not assessed yet, so `host_stall` is
-`partial` in the coverage.
+`partial` in the coverage, whose `components` say so per component:
+`api_server` as assessed, `engine_core` and `worker` `unsupported`.
 
 **`capture_pause`** (cause `instrumentation`): a profiler stop, which
 blocks the server while it writes the trace, lay across requests waiting for
