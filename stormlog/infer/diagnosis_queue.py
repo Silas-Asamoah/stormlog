@@ -544,8 +544,11 @@ def _kv_hold(
     median wait excess. Only the subject's allocation preemptions count:
     another client's, or a reset's, are no evidence of its KV pressure. At
     the upstream share it is ``upstream`` here, and stays so only if the
-    subject's KV finding is eligible (``diagnosis_roles``). Also returns
-    the median request's held time, in ns."""
+    subject's KV finding is eligible (``diagnosis_roles``); otherwise it is
+    not ruled out. Either way it is then indispensable: waits spent mostly
+    behind preempted requests are not the engine being full, whatever
+    caused the preemptions. Also returns the median request's held time,
+    in ns."""
     kind = "kv_preemption_pressure"
     holds = held_admissions(context, subject, producer)
     intervals = _wait_intervals(context, waiting)
@@ -560,7 +563,7 @@ def _kv_hold(
         f"{excess.estimate / 1e6:.1f} ms"
     )
     status = UPSTREAM if status == NOT_RULED_OUT else status
-    return Alternative(kind, status, reason), float(typical)
+    return Alternative(kind, status, reason, status == UPSTREAM), float(typical)
 
 
 def _kv_claim(context: Context, held: float, ttft: Difference | None) -> dict[str, Any]:
