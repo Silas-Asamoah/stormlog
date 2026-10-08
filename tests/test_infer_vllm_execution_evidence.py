@@ -472,6 +472,50 @@ def test_a_hook_that_does_not_count_reservations_closes_no_live_span(
     assert ended["held"] == {}
 
 
+def test_a_span_reaches_past_every_heartbeat_among_its_pending_records(
+    tmp_path: Path,
+) -> None:
+    """Heartbeats 3, 4 and 5 are all written before the pause heartbeat 2
+    counts: a live read through 5, with 4 and 5 to witness, has still not
+    read it, so no span may vouch for 2's stamp."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=1),  # 2
+        heartbeat(T0 + 2 * SECOND, 2, pending=1),  # 3
+        heartbeat(T0 + 3 * SECOND, 3, pending=1),  # 4
+        heartbeat(T0 + 4 * SECOND, 4, pending=1),  # 5
+        pause("UNPAUSED", "PAUSED_ALL", T0 + SECOND - 5),  # 6: accepted before 2
+        heartbeat(T0 + 5 * SECOND, 6, pending=0),  # 7
+    ]
+
+    assert _spans(_coverage(tmp_path / "live", records[:6])) == []
+    assert _spans(_coverage(tmp_path / "whole", records)) == [(1, 7)]
+
+
+def test_a_pending_record_lost_after_heartbeats_between_breaks_the_span(
+    tmp_path: Path,
+) -> None:
+    """Heartbeat 2 counts two pauses; heartbeats 3 and 5 are written among
+    them, the first is written (seq 4) and the second is lost at write, so
+    an alias written later takes the seq it was counted into. Only
+    heartbeat 8, past that seq, shows the loss: an earlier witness, after 2
+    plus its pending alone, would vouch for a span missing a pause."""
+    records = [
+        hello("engine", PID, START, observes=["pause"]),  # 0
+        heartbeat(T0, 0, pending=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=2),  # 2
+        heartbeat(T0 + 2 * SECOND, 2, pending=2),  # 3
+        pause("UNPAUSED", "PAUSED_NEW", T0 + SECOND - 9),  # 4: accepted before 2
+        heartbeat(T0 + 3 * SECOND, 4, pending=1),  # 5
+        heartbeat(T0 + 4 * SECOND, 5, pending=0, errors=1),  # 6: the second, lost
+        alias("a-1", "chatcmpl-a", T0 + 4 * SECOND + 5),  # 7
+        heartbeat(T0 + 5 * SECOND, 7, pending=0, errors=1),  # 8
+    ]
+
+    assert _spans(_coverage(tmp_path, records)) == [(6, 8)]
+
+
 def test_a_pending_record_lost_at_write_breaks_the_span(tmp_path: Path) -> None:
     """A record lost while being written counts only in a later heartbeat."""
     records, _ = _backlog(dropped_after=True)
