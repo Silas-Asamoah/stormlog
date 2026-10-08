@@ -63,6 +63,9 @@ UPSTREAM = "upstream"
 
 HIGH, MEDIUM, LOW = "high", "medium", "low"
 _LEVELS = (LOW, MEDIUM, HIGH)
+# Ranked first to last: a fault claim before a condition, whatever their
+# confidence, since a scorer's top finding should be the fault if any.
+_CLAIMS = (CLAIM_FAULT, CLAIM_CONDITION, CLAIM_OBSERVATION)
 DRIVER_UNDETERMINED = "undetermined"
 SUPPORT_LIMIT = 10_000
 DISPLAY_LIMIT = 8
@@ -290,12 +293,14 @@ class Finding:
         return f"diagnosis.{self.kind}.{digest}"
 
     def rank_key(self, finding_id: str) -> tuple[Any, ...]:
-        """Primary first, eligible first, then confidence, the
-        contribution's lower bound, kind, location, window start and id."""
+        """Primary first, eligible first, fault claims before conditions,
+        then confidence, the contribution's lower bound, kind, location,
+        window start and id."""
         lower = self.contribution_lower
         return (
             0 if self.role == PRIMARY else 1,
             0 if self.eligible else 1,
+            _CLAIMS.index(self.claim),
             -_LEVELS.index(self.confidence_level),
             -(lower if lower is not None else float("-inf")),
             self.kind,

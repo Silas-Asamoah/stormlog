@@ -363,9 +363,11 @@ minor second cause.
   table come with the engine-loop class; until then a competitor that stays
   `upstream` contests the finding like a contributing one.
 - **Rank.** Findings are ordered by: primary before secondary, eligible
-  before observation, confidence, the contribution's lower bound (in ms of
-  latency for every kind, so kinds compare), kind,
-  location, window start, and finally ID, so the order is total.
+  before observation, a fault claim before a condition (so a warning at
+  medium confidence outranks an info finding at high: the top finding is
+  the fault when there is one), confidence, the contribution's lower bound
+  (in ms of latency for every kind, so kinds compare), kind, location,
+  window start, and finally ID, so the order is total.
 - **Identity.** A finding's ID is `diagnosis.<kind>.<12 hex>`, a hash of the
   run, the subject, the kind, the location and the window start: the same
   artifact gives the same IDs.
