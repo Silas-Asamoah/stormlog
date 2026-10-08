@@ -362,6 +362,30 @@ def test_the_byte_budget_covers_the_widest_values() -> None:
     assert len(_text(registry).encode()) <= budget.size
 
 
+def test_the_byte_budget_takes_the_enum_value_widest_in_bytes() -> None:
+    # "\U0001f600" is one character but four bytes of UTF-8, more than "aaa";
+    # a quote is one character but two bytes once escaped.
+    widest = -1.2345678901234567e-308
+    for wide in ("\U0001f600", '"' * 2):
+        registry = Registry(headroom=2)
+        level = registry.add(
+            FamilySpec(
+                "stormlog_level",
+                "gauge",
+                "h",
+                labels=("case", "kind"),
+                enums={"kind": ("aaa", wide)},
+            ),
+            known=[{"case": "c1", "kind": "aaa"}],
+        )
+        budget = registry.budget()
+        cases = ["c1"] + [chr(0x1F600 + i) * MAX_LABEL_VALUE for i in range(2)]
+        for case in cases:  # the known case, then the headroom, all at full width
+            for kind in ("aaa", wide):
+                level.set((case, kind), widest)
+        assert len(_text(registry).encode()) <= budget.size, wide
+
+
 def test_a_value_on_a_bucket_bound_falls_in_that_bucket() -> None:
     # Buckets count values less than or equal to their bound.
     registry = Registry()

@@ -693,11 +693,16 @@ def _worst_series_size(spec: FamilySpec, const_labels: Mapping[str, str]) -> int
     # A character takes at most 4 bytes of UTF-8, more than any escape (2).
     widest = "\U0001f600" * MAX_LABEL_VALUE
     worst_values = tuple(
-        max(spec.enums[label], key=len) if label in spec.enums else widest
+        max(spec.enums[label], key=_rendered_size) if label in spec.enums else widest
         for label in spec.labels
     )
     prefixes = _prefixes(spec, const_labels, worst_values)
     return sum(len(prefix) + VALUE_BYTES + 1 for prefix in prefixes)
+
+
+def _rendered_size(value: str) -> int:
+    """A label value's bytes in the exposition: escaped, then UTF-8."""
+    return len(escape_label_value(value).encode())
 
 
 def _escape_help(text: str) -> str:
