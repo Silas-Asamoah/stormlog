@@ -274,6 +274,18 @@ def test_coverage_is_a_union_per_device_and_clock(tmp_path: Path) -> None:
     assert report["imports"][0]["high_water"] == {EPOCH: 9}
 
 
+def test_a_request_still_in_flight_counts_from_its_dispatch(tmp_path: Path) -> None:
+    records = _records(tmp_path)
+    # B was sent and has not ended: the client wrote only its dispatch.
+    records[1] = {**records[1], "event_type": "infer.dispatch"}
+    del records[1]["status"]
+
+    report = execution_report(records)
+
+    assert report["requests"]["run_requests_total"] == 2
+    assert sorted(report["cases"]) == ["c1_in8_out4", "c2_in8_out4"]
+
+
 def test_text_lines_name_every_dimension(tmp_path: Path) -> None:
     lines = execution_lines(execution_report(_records(tmp_path)))
     assert lines[0] == (

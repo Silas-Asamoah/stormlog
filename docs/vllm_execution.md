@@ -311,7 +311,9 @@ a `resumable` request's later prompts are on its memberships.
 
 **Binding.** A request is the run's when its alias `external` is
 `chatcmpl-<x_request_id>` or `cmpl-<x_request_id>-<i>` for an
-`x_request_id` the artifact recorded; without an alias, the internal ID's
+`x_request_id` the artifact recorded, in an `infer.dispatch` record (at the
+send) or an `infer.request` record (at the end), so an import of a run still
+under way binds the requests in flight; without an alias, the internal ID's
 shape only proposes the same exact match, with vLLM's random suffix
 stripped only when the hello says `request_id_randomization` is on (both
 forms are tried when it is unknown). Every other ID is foreign, or
@@ -337,7 +339,10 @@ across imports.
 steps with a run member are always kept. A step with only other clients'
 requests is kept when the engine's wall clock is the client's (same host
 and boot) and the step lies inside a run phase or trace window; otherwise
-it is counted in the summary, not written. A step that scheduled no request
+it is counted in the summary, not written. A phase that has an
+`infer.phase_start` record but no `infer.phase_window` yet runs from its
+start to the session's terminal `infer.session` record, or with no end while
+the session is still running. A step that scheduled no request
 (an idle scheduler call) is counted as empty, not written.
 
 **Device binding for traces.** A worker hello names the worker's host, pid,
