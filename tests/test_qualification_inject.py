@@ -507,8 +507,17 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     ]
     plan = tmp_path / "plan.json"
     plan.write_text(json.dumps(record))
+    # 20 ms steps, so a victim's wait (admission to its first step, about
+    # half a step) is the engine's own time, not the host's. With 2 ms
+    # steps the baseline's waits were 0.5-2 ms, its 2x p99 ceiling 7-30 ms
+    # and its 1.25x mean bound a fraction of a millisecond: the host's
+    # scheduling delays under the full suite's load broke every hold for
+    # the 60 s timeout (2 of 3 full runs). Under 16 busy loops, two runs in
+    # four lost a third to nearly half of their steady 6 s windows to the
+    # mean bound, the ceiling or the exceedance count; at 20 ms none fails
+    # the mean or the ceiling, and 82-96% hold.
     arguments = [
-        "--step-seconds", "0.002",
+        "--step-seconds", "0.02",
         "--decode-token-seconds", "0.0005",
         "--num-gpu-blocks", "400",
         "--max-num-seqs", "8",
