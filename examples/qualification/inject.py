@@ -316,12 +316,17 @@ class InjectionRun:
         progress.priming = priming_check(self._signals(), self.clock(), self.thresholds)
         baseline_end = progress.baseline_end = priming_end + int(t.baseline * SECOND)
         self._sleep_until(baseline_end)
-        baseline = Baseline.measure(self._signals(), priming_end, baseline_end)
+        baseline = self._measure_baseline(priming_end, baseline_end)
         self._measure_record_lag(priming_end, baseline_end)
         # The baseline itself is the first episode's clean time.
         self._run_episodes(baseline, priming_end, progress.attempts)
         progress.final_start = self.clock()
         self._sleep_for(t.final_recovery)
+
+    def _measure_baseline(self, start_ns: int, end_ns: int) -> Baseline:
+        """The baseline, measured with the plan's thresholds: its long-gap
+        factor sets which gaps are long, and the cap which are too long."""
+        return Baseline.measure(self._signals(), start_ns, end_ns, self.thresholds)
 
     def _run_episodes(
         self, baseline: Baseline, clean_since: int, attempts: list[_Attempt]
