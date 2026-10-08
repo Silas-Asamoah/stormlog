@@ -84,10 +84,12 @@ class Target:
 class Pulse:
     """One pulse as it happened. Lengths are measured on the monotonic
     clock; the wall-clock times are one wall reading at ``SIGSTOP`` plus
-    those lengths, so a clock step can't bend them. ``held_ns`` runs from
-    ``SIGSTOP`` sent to ``SIGCONT`` sent: the most the target was stopped;
-    the continue's time is read just before ``SIGCONT`` goes, so nothing
-    the target did after it can fall inside the pulse.
+    those lengths, so a clock step can't bend them. The clock is read on
+    both sides of ``SIGCONT``: ``continue_sent_ns`` just before it goes,
+    so nothing the target did after it can fall inside the pulse, and
+    ``continued_ns`` once it has gone. ``held_ns`` runs from ``SIGSTOP``
+    sent to ``continued_ns``: the most the target was stopped, however
+    long the harness took to send the ``SIGCONT`` (close-221-delta, N2).
     ``continued_by_other`` says the target ran while the pulse held it:
     already running when the pulser came to continue it (the watchdog's
     limit, or an operator), or seen running at one of the hold's checks
@@ -97,6 +99,7 @@ class Pulse:
     stop_sent_ns: int
     stopped_ns: int
     continue_sent_ns: int
+    continued_ns: int
     continued_by_other: bool = False
 
     @classmethod
@@ -105,15 +108,18 @@ class Pulse:
         wall_ns: int,
         sent: int,
         stopped: int,
-        continued: int,
+        continued: tuple[int, int],
         *,
         continued_by_other: bool = False,
     ) -> Pulse:
-        """From the wall time at ``SIGSTOP`` and monotonic times."""
+        """From the wall time at ``SIGSTOP`` and monotonic times, the
+        continue's read before and after ``SIGCONT``."""
+        before, after = continued
         return cls(
             wall_ns,
             wall_ns + stopped - sent,
-            wall_ns + continued - sent,
+            wall_ns + before - sent,
+            wall_ns + after - sent,
             continued_by_other,
         )
 
@@ -123,7 +129,7 @@ class Pulse:
 
     @property
     def held_ns(self) -> int:
-        return self.continue_sent_ns - self.stop_sent_ns
+        return self.continued_ns - self.stop_sent_ns
 
     def to_record(self) -> dict[str, int]:
         return {
@@ -131,6 +137,7 @@ class Pulse:
             "stopped_ns": self.stopped_ns,
             "confirm_latency_ns": self.confirm_latency_ns,
             "continue_sent_ns": self.continue_sent_ns,
+            "continued_ns": self.continued_ns,
             "held_ns": self.held_ns,
             "continued_by_other": self.continued_by_other,
             "completed": True,
@@ -289,10 +296,10 @@ class Pulser:
                 raise
             finally:
                 running = self._ran_meanwhile or not process_stopped(self.target.pid)
-                continue_sent = self._continue()
-                continued = (
-                    time.monotonic_ns() if continue_sent is None else continue_sent
-                )
+                continued = self._continue()
+                if continued is None:  # nothing sent: the target is gone
+                    now = time.monotonic_ns()
+                    continued = (now, now)
             pulse = Pulse.measured(
                 wall, sent, stopped, continued, continued_by_other=running
             )
@@ -399,16 +406,18 @@ class Pulser:
             )
         os.kill(self.target.pid, signum)
 
-    def _continue(self) -> int | None:
+    def _continue(self) -> tuple[int, int] | None:
         """Send SIGCONT, never to a target that is gone; when, on the
-        monotonic clock, read just before it was sent, or None if it wasn't.
-        Read after, a step the target began in between would fall inside
-        the pulse (an F4a not realized, on a loaded host)."""
+        monotonic clock, read just before it was sent and once it had been,
+        or None if it wasn't. Read only after, a step the target began in
+        between would fall inside the pulse (an F4a not realized, on a
+        loaded host); read only before, a harness held up there would
+        under-report how long the target was stopped."""
         if not self.target.is_alive():
             return None
-        sent = time.monotonic_ns()
+        before = time.monotonic_ns()
         os.kill(self.target.pid, signal.SIGCONT)
-        return sent
+        return before, time.monotonic_ns()
 
     def _confirm_stopped(self, stop_sent: int) -> int:
         """When the stop was seen, on the monotonic clock."""
@@ -421,7 +430,10 @@ class Pulser:
 
 
 def _cut_short(
-    wall_ns: int, sent: int, stopped: int | None, continued: int | None
+    wall_ns: int,
+    sent: int,
+    stopped: int | None,
+    continued: tuple[int, int] | None,
 ) -> dict[str, Any]:
     """A pulse that never completed, from the wall time at ``SIGSTOP`` and
     monotonic times; a time not reached (no stop confirmed, no ``SIGCONT``
@@ -430,10 +442,12 @@ def _cut_short(
     def wall(at: int | None) -> int | None:
         return None if at is None else wall_ns + at - sent
 
+    before, after = continued or (None, None)
     return {
         "stop_sent_ns": wall_ns,
         "stopped_ns": wall(stopped),
-        "continue_sent_ns": wall(continued),
+        "continue_sent_ns": wall(before),
+        "continued_ns": wall(after),
         "completed": False,
     }
 
