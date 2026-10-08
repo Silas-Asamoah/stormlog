@@ -142,13 +142,26 @@ def _kv_status(queue: dict[str, Any]) -> str:
     return str(status)
 
 
-def test_preemptions_holding_the_queue_are_upstream_of_an_eligible_kv_finding(
+def test_preemptions_holding_the_queue_make_it_secondary_to_the_kv_fault(
     tmp_path: Path,
 ) -> None:
+    """The requests waited behind preempted ones, back at the head of the
+    queue: the queue is KV's consequence, and KV claims the TTFT excess it
+    explains through it."""
     by_kind = _kv_held(tmp_path)
 
-    assert by_kind["kv_preemption_pressure"]["eligibility"]["eligible"]
-    assert _kv_status(by_kind["queue_saturation"]) == "upstream"
+    kv, queue = by_kind["kv_preemption_pressure"], by_kind["queue_saturation"]
+    assert (kv["role"], kv["severity"], kv["claim"]) == ("primary", "warning", "fault")
+    assert kv["confidence"]["contribution"]["explains"] == (
+        "explains_ttft_excess_through_queue"
+    )
+    assert (queue["role"], queue["secondary_to"]) == ("secondary", [kv["id"]])
+    assert queue["claim"] != "fault"
+    assert "kv_preemption_pressure" not in {a["kind"] for a in queue["alternatives"]}
+    # An upstream cause is no competitor: with it gone, the rest are excluded.
+    assert "competitors_excluded" in queue["confidence"]["contribution"]["met"]
+    (evidence,) = queue["detail"]["role_evidence"]
+    assert evidence["edge"] == "kv_preemption_pressure->queue_saturation"
 
 
 def test_preemptions_of_unknown_cause_are_not_upstream(tmp_path: Path) -> None:

@@ -10,8 +10,9 @@ and an experiment that would confirm it. Three rules keep a finding honest:
   ``undetermined``, at ``info``, and lists what failed. A competitor shown
   to explain a material but minor share is ``contributing``: the finding
   stays eligible, but it is contested and makes no fault claim, as it is
-  with a cause ``upstream`` of it. Every finding is primary in this
-  version: the edge table that makes one secondary to another comes later.
+  with a cause ``upstream`` of it. A cause is upstream only when its own
+  finding is eligible, and where an edge links the two (``diagnosis_roles``)
+  the finding is then that cause's ``secondary``, claiming a condition.
 - **Confidence** is ordinal and per claim: whether the mechanism occurred
   (condition), and whether it explains the incident (contribution). Its
   level is the lower of the two.

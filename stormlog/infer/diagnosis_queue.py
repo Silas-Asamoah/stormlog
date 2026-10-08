@@ -151,6 +151,7 @@ def _finding(
         # never overrule the steps the requests waited through.
         witness = _exporter_witness(context, subject, witness)
     ttft = _ttft_excess(context, subject)
+    kv_hold, held = _kv_hold(context, subject, producer, waiting, excess)
     alternatives = [
         _engine_stall(context, producer, waiting, excess),
         _scheduler_paused(
@@ -162,7 +163,7 @@ def _finding(
         ),
         _blocked_waiting(waiting),
         _engine_ingress(context, subject, waits, excess),
-        _kv_hold(context, subject, producer, waiting, excess),
+        kv_hold,
         _client_admission(context, subject),
         _api_server(context, subject, excess),
     ]
@@ -195,7 +196,10 @@ def _finding(
         },
         experiment=_experiment(excess),
         explains="explains_ttft_excess",
-        detail={"capacity_witness_source": witness.source},
+        detail={
+            "capacity_witness_source": witness.source,
+            "kv_hold": _kv_claim(context, held, ttft),
+        },
     )
     finding.condition, finding.contribution = _criteria(
         context, producer, span, waits, excess, ttft, witness, alternatives
@@ -483,20 +487,21 @@ def _kv_hold(
     producer: str,
     waiting: list[Execution],
     excess: Difference,
-) -> Alternative:
+) -> tuple[Alternative, float]:
     """KV pressure upstream of the queue: the time each request waited
     behind the subject's own preempted requests, which hold the head of the
     queue until they resume, as the median over the requests against the
     median wait excess. Only the subject's allocation preemptions count:
     another client's, or a reset's, are no evidence of its KV pressure. At
     the upstream share it is ``upstream`` here, and stays so only if the
-    subject's KV finding is eligible (``diagnosis_roles``)."""
+    subject's KV finding is eligible (``diagnosis_roles``). Also returns
+    the median request's held time, in ns."""
     kind = "kv_preemption_pressure"
     holds = held_admissions(context, subject, producer)
     intervals = _wait_intervals(context, waiting)
     if not holds or not intervals:
         reason = "no allocation preemption of the subject's requests held the queue"
-        return Alternative(kind, RULED_OUT, reason)
+        return Alternative(kind, RULED_OUT, reason), 0.0
     typical = median(sum(_overlap(h, w) for h in holds) for w in intervals)
     status = _by_share(context, typical / excess.estimate, QUEUE_KV_SHARE)
     reason = (
@@ -504,7 +509,17 @@ def _kv_hold(
         "preempted requests awaiting their resume, against a wait excess of "
         f"{excess.estimate / 1e6:.1f} ms"
     )
-    return Alternative(kind, UPSTREAM if status == NOT_RULED_OUT else status, reason)
+    status = UPSTREAM if status == NOT_RULED_OUT else status
+    return Alternative(kind, status, reason), float(typical)
+
+
+def _kv_claim(context: Context, held: float, ttft: Difference | None) -> dict[str, Any]:
+    """What KV pressure explains through this queue, if it is upstream: the
+    median request's held time against the TTFT excess, by the queue's own
+    contribution share."""
+    share = resolve_threshold(QUEUE_CONTRIBUTION, context.thresholds)[0]
+    explains = ttft is not None and ttft.estimate > 0 and held >= share * ttft.estimate
+    return {"held_p50_ms": round(held / 1e6, 3), "explains_ttft_excess": explains}
 
 
 def _client_admission(context: Context, subject: Subject) -> Alternative:
