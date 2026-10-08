@@ -974,10 +974,13 @@ def _actuation(attempt: _Attempt) -> str:
 
 def _timeout_reason(progress: _Progress) -> str:
     """Why a run stopped attempting episodes early: a recovery timeout, or
-    one that could never hold because a baseline series was too thin."""
+    the kind of the first reason it could never hold (a baseline series
+    too thin, ``baseline_too_thin``, or steps that fail G0's dose check,
+    ``dose_check_failed``)."""
     last = progress.attempts[-1] if progress.attempts else None
-    if last is not None and last.injected.get("recovery_blocked"):
-        return "baseline_too_thin"
+    blocked = last.injected.get("recovery_blocked") if last is not None else None
+    if blocked:
+        return str(blocked[0]).split(":", 1)[0]
     return "recovery_timeout"
 
 
