@@ -102,6 +102,9 @@ class Engine:
     bracketed: bool = True
     # False: a hook from before enqueued records.
     enqueued_records: bool = True
+    # False: a hook from before the reserved count (#217's, or this stack's
+    # earlier builds), whose heartbeats give only queued.
+    counts_reservations: bool = True
     # KV slots, in tokens: a step whose growth would not fit preempts.
     kv_tokens: int | None = None
     # From this monotonic time, heartbeats report one oversized cache reset
@@ -150,7 +153,7 @@ class Engine:
         end = max(at for at, _, _ in timed) + SECOND
         records = [record for _, _, record in timed]
         records.append({"kind": "goodbye", **stamp(end), "last_seq": len(records) + 1})
-        beats = _with_heartbeats(records, self.dropped_from)
+        beats = _with_heartbeats(records, self.dropped_from, self.counts_reservations)
         return [self._restamp(record) for record in beats]
 
     def _restamp(self, record: dict[str, Any]) -> dict[str, Any]:
@@ -401,10 +404,15 @@ def _scheduled(
 
 
 def _with_heartbeats(
-    records: list[dict[str, Any]], dropped_from: int | None = None
+    records: list[dict[str, Any]],
+    dropped_from: int | None = None,
+    counts_reservations: bool = True,
 ) -> list[dict[str, Any]]:
-    """Insert a heartbeat every second of engine time; its counters are
-    clean, or from ``dropped_from`` count one dropped oversized reset."""
+    """Insert a heartbeat every second of engine time, as the hook writes
+    it (nothing pending or reserved: the toy writer keeps up); its counters
+    are clean, or from ``dropped_from`` count one dropped oversized reset.
+    Without ``counts_reservations``, #217's heartbeat, which gives only
+    ``queued``."""
     out: list[dict[str, Any]] = []
     next_beat: int | None = None
     for record in records:
@@ -427,8 +435,9 @@ def _with_heartbeats(
                         "bytes": 1024,
                         "capped": False,
                         "queued": 0,
-                        "pending": 0,
-                        "reserved": 0,
+                        **(
+                            {"pending": 0, "reserved": 0} if counts_reservations else {}
+                        ),
                     }
                 )
                 next_beat += SECOND

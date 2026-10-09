@@ -61,9 +61,11 @@ def _prefix(full: Path, into: Path, at_wall: int) -> Path:
 def test_a_finding_reappears_in_a_genuine_prefix_import(tmp_path: Path) -> None:
     """The run as it stood at first_detectable_ns selects the same incident,
     detected at the same instant, and assesses the queue on it; a moment
-    earlier there is no incident. The class's own evidence can come later:
-    the hook vouches for its records only up to its last heartbeat, and
-    two seconds on the queue is the fault it is on the whole run."""
+    earlier there is no incident. The class's own evidence can come later.
+    Two seconds on, the queue is the fault it is on the whole run, a pause
+    ruled out by admissions alone; at the hook's last heartbeat before its
+    goodbye, a read of a live epoch, the heartbeats vouch for the whole of
+    the waits, and coverage rules the pause out."""
     calm = poisson_free(140, 10 * SECOND, 500 * MS, prefix="a")
     burst = poisson_free(300, 90 * SECOND, 5 * MS, prefix="b")
     full = build_run(tmp_path / "full", calm + burst, Engine(max_num_seqs=4))
@@ -74,6 +76,9 @@ def test_a_finding_reappears_in_a_genuine_prefix_import(tmp_path: Path) -> None:
     replayed = diagnose_artifact(_prefix(full, tmp_path / "at", detected))
     earlier = diagnose_artifact(_prefix(full, tmp_path / "before", detected - 1))
     later = diagnose_artifact(_prefix(full, tmp_path / "later", detected + 2 * SECOND))
+    covered = diagnose_artifact(
+        _prefix(full, tmp_path / "covered", _last_heartbeat(full))
+    )
 
     (again,) = replayed["payload"]["selection"]["subjects"]
     assert (again["key"], again["first_detectable_ns"]) == (subject["key"], detected)
@@ -81,3 +86,30 @@ def test_a_finding_reappears_in_a_genuine_prefix_import(tmp_path: Path) -> None:
     assert earlier["payload"]["selection"]["subjects"] == []
     kinds = {f["kind"]: f for f in later["findings"]}
     assert kinds["queue_saturation"]["severity"] == "warning"
+    assert [engine["state"] for engine in covered["payload"]["join"]["engines"]] == [
+        "alive"
+    ]
+    for prefix, by in ((later, "admissions stopped"), (covered, "nothing lost")):
+        assert by in _paused(prefix)["reason"]
+        assert _paused(prefix)["status"] == "ruled_out"
+
+
+def _last_heartbeat(full: Path) -> int:
+    """When the hook wrote its last heartbeat before its goodbye, on the
+    client's clock."""
+    records = [
+        json.loads(line)
+        for source in (full.parent / "hook").rglob("*.jsonl")
+        for line in source.read_text().splitlines()
+    ]
+    (goodbye,) = [_stamp(r) for r in records if r["kind"] == "goodbye"]
+    beats = [_stamp(r) for r in records if r["kind"] == "heartbeat"]
+    return max(at for at in beats if at < goodbye) + WALL_OFFSET
+
+
+def _paused(report: dict[str, Any]) -> dict[str, Any]:
+    """The queue's paused-scheduler competitor."""
+    details = report["payload"]["findings_detail"].values()
+    (queue,) = [d for d in details if d["kind"] == "queue_saturation"]
+    (paused,) = [a for a in queue["alternatives"] if a["kind"] == "scheduler_paused"]
+    return dict(paused)

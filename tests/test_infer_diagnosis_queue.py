@@ -363,6 +363,23 @@ def test_pause_records_rule_out_a_pause_only_where_nothing_was_lost(
     assert paused.reason.startswith("records may have been lost over the waits")
 
 
+@pytest.mark.parametrize("counts_reservations", [True, False])
+def test_heartbeats_rule_out_a_pause_only_if_they_count_reservations(
+    tmp_path: Path, counts_reservations: bool
+) -> None:
+    """The same clean run, with heartbeats as the hook writes them and as
+    a hook from before the reserved count did: only the first can say the
+    log is whole over the waits; the second leaves the pause to admissions."""
+    engine = Engine(max_num_seqs=4, counts_reservations=counts_reservations)
+
+    (finding,) = _assess(tmp_path, _requests(), engine).findings
+
+    paused = {alt.kind: alt for alt in finding.alternatives}["scheduler_paused"]
+    assert paused.status == "ruled_out"
+    covered = paused.reason == "no pause transition, and nothing lost"
+    assert covered is counts_reservations
+
+
 def test_an_older_log_cannot_tell_ingress_from_the_queue(tmp_path: Path) -> None:
     engine = Engine(max_num_seqs=4, enqueued_records=False, observes=None)
     assessment = _assess(tmp_path, _requests(), engine)
