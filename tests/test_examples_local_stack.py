@@ -5,7 +5,10 @@ import json
 import os
 import signal
 import stat
+import subprocess
 import sys
+import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import psutil
@@ -147,25 +150,46 @@ def _saved(state: Path, pid: int, cmdline: list[str]) -> None:
     )
 
 
-def test_a_process_reading_no_command_line_is_not_the_saved_service(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The gate's probe P4: a pid with the saved start time that now reads
-    # an empty command line, as a kernel thread does, is not the service a
-    # non-empty saved command line names.
-    _saved(tmp_path, os.getpid(), ["x"])
-    monkeypatch.setattr(psutil.Process, "cmdline", lambda _self: [])
-    assert local_stack._running(tmp_path, "otelcol") is None
+@contextlib.contextmanager
+def _process(tmp_path: Path, *, own_session: bool) -> Iterator[psutil.Process]:
+    """A running fake service, leading a session of its own or not."""
+    child = subprocess.Popen(
+        [str(_fake_binary(tmp_path))], start_new_session=own_session
+    )
+    try:
+        yield psutil.Process(child.pid)
+    finally:
+        child.kill()
+        child.wait(5)
 
 
-def test_a_saved_empty_command_line_compares_the_start_time_only(
-    tmp_path: Path,
+@pytest.mark.parametrize("live", [["/usr/bin/some-other-program"], []])
+def test_a_pid_outside_the_service_s_session_is_not_the_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live: list[str]
 ) -> None:
-    # A pid file from before the command line was read once set up: the
-    # start time alone still names the live service.
-    _saved(tmp_path, os.getpid(), [])
-    running = local_stack._running(tmp_path, "otelcol")
-    assert running is not None and running.pid == os.getpid()
+    # A pid reused within the start-time tolerance does not lead the session
+    # start() gave the service: whatever its command line, even an empty
+    # one as a kernel thread reads (the gate's probe P4), it is not the
+    # service, and stop never signals it.
+    with _process(tmp_path, own_session=False) as other:
+        _saved(tmp_path / "state", other.pid, ["x"])
+        monkeypatch.setattr(psutil.Process, "cmdline", lambda _self: live)
+        assert local_stack._running(tmp_path / "state", "otelcol") is None
+        local_stack.main(["stop", "otelcol", "--state-dir", str(tmp_path / "state")])
+        assert other.is_running() and other.status() != psutil.STATUS_ZOMBIE
+
+
+@pytest.mark.parametrize("saved", [[], ["/usr/bin/what-it-was-started-as"]])
+def test_the_service_is_known_by_its_start_time_and_session(
+    tmp_path: Path, saved: list[str]
+) -> None:
+    # A process leading its own session, started at the saved time, is the
+    # service whatever its command line has become since: a wrapper's exec
+    # or an interpreter re-launching itself keeps the session.
+    with _process(tmp_path, own_session=True) as service:
+        _saved(tmp_path / "state", service.pid, saved)
+        running = local_stack._running(tmp_path / "state", "otelcol")
+        assert running is not None and running.pid == service.pid
 
 
 def test_a_service_started_through_a_wrapper_that_execs_is_still_stopped(
@@ -180,6 +204,28 @@ def test_a_service_started_through_a_wrapper_that_execs_is_still_stopped(
     wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setattr(local_stack, "STOP_SECONDS", 0.5)
     state, pid = _started(tmp_path, monkeypatch, wrapper)
+    try:
+        assert local_stack.main(["stop", "otelcol", *state]) == 0
+        with pytest.raises(OSError):
+            os.kill(pid, 0)
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
+def test_a_wrapper_that_execs_after_the_start_check_is_still_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gate's case: the wrapper execs the real binary after start's
+    # half-second check, so the command line saved is the wrapper's. The
+    # service is still known by its start time and session.
+    real = _fake_binary(tmp_path)
+    wrapper = tmp_path / "otelcol-wrapper"
+    wrapper.write_text(f"#!/bin/sh\nsleep 0.6\nexec '{real}'\n")
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(local_stack, "STOP_SECONDS", 0.5)
+    state, pid = _started(tmp_path, monkeypatch, wrapper)
+    time.sleep(1.0)  # stop comes later, as a user's would, after the exec
     try:
         assert local_stack.main(["stop", "otelcol", *state]) == 0
         with pytest.raises(OSError):
@@ -226,22 +272,3 @@ def test_a_clock_step_does_not_make_a_service_look_reused(
         local_stack.main(["stop", "otelcol", *state])
     with pytest.raises(OSError):
         os.kill(pid, 0)
-
-
-def test_a_pid_now_running_another_command_is_never_signalled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # A pid reused within the start-time tolerance: the start time matches,
-    # the command line does not, so the process is not the one started.
-    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
-    pid_file = tmp_path / "state" / "otelcol.pid.json"
-    saved = json.loads(pid_file.read_text())
-    saved["cmdline"] = ["/usr/bin/some-other-program"]
-    pid_file.write_text(json.dumps(saved))
-    process = psutil.Process(pid)
-    try:
-        local_stack.main(["stop", "otelcol", *state])
-        assert process.is_running() and process.status() != psutil.STATUS_ZOMBIE
-    finally:
-        process.kill()
-        process.wait(5)

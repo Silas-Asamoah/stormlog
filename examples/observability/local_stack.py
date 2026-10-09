@@ -7,12 +7,17 @@ Each service runs from its binary with the config beside this script:
 ``STORMLOG_OTELCOL``, ``STORMLOG_PROMETHEUS`` or ``STORMLOG_JAEGER``; a
 missing one is skipped with a message.
 
-Each started service's pid, process start time and command line are kept
-in the state directory, and ``stop`` and ``kill`` signal only that process,
-and only while its command line matches and its start time is within a
-second, which a stepped wall clock can move on Linux: a pid the system has
-since reused is never signalled. ``stop`` sends ``SIGTERM``, then
-``SIGKILL`` if the service is still running after 10 s. ``kill`` is
+Each started service's pid and process start time are kept in the state
+directory, with its command line for the record. ``stop`` and ``kill``
+signal only that process, and only while it still leads the session it
+was started in and its start time is within a second, which a stepped wall
+clock can move on Linux. A wrapper that execs the real binary keeps both,
+though not the command line. A pid the system has since reused is not
+signalled unless the process now holding it also leads its own session
+and started within a second of the service: the service would have to die
+and its pid be handed out again that fast, which on Linux and macOS takes
+cycling through every other free pid first. ``stop`` sends ``SIGTERM``,
+then ``SIGKILL`` if the service is still running after 10 s. ``kill`` is
 ``SIGKILL``, for outage episodes::
 
     python -m examples.observability.local_stack start --x1
@@ -42,7 +47,7 @@ DEFAULT_STATE = Path("artifacts") / "observability-stack"
 STOP_SECONDS = 10.0
 # How far a process's start time may move and still be the same process:
 # on Linux it is derived from the boot time, which moves when the wall
-# clock is stepped. The command line must match exactly as well.
+# clock is stepped. It must also still lead the session start() gave it.
 START_TOLERANCE_SECONDS = 1.0
 
 
@@ -93,12 +98,7 @@ def _running(state: Path, name: str) -> psutil.Process | None:
         saved = json.loads(path.read_text())
         process = psutil.Process(int(saved["pid"]))
         moved = abs(process.create_time() - float(saved["started"]))
-        cmdline = saved["cmdline"]
-        # A saved empty command line is no evidence (see _settled_cmdline):
-        # only the start time is compared then.
-        if moved > START_TOLERANCE_SECONDS or (
-            cmdline and process.cmdline() != cmdline
-        ):
+        if moved > START_TOLERANCE_SECONDS or not _leads_its_session(process):
             return None  # the pid now belongs to another process
         if process.status() == psutil.STATUS_ZOMBIE:
             return None
@@ -107,13 +107,25 @@ def _running(state: Path, name: str) -> psutil.Process | None:
         return None
 
 
+def _leads_its_session(process: psutil.Process) -> bool:
+    """Whether a pid started at the saved time is still the service.
+
+    start() gives each service a session of its own, which it keeps through
+    a wrapper's exec or an interpreter re-launching itself, however late,
+    though its command line changes. A process that has taken the pid since
+    passes only if it too leads a session of its own (see the module's
+    docstring).
+    """
+    return bool(os.getsid(process.pid) == process.pid)
+
+
 def _settled_cmdline(process: psutil.Process, wait: float = 2.0) -> list[str]:
     """The command line, once exec has set it up.
 
     On Linux, Popen returns once exec has closed the child's close-on-exec
     descriptors, a moment before the new program's arguments are in place;
-    a read in that window is empty, and saved so, the service would later
-    look like another process.
+    a read in that window is empty, and the pid file would record no
+    command line.
     """
     deadline = time.monotonic() + wait
     while True:
