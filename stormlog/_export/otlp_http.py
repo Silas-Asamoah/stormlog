@@ -194,6 +194,12 @@ class OtlpHttpTransport:
         """Resolve the destination, waiting at most ``wait`` seconds."""
         return self.resolver.resolve(wait)
 
+    @property
+    def body_started(self) -> bool:
+        """Whether the latest attempt began to send its body."""
+        with self._lock:
+            return self._body_started
+
     def send(self, body: bytes, *, spans: int) -> Transmission:
         """Export ``body``, holding ``spans`` spans, in one attempt."""
         with self._lock:
