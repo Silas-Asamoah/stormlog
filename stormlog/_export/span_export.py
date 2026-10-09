@@ -135,7 +135,7 @@ class FileSink:
     def send(self, body: bytes, *, spans: int) -> Transmission:
         with self._lock:
             if self._aborted:
-                return Transmission(NOT_SENT, SEND_FAILED)
+                return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
             self._writing = True
             self._write_started = time.monotonic()
         outcome = self.lines.write_line(body)
@@ -366,6 +366,10 @@ class SpanExporter(Generic[T]):
             if not self._pause(self._probe_wait()) or not self.ledger.attempting():
                 return False
             transmission = self._send(body, history.spans)
+            if transmission.aborted:
+                # Cut short by the close: the freeze settles the batch from
+                # whether its body had left, and nothing is retried.
+                return False
             self._last_attempt_at = time.monotonic()
             if not self.ledger.record(history, transmission):
                 return False

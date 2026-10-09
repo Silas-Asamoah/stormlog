@@ -23,7 +23,7 @@ import time
 import urllib.parse
 import zlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
 
 from .http_server import is_loopback
@@ -140,6 +140,8 @@ class Transmission:
     confirmation. ``message`` is the collector's own text, a partial
     success's warning or an error's ``Status.message``: it may echo what
     was sent, so it is only for callers with consent to keep it.
+    ``aborted`` says the attempt was cut short by the sender's own
+    ``abort()``, so what it shows is not the destination's doing.
     """
 
     kind: str
@@ -149,6 +151,7 @@ class Transmission:
     retryable: bool = False
     retry_after: float | None = None
     message: str | None = None
+    aborted: bool = False
     sent_bytes: int = 0
 
 
@@ -195,17 +198,33 @@ class OtlpHttpTransport:
         return self.resolver.resolve(wait)
 
     @property
+    def aborted(self) -> bool:
+        """Whether ``abort()`` has been called."""
+        with self._lock:
+            return self._aborted
+
+    @property
     def body_started(self) -> bool:
         """Whether the latest attempt began to send its body."""
         with self._lock:
             return self._body_started
 
     def send(self, body: bytes, *, spans: int) -> Transmission:
-        """Export ``body``, holding ``spans`` spans, in one attempt."""
+        """Export ``body``, holding ``spans`` spans, in one attempt.
+
+        An attempt ``abort()`` cut short, or refused, is marked ``aborted``:
+        the reset or the refusal is the sender's own, not the collector's.
+        """
         with self._lock:
             self._body_started = False
             if self._aborted:
-                return Transmission(NOT_SENT, SEND_FAILED)
+                return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
+        outcome = self._attempt(body, spans)
+        if self.aborted and outcome.kind in (AMBIGUOUS, NOT_SENT):
+            return replace(outcome, aborted=True)
+        return outcome
+
+    def _attempt(self, body: bytes, spans: int) -> Transmission:
         deadline = time.monotonic() + self.attempt_seconds
         compressed = gzip.compress(body, compresslevel=6, mtime=0)
         sock, token, failure = self._connect(deadline)
