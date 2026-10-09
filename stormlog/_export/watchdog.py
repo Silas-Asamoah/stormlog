@@ -32,6 +32,10 @@ class WatchdogStats:
     failed: int = 0
 
 
+class WatchdogStopped(RuntimeError):
+    """Raised by ``arm`` once the watchdog has stopped, and only then."""
+
+
 class Watchdog:
     """Arm a socket with a deadline; disarm it when the work is done."""
 
@@ -56,19 +60,20 @@ class Watchdog:
         """Shut ``sock`` down when the clock passes ``deadline``; returns a token.
 
         ``ValueError`` for a closed or detached socket, which no shutdown
-        could reach; ``RuntimeError`` once the watchdog has stopped.
+        could reach; ``WatchdogStopped`` once the watchdog has stopped; and
+        ``RuntimeError`` when its thread cannot start, with nothing armed.
         """
         if sock.fileno() == -1:
             raise ValueError("a closed or detached socket cannot be armed")
         with self._cond:
             if self._stopped:
-                raise RuntimeError("the watchdog has stopped")
+                raise WatchdogStopped("the watchdog has stopped")
+            self._ensure_thread()
             self._next_token += 1
             token = self._next_token
             self._sockets[token] = sock
             heapq.heappush(self._heap, (deadline, token))
             self.stats.armed += 1
-            self._ensure_thread()
             self._cond.notify()
             return token
 
