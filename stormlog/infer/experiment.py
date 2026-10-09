@@ -1253,7 +1253,7 @@ class _Run:
             remembered,
             mark=self.server.mark,
             since=self.server.identity,
-            lasted_s=self.server.lasted_s(),
+            lasted_s=self.server.bound_s(),
         )
         self.record.cleanup = cleanup.to_record()
         end_journaled(self.server, cleanup)
@@ -1465,7 +1465,7 @@ class _Run:
                 launched.pid,
                 mark=launched.mark,
                 since=launched.identity,
-                lasted_s=launched.lasted_s(),
+                lasted_s=launched.bound_s(),
             )
             end_journaled(launched, cleanup)
             if not cleanup.verified:
@@ -1683,7 +1683,7 @@ def _stop_prelude_server(
         remembered,
         mark=server.mark,
         since=server.identity,
-        lasted_s=server.lasted_s(),
+        lasted_s=server.bound_s(),
     )
     (directory / "cleanup.json").write_text(
         json.dumps(cleanup.to_record(), indent=2) + "\n"
