@@ -339,40 +339,43 @@ def test_an_interrupt_in_the_close_s_wait_still_finishes_the_close(
         exporter.close(5.0)  # already closed: nothing left to do
 
 
-def test_a_retry_refused_after_the_abort_claims_no_extra_copy(
+def test_an_aborted_send_is_not_retried_and_the_freeze_settles_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # The gate's probe: the freeze held back until a retry after the abort
-    # is inside send(). The transport refuses that retry before any byte
-    # leaves, but the freeze read what abort() had returned, "a body had
-    # left", and claimed 5 extra copies, where the collector got one.
+    # The freeze is held until the worker has gone, so a retry after the
+    # abort, if one were made, would have happened by then. None is: the
+    # aborted attempt is left to the freeze, which settles it alone. (The
+    # window a retry once had is covered by the test after this one.)
     with running([Reply(action=SILENT)]) as collector:
         exporter = _exporter(collector.url, attempt_seconds=30.0)
         _offer(exporter, 5)
         exporter.start()
         assert _wait(lambda: bool(collector.received))
+        worker = exporter._worker
+        assert worker is not None
         transport = exporter.sink.transport  # type: ignore[attr-defined]
-        retried = threading.Event()
+        sends_after_abort = 0
         real_send = transport.send
 
         def send(body: bytes, *, spans: int) -> Any:
-            if transport._aborted:
-                retried.set()
-                time.sleep(0.5)  # a worker preempted inside its retry
+            nonlocal sends_after_abort
+            sends_after_abort += transport._aborted
             return real_send(body, spans=spans)
 
         monkeypatch.setattr(transport, "send", send)
         real_freeze = exporter.ledger.freeze
 
         def freeze(**kwargs: Any) -> None:
-            retried.wait(1.0)
+            worker.join(5.0)
             real_freeze(**kwargs)
 
         monkeypatch.setattr(exporter.ledger, "freeze", freeze)
         _interrupt_the_wait(exporter, monkeypatch)
+        started = time.monotonic()
         with pytest.raises(KeyboardInterrupt):
             exporter.close(5.0)
-        assert not retried.is_set()  # the aborted attempt is not retried
+        assert time.monotonic() - started < 2.0  # the worker went at once
+        assert sends_after_abort == 0
         assert _settled_as_aborted(exporter, 5) and _balanced(exporter.accounting())
         assert len(collector.received) == 1
 
