@@ -477,6 +477,7 @@ def test_a_run_json_a_killed_runner_tore_is_read_past_on_resume(
         ("treatment", "launch_failed:treatment:watcher"),
         ("step", "launch_failed:step:c1"),
         ("prelude", "prelude_failed:warm:launch_failed"),
+        ("prelude_server", "prelude_failed:warm:launch_failed"),
     ],
 )
 def test_a_command_that_cannot_start_is_a_protocol_failure(
@@ -494,13 +495,22 @@ def test_a_command_that_cannot_start_is_a_protocol_failure(
         document["arms"]["watch"]["treatments"][0]["command"] = missing
     elif where == "step":
         document["arms"]["off"]["workload"][0]["command"] = missing
-    else:
+    elif where == "prelude":
         document["block_prelude"] = [{"name": "warm", "command": missing}]
+    else:
+        # The prelude's own server, launched before its step.
+        document["server"]["command"] = missing
+        warm = {
+            "name": "warm",
+            "server_arm": "off",
+            "command": ["{python}", "-c", "pass"],
+        }
+        document["block_prelude"] = [warm]
     record, _ = _run(tmp_path, document)
     assert record["arm"] == "watch"
     assert record["state"] == "protocol_failure" and reason in record["reasons"]
     assert not list((tmp_path / "exp" / "runs").glob("*.partial"))
-    if where != "prelude":
+    if not where.startswith("prelude"):
         assert any("could not be launched" in note for note in record["notes"])
 
 
