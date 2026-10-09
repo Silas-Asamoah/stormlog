@@ -368,6 +368,35 @@ def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
     assert _actuation(attempt) == "interrupted_by_other"
 
 
+def test_a_pulse_continued_before_its_stop_was_seen_reads_interrupted_by_other(
+    tmp_path: Path,
+) -> None:
+    # gate-221, F2's product half: a pulse someone continued before the
+    # pulser saw its stop raised "did not stop", and the episode read as a
+    # failed actuation. It is named as continued by another now, and the
+    # episode's actuation is interrupted_by_other.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from examples.qualification.inject import InjectionRun, Server, _actuation
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.pulser import ContinuedByOther
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-z"), Server("", "m", tmp_path, {})
+    )
+    cut = {"stop_sent_ns": 1, "stopped_ns": None, "completed": False}
+    run._pulser = cast(Any, SimpleNamespace(pulses=[], cut_short=cut))
+    error = ContinuedByOther("continued_by_other: pid 1 ran on after its SIGSTOP")
+    injected = run._failed(plan.episodes[0], error)
+    assert injected["interrupted_by_other"] == [0]
+    attempt = cast(Any, SimpleNamespace(actuated=False, injected=injected))
+    assert _actuation(attempt) == "interrupted_by_other"
+
+
 @pytest.mark.parametrize("hung", [True, False])
 def test_the_next_episode_waits_while_the_engine_looks_hung(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hung: bool
@@ -1800,6 +1829,28 @@ def test_a_signal_during_the_runs_poll_waits_for_the_poll(tmp_path: Path) -> Non
     finally:
         signal.signal(signal.SIGINT, previous)
     assert done == [True]
+
+
+def test_the_pulse_someone_else_continued_is_named_by_its_place(
+    tmp_path: Path,
+) -> None:
+    # gate-221-bisect, G3: a continue before the stop was seen ends the
+    # episode at its pulse in progress, the last on record, so that is the
+    # one interrupted_by_other names, not the first.
+    from types import SimpleNamespace
+
+    from examples.qualification.pulser import ContinuedByOther
+
+    run = _set_up_run(tmp_path, "q221-ibo")
+    completed = SimpleNamespace(to_record=lambda: {"completed": True})
+    run._pulser = cast(
+        Any,
+        SimpleNamespace(pulses=[completed, completed], cut_short={"completed": False}),
+    )
+    error = ContinuedByOther("continued_by_other: pid 1 ran on after its SIGSTOP")
+    injected = run._failed(run.plan.episodes[0], error)
+    assert len(injected["pulses"]) == 3
+    assert injected["interrupted_by_other"] == [2]
 
 
 def test_a_signal_as_the_mask_is_blocked_leaves_nothing_blocked(

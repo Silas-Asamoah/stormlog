@@ -46,6 +46,14 @@ class PulseRefused(RuntimeError):
     """A pulse that would break a safety rule, or reach the wrong process."""
 
 
+class ContinuedByOther(PulseRefused):
+    """The target ran on after its ``SIGSTOP`` and was never seen stopped,
+    though it was alive and could stop throughout (never a zombie, never in
+    uninterruptible sleep). ``SIGSTOP`` can't be blocked or ignored, so
+    someone continued it before a status read saw the stop. Its message
+    starts ``continued_by_other``."""
+
+
 class TargetGone(PulseRefused):
     """The target exited, or its pid now names another process. Its message
     starts ``target_gone``, so a truth that records it says what happened,
@@ -157,11 +165,21 @@ def seen_running(pid: int) -> bool:
 
 def process_stopped(pid: int) -> bool:
     """Whether the process is in the stopped state now."""
+    return process_status(pid) in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+
+
+def process_status(pid: int) -> str | None:
+    """The process's state now, or None when it can't be read."""
     try:
-        status = psutil.Process(pid).status()
+        status: str = psutil.Process(pid).status()
     except psutil.Error:
-        return False
-    return status in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+        return None
+    return status
+
+
+# States a SIGSTOP can't take effect in (yet): a zombie never stops, and a
+# process in uninterruptible sleep stops only once it leaves it.
+UNSTOPPABLE = frozenset({psutil.STATUS_ZOMBIE, psutil.STATUS_DISK_SLEEP, None})
 
 
 # vLLM 0.30 retitles its processes (setproctitle replaces argv): EngineCore
@@ -420,12 +438,33 @@ class Pulser:
         return before, time.monotonic_ns()
 
     def _confirm_stopped(self, stop_sent: int) -> int:
-        """When the stop was seen, on the monotonic clock."""
+        """When the stop was seen, on the monotonic clock.
+
+        Raises:
+            TargetGone: the target exited before its stop was seen.
+            ContinuedByOther: it was never seen stopped, though it could stop
+                throughout: someone continued it first (gate-221, F2).
+            PulseRefused: it couldn't stop within 1 s (a zombie, or in
+                uninterruptible sleep at a read).
+        """
         deadline = stop_sent + int(CONFIRM_TIMEOUT_SECONDS * 1e9)
+        stoppable = True
         while time.monotonic_ns() < deadline:
             if self.target.is_stopped():
                 return time.monotonic_ns()
+            status = process_status(self.target.pid)
+            if status is None and not self.target.is_alive():
+                raise TargetGone(
+                    f"target_gone: pid {self.target.pid} exited before its stop "
+                    "was seen"
+                )
+            stoppable = stoppable and status not in UNSTOPPABLE
             time.sleep(CONFIRM_POLL_SECONDS)
+        if stoppable and self.target.is_alive():
+            raise ContinuedByOther(
+                f"continued_by_other: pid {self.target.pid} ran on after its "
+                "SIGSTOP; someone continued it before its stop was seen"
+            )
         raise PulseRefused(f"pid {self.target.pid} did not stop within 1 s")
 
 
@@ -548,6 +587,7 @@ def _on_termination(previous: Any, signum: int, frame: Any) -> None:
 __all__ = [
     "MAX_DUTY_CYCLE",
     "MAX_PULSE_SECONDS",
+    "ContinuedByOther",
     "Pulse",
     "PulseRefused",
     "Pulser",
