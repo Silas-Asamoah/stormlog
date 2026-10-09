@@ -110,6 +110,19 @@ class Launched:
             return None
         return self.ended_monotonic - self.started_monotonic
 
+    def bound_s(self) -> float | None:
+        """How long its leader ran, as the bound a cleanup check made now may
+        put on late starts (``verify_cleanup``'s ``lasted_s``). None while it
+        runs, and when its exit was seen more than ``START_SLACK_SECONDS``
+        ago: an orphan of the launch may since have started a process and
+        left before the check, unseen."""
+        lasted = self.lasted_s()
+        if lasted is None or self.ended_monotonic is None:
+            return None
+        if time.monotonic() - self.ended_monotonic > START_SLACK_SECONDS:
+            return None
+        return lasted
+
     def _close_log(self) -> None:
         if self._log is not None:
             self._log.close()
@@ -365,7 +378,7 @@ def clean_up_after(launched: Launched, *, wait_s: float = KILL_WAIT_SECONDS) -> 
         launched.pid,
         mark=launched.mark,
         since=launched.identity,
-        lasted_s=launched.lasted_s(),
+        lasted_s=launched.bound_s(),
         wait_s=wait_s,
     )
     end_journaled(launched, cleanup)
@@ -737,9 +750,10 @@ def _may_be_launched(
 
     It is not when another user runs it (which includes anything run under
     sudo), when it started more than ``START_SLACK_SECONDS`` before the
-    launch or after its leader had exited (``lasted_s``, given only while
-    nothing of the launch has been seen to outlive the leader: nothing of
-    the launch was left to start it, but another orphan, itself judged), or
+    launch or after its leader had exited (``lasted_s``, given only for a
+    check that begins as the exit is seen, ``Launched.bound_s``, and only
+    while nothing of the launch has been seen to outlive the leader: nothing
+    of the launch was left to start it, but another orphan, itself judged), or
     when its parent is none of ``adopters`` (``_adopters``): a launch's
     process that left its group and session is an orphan, adopted by
     ``init`` or a subreaper among the runner's ancestors, and any other

@@ -19,6 +19,7 @@ from stormlog.infer.experiment_process import (
     MARK_VARIABLE,
     Cleanup,
     Launched,
+    clean_up_after,
     current_boot,
     end_journaled,
     identify,
@@ -833,3 +834,37 @@ def test_a_clean_poll_after_one_that_found_something_verifies_only_if_the_next_i
     # Nothing seen: the first clean poll verifies.
     looks(())
     assert verify_cleanup(4000, wait_s=0).verified
+
+
+def test_a_late_start_clears_nothing_once_the_leaders_exit_was_seen_long_before(
+    tmp_path: Path,
+) -> None:
+    # gate-213-final's NF3: a treatment whose leader exit was seen early is
+    # checked only after another one's slow stop. An orphan of it started an
+    # emptied grandchild over 2 s after that exit and left before the check,
+    # so nothing of the launch was seen, and the grandchild's late start
+    # cleared it.
+    out = tmp_path / "grandchild.pid"
+    launched = launch(
+        "treatment", [sys.executable, "-c", "import time; time.sleep(0.3)"]
+    )
+    spawner = subprocess.Popen(
+        [sys.executable, "-c", LATE_GRANDCHILD, str(launched.pid), str(out)],
+        env={**os.environ, MARK_VARIABLE: launched.mark},
+    )
+    spawner.wait(timeout=5)
+    launched.process.wait(timeout=5)
+    launched.poll()  # the exit, seen at once
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (
+            out.exists() and out.read_text().strip()
+        ):
+            time.sleep(0.05)
+        time.sleep(0.3)  # the orphan that started it has left
+        assert launched.bound_s() is None
+        cleanup = clean_up_after(launched, wait_s=0.5)
+        assert int(out.read_text()) in [item["pid"] for item in cleanup.blind]
+    finally:
+        if out.exists() and out.read_text().strip():
+            os.kill(int(out.read_text()), signal.SIGKILL)
