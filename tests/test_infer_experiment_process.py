@@ -834,6 +834,18 @@ def test_a_clean_poll_after_one_that_found_something_verifies_only_if_the_next_i
     # Nothing seen: the first clean poll verifies.
     looks(())
     assert verify_cleanup(4000, wait_s=0).verified
+    # The deadline passes during the first clean poll: one more decides
+    # (gate-213-final's mutant f3_deadline_ignores_clean).
+    sequence = [(orphan,), (), ()]
+
+    def slow(*args: Any) -> Any:
+        blind = sequence.pop(0) if sequence else ()
+        if not blind:
+            time.sleep(0.3)
+        return ep._Poll(set(), blind, 0)
+
+    monkeypatch.setattr(ep, "_look", slow)
+    assert verify_cleanup(4000, wait_s=0.2).verified
 
 
 def test_a_late_start_clears_nothing_once_the_leaders_exit_was_seen_long_before(
