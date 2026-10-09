@@ -20,7 +20,7 @@ import pytest
 from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.inject import _harness_clock
-from examples.qualification.run_dir import verify
+from examples.qualification.run_dir import new_label, verify
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
 from tests.qualification_fake_engine_helpers import post, wait_until
 
@@ -1085,7 +1085,7 @@ def _signal_mid_first_episode(
     plan["timeline"]["episode"] = 6
     plan["episodes"] = episodes
     (tmp_path / "plan.json").write_text(json.dumps(plan))
-    label = "q221-00000000000000cc"
+    label = new_label()  # a session's own, as concurrent sessions may run
     engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
     with FakeEngineProcess(engine) as server:
         # fmt: off
@@ -1166,7 +1166,9 @@ def test_a_second_signal_while_the_run_finishes_still_publishes_it(
     plan["timeline"]["episode"] = 6
     plan["episodes"] = [{"type": "N"}, {"type": "N"}]
     (tmp_path / "plan.json").write_text(json.dumps(plan))
-    label = f"q221-{0xDD00 + 64 * first + second:016x}"  # cases may run at once
+    # Each run its own label (gate-221, E2): fixed per case, two pytest
+    # sessions at once ran the same labels side by side.
+    label = new_label()
     engine = ["--step-seconds", "0.002", "--hook-dir", str(hook)]
     victim: psutil.Process | None = None
     try:
