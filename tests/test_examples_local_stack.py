@@ -1,7 +1,9 @@
 """local_stack.py: services started, killed and stopped by the pid it started."""
 
+import contextlib
 import json
 import os
+import signal
 import stat
 import sys
 from pathlib import Path
@@ -106,6 +108,35 @@ def test_a_service_that_ignores_sigterm_is_killed(
     assert local_stack.main(["stop", "otelcol", *state]) == 0
     with pytest.raises(OSError):
         os.kill(pid, 0)
+
+
+def test_a_service_read_mid_exec_is_still_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux lets Popen return once exec has closed the child's close-on-exec
+    # descriptors, a moment before the new program's arguments are set up;
+    # a cmdline read in that window is empty. Saved so, the service later
+    # looked like another process, and stop left it running.
+    real_cmdline = psutil.Process.cmdline
+    read: set[int] = set()
+
+    def first_read_mid_exec(self: psutil.Process) -> list[str]:
+        if self.pid not in read:
+            read.add(self.pid)
+            return []
+        cmdline: list[str] = real_cmdline(self)
+        return cmdline
+
+    monkeypatch.setattr(psutil.Process, "cmdline", first_read_mid_exec)
+    monkeypatch.setattr(local_stack, "STOP_SECONDS", 0.5)
+    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    try:
+        assert local_stack.main(["stop", "otelcol", *state]) == 0
+        with pytest.raises(OSError):
+            os.kill(pid, 0)
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
 
 
 def test_a_zombie_service_is_not_running(
