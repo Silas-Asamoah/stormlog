@@ -447,6 +447,10 @@ orphan, adopted by `init` or by a subreaper among those ancestors, such as
 `systemd --user` for a desktop session; any other parent shows whose it
 is). Start times are compared in the processes' own clock (ticks since
 boot, or `psutil`'s creation time), so a wall-clock step does not matter.
+How long a leader ran is timed on Linux by `CLOCK_BOOTTIME`, which counts
+a suspend as the start ticks do; on macOS psutil's starts are wall time,
+so a sleep or a clock step during a leader's run moves the late-start
+bound by as much.
 Missed are a process of the launch left as the child of a long-lived
 process that predates the launch (a `tmux` server it asked to run
 something, an older shell), and a descendant that exec'd with a fresh,
