@@ -375,6 +375,58 @@ def test_a_retry_refused_after_the_abort_claims_no_extra_copy(
         assert len(collector.received) == 1
 
 
+@pytest.mark.parametrize("first", ["reset", "503"])
+def test_a_retry_not_yet_sending_is_not_taken_for_its_last_attempt(
+    monkeypatch: pytest.MonkeyPatch, first: str
+) -> None:
+    # The gate's probe: the first attempt reaches the collector (stored and
+    # reset, or a 503), and the retry has been marked as started but has
+    # not entered the transport when the close freezes. Its body has not
+    # left, but the freeze read the last attempt's "a body had left": 5
+    # extra copies after the reset, or the 503's spans counted unknown.
+    first_reply = Reply(action=RESET) if first == "reset" else Reply(503, store=False)
+    with running([first_reply, Reply(action=SILENT)]) as collector:
+        exporter = _exporter(collector.url, attempt_seconds=30.0)
+        _offer(exporter, 5)
+        transport = exporter.sink.transport  # type: ignore[attr-defined]
+        sends = 0
+        in_window, frozen = threading.Event(), threading.Event()
+        real_send = transport.send
+
+        def send(body: bytes, *, spans: int) -> Any:
+            nonlocal sends
+            sends += 1
+            if sends == 2:  # the retry, held before the transport's lock
+                in_window.set()
+                frozen.wait(3.0)
+            return real_send(body, spans=spans)
+
+        monkeypatch.setattr(transport, "send", send)
+        real_freeze = exporter.ledger.freeze
+
+        def freeze(**kwargs: Any) -> None:
+            real_freeze(**kwargs)
+            frozen.set()
+
+        monkeypatch.setattr(exporter.ledger, "freeze", freeze)
+        exporter.start()
+        assert in_window.wait(5)
+        _interrupt_the_wait(exporter, monkeypatch)
+        with pytest.raises(KeyboardInterrupt):
+            exporter.close(5.0)
+        worker = exporter._worker
+        assert worker is not None
+        worker.join(5)
+        accounting = exporter.accounting()
+        assert _balanced(accounting) and len(collector.received) == 1
+        if first == "reset":
+            assert accounting["unknown"] == {"reset_after_send": 5}
+            assert accounting["max_extra_copies"] == 0
+        else:
+            assert accounting["refused"] == {"throttled": 5}
+            assert accounting["unknown"] == {}
+
+
 def test_a_close_cut_short_is_finished_by_the_next_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
