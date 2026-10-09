@@ -30,6 +30,7 @@ then ``SIGKILL`` if the service is still running after 10 s. ``kill`` is
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -49,6 +50,11 @@ STOP_SECONDS = 10.0
 # on Linux it is derived from the boot time, which moves when the wall
 # clock is stepped. It must also still lead the session start() gave it.
 START_TOLERANCE_SECONDS = 1.0
+# What _save names a pid file's temporary copy with, after the writer's pid,
+# and how old one must be before a start takes it for a killed start's: no
+# live save takes that long.
+_TEMPORARY = ".tmp"
+STALE_TEMPORARY_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -144,6 +150,7 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
     for service in SERVICES:
         if only and service.name not in only:
             continue
+        _remove_stale_temporaries(state, service.name)
         if _running(state, service.name) is not None:
             print(f"{service.name}: already running")
             continue
@@ -180,17 +187,49 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
 def _save(
     state: Path, name: str, process: psutil.Process, cmdline: list[str], *, x1: bool
 ) -> None:
-    """What _running later checks the pid against."""
-    _pid_file(state, name).write_text(
-        json.dumps(
-            {
-                "pid": process.pid,
-                "started": process.create_time(),
-                "cmdline": cmdline,
-                "x1": x1,
-            }
-        )
+    """What _running later checks the pid against.
+
+    Written beside the pid file, then renamed over it, so a stop or status
+    reading meanwhile sees the old file or the new one, never half of one.
+    """
+    path = _pid_file(state, name)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}{_TEMPORARY}")
+    text = json.dumps(
+        {
+            "pid": process.pid,
+            "started": process.create_time(),
+            "cmdline": cmdline,
+            "x1": x1,
+        }
     )
+    temporary.write_text(text)
+    try:
+        os.replace(temporary, path)
+    except FileNotFoundError:
+        # Removed before the rename, by hand or by a start that took it for
+        # a killed start's: written again, so the service keeps its file.
+        temporary.write_text(text)
+        os.replace(temporary, path)
+
+
+def _remove_stale_temporaries(state: Path, name: str) -> None:
+    """Remove the temporary files a start killed mid-save left behind.
+
+    Only _save's own for this service, and only once their writer has gone
+    and they are older than any live save: a start in another pid namespace
+    sharing this directory, such as a container's bind mount, sees no
+    process by a live writer's pid.
+    """
+    pid_file = _pid_file(state, name)
+    prefix = f".{pid_file.name}."
+    stale_before = time.time() - STALE_TEMPORARY_SECONDS
+    for temporary in state.glob(f"{prefix}*{_TEMPORARY}"):
+        writer = temporary.name[len(prefix) : -len(_TEMPORARY)]
+        if not writer.isdigit() or psutil.pid_exists(int(writer)):
+            continue
+        with contextlib.suppress(OSError):
+            if temporary.stat().st_mtime < stale_before:
+                temporary.unlink()
 
 
 def stop(state: Path, *, only: set[str], kill: bool = False) -> int:

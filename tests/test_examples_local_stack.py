@@ -7,6 +7,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -256,6 +257,114 @@ def test_an_empty_second_read_keeps_the_first_command_line(
         assert any(part.endswith("fake-otelcol") for part in saved["cmdline"])
     finally:
         local_stack.main(["stop", *state])
+
+
+def test_a_pid_file_being_saved_is_never_read_half_written(tmp_path: Path) -> None:
+    # stop or status reading while start saves the pid file again saw it
+    # empty or cut short, took the service for gone, and deleted the file.
+    state = tmp_path / "state"
+    state.mkdir()
+    me = psutil.Process(os.getpid())
+    cmdline = ["x" * 4096]  # a longer write: the file stays truncated longer
+    local_stack._save(state, "otelcol", me, cmdline, x1=False)
+    done = threading.Event()
+    torn = 0
+
+    def read() -> None:
+        nonlocal torn
+        while not done.is_set():
+            try:
+                json.loads((state / "otelcol.pid.json").read_text())
+            except ValueError:
+                torn += 1
+
+    reader = threading.Thread(target=read)
+    reader.start()
+    try:
+        for _ in range(300):
+            local_stack._save(state, "otelcol", me, cmdline, x1=False)
+    finally:
+        done.set()
+        reader.join(5)
+    assert torn == 0
+    assert not list(state.glob("*.tmp"))
+
+
+def test_a_start_removes_what_a_start_killed_mid_save_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A start killed between writing the temporary file and renaming it
+    # left the file behind. The next start removes it, and only it: not one
+    # whose writer still runs, nor anything else in the directory.
+    state = tmp_path / "state"
+    state.mkdir()
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait(5)
+    stale = state / f".otelcol.pid.json.{gone.pid}.tmp"
+    saving = state / f".otelcol.pid.json.{os.getppid()}.tmp"
+    others = [state / ".otelcol.pid.json.x.tmp", state / "notes.tmp"]
+    an_hour_ago = time.time() - 3600
+    for path in (stale, saving, *others):
+        path.write_text("{")
+        os.utime(path, (an_hour_ago, an_hour_ago))
+    state_args, _pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    try:
+        assert not stale.exists()
+        assert saving.exists() and all(path.exists() for path in others)
+    finally:
+        local_stack.main(["stop", *state_args])
+
+
+def test_a_save_in_progress_survives_another_start_s_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gate's probe: a start in another pid namespace sharing the state
+    # directory saw no process by this writer's pid, and removed the file
+    # it was about to rename. The rename failed, and the service ran on with
+    # no pid file. A file that young is no killed start's, and stays.
+    state = tmp_path / "state"
+    state.mkdir()
+    me = psutil.Process(os.getpid())
+    real_replace = os.replace
+    cleanups = 0
+
+    def cleanup_then_replace(source: Path, target: Path) -> None:
+        nonlocal cleanups
+        cleanups += 1
+        with monkeypatch.context() as other_namespace:
+            other_namespace.setattr(psutil, "pid_exists", lambda _pid: False)
+            local_stack._remove_stale_temporaries(state, "otelcol")
+        real_replace(source, target)
+
+    monkeypatch.setattr(local_stack.os, "replace", cleanup_then_replace)
+    local_stack._save(state, "otelcol", me, ["x"], x1=False)
+    assert cleanups == 1
+    assert json.loads((state / "otelcol.pid.json").read_text())["pid"] == me.pid
+
+
+def test_a_temporary_file_removed_before_its_rename_is_written_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Removed by hand, or by a start that took it for a killed start's: the
+    # save writes it again rather than fail, leaving its service with no
+    # pid file.
+    state = tmp_path / "state"
+    state.mkdir()
+    me = psutil.Process(os.getpid())
+    real_replace = os.replace
+    removals = [True]
+
+    def removed_first(source: Path, target: Path) -> None:
+        if removals:
+            removals.pop()
+            os.unlink(source)
+        real_replace(source, target)
+
+    monkeypatch.setattr(local_stack.os, "replace", removed_first)
+    local_stack._save(state, "otelcol", me, ["x"], x1=False)
+    assert not removals
+    assert json.loads((state / "otelcol.pid.json").read_text())["pid"] == me.pid
+    assert not list(state.glob("*.tmp"))
 
 
 def test_a_zombie_service_is_not_running(
