@@ -448,28 +448,37 @@ def test_several_reservations_hold_the_span_until_none_is_open(
     assert whole["held"] == {}
 
 
-def test_a_hook_that_does_not_count_reservations_closes_no_live_span(
+def test_a_hook_that_does_not_count_reservations_closes_no_span(
     tmp_path: Path,
 ) -> None:
-    """A heartbeat without ``reserved`` (#217's hook, before reservations)
-    cannot say whether its pending records keep their order, so it closes a
-    span only on a read that holds every record the epoch wrote, never on
-    a live or prefix read; the coverage block says why."""
+    """A heartbeat without ``reserved`` (a build of this hook from before
+    the count) cannot say whether a record it was ahead of kept its place,
+    or one it did not count was lost after it: here a pause stamped before
+    heartbeat 2 was overtaken and then lost at write, so its log holds no
+    trace of it but the error count heartbeat 5 carries. No read closes a
+    span over it, not even the one that holds every record the epoch wrote,
+    and the coverage block says why."""
     records = [
         hello("engine", PID, START, observes=["pause"]),  # 0
-        heartbeat(T0, 0, queued=0),  # 1
-        heartbeat(T0 + SECOND, 1, queued=0),  # 2
-        heartbeat(T0 + 2 * SECOND, 2, queued=0),  # 3
+        heartbeat(T0, 0, pending=0),  # 1
+        heartbeat(T0 + SECOND, 1, pending=1),  # 2: the pause, still serializing
+        alias("a-1", "chatcmpl-a", T0 + SECOND + 5),  # 3: takes its place
+        heartbeat(T0 + 2 * SECOND, 3, pending=1),  # 4: the pause still to come
+        heartbeat(T0 + 3 * SECOND, 4, pending=0, errors=1),  # 5: it was lost
+        heartbeat(T0 + 4 * SECOND, 5, pending=0, errors=1),  # 6
     ]
     for record in records[1:]:
-        del record["reserved"]
+        record.pop("reserved", None)
+    ended = [*records, goodbye(T0 + 5 * SECOND, 6)]
 
-    live = _coverage(tmp_path / "live", records)
-    assert _spans(live) == []
-    assert live["held"] == {"reserved_unknown": 2}
-    ended = _coverage(tmp_path / "ended", [*records, goodbye(T0 + 3 * SECOND, 3)])
-    assert _spans(ended) == [(1, 3)]
-    assert ended["held"] == {}
+    for name, log, stopped in (
+        ("live", records, False),
+        ("stopped", records, True),
+        ("ended", ended, False),
+    ):
+        coverage = _coverage(tmp_path / name, log, server_stopped=stopped)
+        assert _spans(coverage) == [], name
+        assert coverage["held"] == {"reserved_unknown": 4}, name
 
 
 def test_a_span_reaches_past_every_heartbeat_among_its_pending_records(

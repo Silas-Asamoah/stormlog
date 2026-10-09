@@ -207,20 +207,20 @@ class EpochRead:
         while they were written. Some may still be reserved (``reserved``),
         not yet queued, and another thread's later record can overtake them:
         such a heartbeat closes its span only where the first later one with
-        nothing reserved does. A hook that does not say (from before the
-        count) closes spans only on a read that holds every record the
-        epoch wrote. ``held`` counts the heartbeats that closed no span for
-        either reason. Only in a span does a kind the hello ``observes``
+        nothing reserved does. A heartbeat that does not say (a hook from
+        before the count) closes no span: its pending records may have been
+        overtaken, or lost after it, unseen. ``held`` counts the heartbeats
+        whose reservations closed no span, by reason. Only in a span does a
+        kind the hello ``observes``
         prove absent by having no record, matched by the record's last
         stamp, taken just before it is emitted."""
         observes = (self.hello or {}).get("observes")
         spans: list[dict[str, int]] = []
         held: Counter[str] = Counter()
         beats = self.heartbeats
-        complete = self._complete()
         joined: int | None = None
         for index, (before, after) in enumerate(zip(beats, beats[1:])):
-            close, why = _close(after, beats[index + 2 :], complete)
+            close, why = _close(after, beats[index + 2 :])
             if why is not None:
                 held[why] += 1
             if close is None or not self._whole_between(
@@ -241,15 +241,6 @@ class EpochRead:
             "spans": spans,
             "held": dict(sorted(held.items())),
         }
-
-    def _complete(self) -> bool:
-        """The read holds every record the epoch wrote: it ended or is gone,
-        and nothing is missing up to the last sequence read."""
-        return (
-            self.state in (STATE_ENDED, STATE_GONE)
-            and self.contiguous_seq is not None
-            and self.contiguous_seq == self.last_seq
-        )
 
     def _whole_between(
         self,
@@ -553,7 +544,7 @@ def _losses(heartbeat: dict[str, Any]) -> tuple[Any, ...] | None:
 
 
 def _close(
-    heartbeat: RawRecord, later: Sequence[RawRecord], complete: bool
+    heartbeat: RawRecord, later: Sequence[RawRecord]
 ) -> tuple[int | None, str | None]:
     """The sequence by which the records a heartbeat was written ahead of
     are all written, or None and why while that is not known. Queued ones
@@ -562,16 +553,17 @@ def _close(
     and a record another thread reserves later may be queued first, so it
     is bounded only by the first later heartbeat with nothing reserved: by
     then it was queued or dropped. A heartbeat that does not say how many
-    are reserved bounds nothing unless the read holds every record."""
+    are reserved bounds nothing, whatever the read holds: a record it
+    counted, or did not, may have been overtaken and then lost at write."""
     reserved = _reserved(heartbeat.data)
-    if reserved is None and not complete:
+    if reserved is None:
         return None, "reserved_unknown"
     if reserved:
         settled = next((beat for beat in later if _reserved(beat.data) == 0), None)
         if settled is None:
             return None, "reserved_open"
         rest = [beat for beat in later if beat.seq > settled.seq]
-        return _close(settled, rest, complete)
+        return _close(settled, rest)
     return _through(heartbeat, later), None
 
 
