@@ -168,6 +168,27 @@ def test_a_saved_empty_command_line_compares_the_start_time_only(
     assert running is not None and running.pid == os.getpid()
 
 
+def test_a_service_started_through_a_wrapper_that_execs_is_still_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An override may name a wrapper that execs the real binary, as a macOS
+    # framework Python re-launches itself: the command line changes after
+    # start, and the one saved must be the one that lasts.
+    real = _fake_binary(tmp_path)
+    wrapper = tmp_path / "otelcol-wrapper"
+    wrapper.write_text(f"#!/bin/sh\nsleep 0.05\nexec '{real}'\n")
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setattr(local_stack, "STOP_SECONDS", 0.5)
+    state, pid = _started(tmp_path, monkeypatch, wrapper)
+    try:
+        assert local_stack.main(["stop", "otelcol", *state]) == 0
+        with pytest.raises(OSError):
+            os.kill(pid, 0)
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+
+
 def test_a_zombie_service_is_not_running(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
