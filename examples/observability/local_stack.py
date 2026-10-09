@@ -160,7 +160,8 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
                 start_new_session=True,
             )
         started = psutil.Process(process.pid)
-        _save(state, service.name, started, x1=x1)
+        first = _settled_cmdline(started)
+        _save(state, service.name, started, first, x1=x1)
         time.sleep(0.5)
         if process.poll() is not None:
             print(f"{service.name}: exited at once; see {state / service.name}.log")
@@ -169,19 +170,23 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
             # Saved again: a binary named through a wrapper that execs it,
             # or an interpreter that re-launches itself (a macOS framework
             # Python), has its lasting command line by now.
-            _save(state, service.name, started, x1=x1)
+            # One that has exited since reads empty: the first stays then.
+            lasting = _settled_cmdline(started) or first
+            _save(state, service.name, started, lasting, x1=x1)
             print(f"{service.name}: started, pid {process.pid}")
     return 1 if failed else 0
 
 
-def _save(state: Path, name: str, process: psutil.Process, *, x1: bool) -> None:
+def _save(
+    state: Path, name: str, process: psutil.Process, cmdline: list[str], *, x1: bool
+) -> None:
     """What _running later checks the pid against."""
     _pid_file(state, name).write_text(
         json.dumps(
             {
                 "pid": process.pid,
                 "started": process.create_time(),
-                "cmdline": _settled_cmdline(process),
+                "cmdline": cmdline,
                 "x1": x1,
             }
         )

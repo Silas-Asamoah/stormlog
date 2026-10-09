@@ -235,6 +235,29 @@ def test_a_wrapper_that_execs_after_the_start_check_is_still_stopped(
             os.kill(pid, signal.SIGKILL)
 
 
+def test_an_empty_second_read_keeps_the_first_command_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A service that exits just after start's check reads an empty command
+    # line at the second save; that must not replace the one already saved.
+    real_settled = local_stack._settled_cmdline
+    reads = 0
+
+    def second_read_empty(process: psutil.Process, wait: float = 2.0) -> list[str]:
+        nonlocal reads
+        reads += 1
+        return real_settled(process, wait) if reads == 1 else []
+
+    monkeypatch.setattr(local_stack, "_settled_cmdline", second_read_empty)
+    state, pid = _started(tmp_path, monkeypatch, _fake_binary(tmp_path))
+    try:
+        assert reads == 2
+        saved = json.loads((tmp_path / "state" / "otelcol.pid.json").read_text())
+        assert any(part.endswith("fake-otelcol") for part in saved["cmdline"])
+    finally:
+        local_stack.main(["stop", *state])
+
+
 def test_a_zombie_service_is_not_running(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
