@@ -404,7 +404,7 @@ Each attempt is classified by what is known:
 | --- | --- |
 | `confirmed` | a readable 200, which says how many spans were rejected |
 | `refused` | a 3xx (never followed), a 4xx, 429 or 503 |
-| `ambiguous` | the body was sent, then a timeout or reset; a 5xx other than 503; any 2xx other than 200; or a 200 whose body is unreadable, over 64 KiB, or claims an impossible rejection count |
+| `ambiguous` | the body was sent, then a timeout or reset; a 5xx other than 503; any 2xx other than 200; a 200 whose body is unreadable, over 64 KiB, or claims an impossible rejection count; or the end of the capture cut the attempt once its body had begun to leave, and its whole body then counts as sent bytes |
 | `not_sent` | the name did not resolve, the connection or TLS failed, or the body did not all leave |
 
 Timeouts, resets, 429, 502, 503, 504 and connection failures are retried,

@@ -65,8 +65,8 @@ STALL_SECONDS = 5.0
 
 class SpanSink(Protocol):
     """Where batches go. ``abort`` is final and says whether a body had left;
-    ``sending`` says so for the attempt in progress at the moment of asking,
-    and ``begin_attempt`` forgets the last attempt's answer to it."""
+    ``sending`` gives the size of the body the latest attempt began to send,
+    0 if it has not, and ``begin_attempt`` forgets it before the next one."""
 
     kind: str
 
@@ -76,7 +76,7 @@ class SpanSink(Protocol):
 
     def abort(self) -> bool: ...
 
-    def sending(self) -> bool: ...
+    def sending(self) -> int: ...
 
     def begin_attempt(self) -> None: ...
 
@@ -102,8 +102,8 @@ class HttpSink:
     def abort(self) -> bool:
         return self.transport.abort()
 
-    def sending(self) -> bool:
-        return self.transport.body_started
+    def sending(self) -> int:
+        return self.transport.body_bytes
 
     def begin_attempt(self) -> None:
         self.transport.begin_attempt()
@@ -133,10 +133,11 @@ class FileSink:
         self._lock = threading.Lock()
         self._aborted = False
         self._writing = False
-        # Whether the latest attempt began its write; kept until the next
-        # attempt begins, as the transport keeps its body_started, so a
-        # freeze before the write is recorded still counts it in flight.
-        self._write_began = False
+        # The size of the line the latest attempt began to write, 0 before
+        # it began; kept until the next attempt begins, as the transport
+        # keeps its body_bytes, so a freeze before the write is recorded
+        # still counts it in flight.
+        self._write_bytes = 0
         self._write_started = 0.0
 
     def start(self) -> None:
@@ -147,7 +148,7 @@ class FileSink:
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
             self._writing = True
-            self._write_began = True
+            self._write_bytes = len(body)
             self._write_started = time.monotonic()
         outcome = self.lines.write_line(body)
         with self._lock:
@@ -159,15 +160,15 @@ class FileSink:
     def abort(self) -> bool:
         with self._lock:
             self._aborted = True
-            return self._write_began
+            return self._write_bytes > 0
 
-    def sending(self) -> bool:
+    def sending(self) -> int:
         with self._lock:
-            return self._write_began
+            return self._write_bytes
 
     def begin_attempt(self) -> None:
         with self._lock:
-            self._write_began = False
+            self._write_bytes = 0
 
     def close(self) -> None:
         self.lines.close()
@@ -388,7 +389,8 @@ class SpanExporter(Generic[T]):
             transmission = self._send(body, history.spans)
             if transmission.aborted:
                 # Cut short by the close: the freeze settles the batch from
-                # whether its body had left, and nothing is retried.
+                # whether its body had left, and counts the attempt if it
+                # had. Nothing is retried.
                 return False
             self._last_attempt_at = time.monotonic()
             if not self.ledger.record(history, transmission):
@@ -554,6 +556,7 @@ class SpanExporter(Generic[T]):
     def summary(self) -> dict[str, Any]:
         queue = self.queue.stats()
         stats = self.stats
+        transmissions, retries, sent_bytes = self._attempt_figures()
         return {
             "spans": self.accounting(),
             "queue": {
@@ -563,12 +566,12 @@ class SpanExporter(Generic[T]):
                 "capacity_spans": queue.max_items,
                 "capacity_bytes": queue.max_bytes,
             },
-            "transmissions": dict(stats.transmissions),
+            "transmissions": transmissions,
             "categories": dict(stats.categories),
-            "retries": stats.retries,
+            "retries": retries,
             "batches": stats.batches,
             "encoded_bytes": stats.encoded_bytes,
-            "sent_bytes": stats.sent_bytes,
+            "sent_bytes": sent_bytes,
             "first_error": stats.first_error,
             "warnings": stats.warnings,
             "collector_message": stats.collector_message,
@@ -578,6 +581,25 @@ class SpanExporter(Generic[T]):
             "worker_cpu_seconds": stats.worker_cpu_seconds,
             "internal_errors": dict(stats.errors),
         }
+
+    def _attempt_figures(self) -> tuple[dict[str, int], int, int]:
+        """Transmissions, retries and sent bytes, with the attempt the close
+        cut once its body had begun to leave.
+
+        The worker never notes that attempt: the freeze settled it as one
+        more ambiguous transmission, and from then on it counts as one, its
+        whole body as sent however much of it had left. Its category, the
+        close's own doing, does not count.
+        """
+        stats = self.stats
+        transmissions = Counter(stats.transmissions)
+        retries, sent_bytes = stats.retries, stats.sent_bytes
+        cut = self.ledger.cut
+        if cut is not None:
+            transmissions[AMBIGUOUS] += 1
+            retries += cut.retry
+            sent_bytes += cut.sent_bytes
+        return dict(transmissions), retries, sent_bytes
 
     def _stalled(self) -> dict[str, bool]:
         try:

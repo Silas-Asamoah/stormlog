@@ -121,6 +121,15 @@ def dropped(reason: str, spans: int) -> Settlement:
     return Settlement(dropped=((reason, spans),))
 
 
+@dataclass(frozen=True)
+class CutAttempt:
+    """A transmission the freeze found sending its body: settled as one
+    more ambiguous transmission, whatever it returns later."""
+
+    retry: bool
+    sent_bytes: int
+
+
 class BatchHistory:
     """The transmissions of one batch, and the settlement they lead to."""
 
@@ -242,6 +251,8 @@ class DeliveryLedger:
         # starts after that, so none can begin after its abort was decided.
         self._attempts_closed = False
         self.frozen = False
+        # The transmission the freeze cut while it sent its body, if any.
+        self.cut: CutAttempt | None = None
 
     def take(self, spans: int) -> bool:
         with self._lock:
@@ -297,11 +308,12 @@ class DeliveryLedger:
             self._current = None
             return settlement
 
-    def freeze(self, *, drained: int, sending: Callable[[], bool]) -> None:
+    def freeze(self, *, drained: int, sending: Callable[[], int]) -> None:
         """Settle everything unfinished at shutdown, then freeze.
 
-        ``drained`` spans were still queued. ``sending`` says whether the
-        transmission in progress, if any, had begun to send its body.
+        ``drained`` spans were still queued. ``sending`` gives the size of
+        the body the transmission in progress, if any, had begun to send, 0
+        if it had not begun; one that had is kept as ``cut``.
         """
         with self._lock:
             if self.frozen:
@@ -312,9 +324,12 @@ class DeliveryLedger:
             if unbatched:
                 totals.add(dropped(SHUTDOWN, unbatched))
             self._pending = 0
-            if self._current is not None:
-                in_flight = self._attempting and sending()
-                totals.add(self._current.settle_at_freeze(sending=in_flight))
+            history = self._current
+            if history is not None:
+                began = sending() if self._attempting else 0
+                if began:
+                    self.cut = CutAttempt(history.attempts > 0, began)
+                totals.add(history.settle_at_freeze(sending=began > 0))
                 self._current = None
             self._attempting = False
             self.frozen = True
