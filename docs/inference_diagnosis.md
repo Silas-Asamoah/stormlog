@@ -401,7 +401,7 @@ interval); with no excess it reports `not_observed`.
 | Competitor | Indispensable | Ruled out when |
 | --- | --- | --- |
 | `engine_stall` | yes | engine-loop stalls over their limit, found by the same rules as the online `engine_loop_gap`, hold the median waiting request back for under 10% of the wait excess; up to half of it they are `contributing`. While the queue stays busy a stall postpones every later admission by its length, so a request is held by the stalls since its queue was last empty (anyone's request waiting), up to its own admission, and by one that ended at most its own length before then, since a request reaching the engine during a stall enters the queue only when the loop resumes, leaving a backlog that drains after it; never by more than its own wait. Stalls spread over a long saturation each hold the requests after them, so the median request is held by those before it, not by their sum. A host gap while only queued requests exist, none running, is no engine-loop stall (nothing was ready), so this competitor cannot see it |
-| `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else, without pause records, the longest stretch without an admission while a subject's request waited (the longest pause that could hide there, since a paused scheduler admits nobody) is under 10% of the wait excess; a longer one is `untestable`, since a full engine admits nobody either. Both are judged over the stretches in which a subject's request waited, not the calm between them |
+| `scheduler_paused` | yes | no pause transition overlaps the waits and the hook observes pauses with nothing lost over them; else, without pause records or where records may have been lost over them, the longest stretch without an admission while a subject's request waited (the longest pause that could hide there, since a paused scheduler admits nobody) is under 10% of the wait excess; a longer one is `untestable`, since a full engine admits nobody either. Both are judged over the stretches in which a subject's request waited, not the calm between them |
 | `blocked_waiting` | yes | every waiting request's `enqueued` record says it used neither structured output nor streaming input |
 | `engine_ingress` | yes | the `engine_ingress` excess is under 10% of the wait excess; from 10% to a quarter it is `contributing` (untestable on a log without `enqueued` records) |
 | `kv_preemption_pressure` | above half the excess | the subject's own allocation preemptions held its waits for under 10% of the wait excess: the median request's time waiting behind the subject's preempted requests, which vLLM puts back at the head of the queue until they resume. Another client's preemptions, and a reset's, are no evidence of the subject's KV pressure. Up to half the excess it is `contributing`; above that the queue is the KV finding's `secondary` when that finding is eligible (see Roles), and otherwise the competitor is `not_ruled_out` and indispensable: an observation of KV pressure establishes nothing upstream, yet waits spent mostly behind preempted requests are not the engine being full, whatever preempted them, so the queue makes no claim |
@@ -419,7 +419,13 @@ The metrics report the requests' share
 (`requests_waiting_at_capacity_share`), the steps' share counting late
 refills (`steps_at_capacity_share`), and the steps' share by their members
 alone (`steps_at_max_num_seqs_share`). The contribution claim also asks that
-the wait excess be at least half the TTFT excess. Without engine records the class is
+the wait excess be at least half the TTFT excess. The condition's coverage
+is observed only where one span of the hook's [loss
+coverage](vllm_execution.md) holds the waits, from the first entry into the
+queue to the last first schedule: a log whose heartbeats give no `reserved`
+count, #217's or an earlier build's, has no span on any read, a complete one
+included, so its condition, and with it `confidence.level`, is at most
+`medium`. Without engine records the class is
 `unsupported/no_server_queue_signal`; without a witness it is
 `partial/no_capacity_witness`; with requests on several engines,
 `unsupported/several_engines`.
