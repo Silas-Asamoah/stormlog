@@ -203,6 +203,12 @@ class OtlpHttpTransport:
         with self._lock:
             return self._aborted
 
+    def begin_attempt(self) -> None:
+        """Forget whether the last attempt's body began to leave; ``send``
+        does too, but the caller may need it done before ``send`` runs."""
+        with self._lock:
+            self._body_started = False
+
     @property
     def body_started(self) -> bool:
         """Whether the latest attempt began to send its body."""

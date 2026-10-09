@@ -65,7 +65,8 @@ STALL_SECONDS = 5.0
 
 class SpanSink(Protocol):
     """Where batches go. ``abort`` is final and says whether a body had left;
-    ``sending`` says so for the attempt in progress at the moment of asking."""
+    ``sending`` says so for the attempt in progress at the moment of asking,
+    and ``begin_attempt`` forgets the last attempt's answer to it."""
 
     kind: str
 
@@ -76,6 +77,8 @@ class SpanSink(Protocol):
     def abort(self) -> bool: ...
 
     def sending(self) -> bool: ...
+
+    def begin_attempt(self) -> None: ...
 
     def close(self) -> None: ...
 
@@ -101,6 +104,9 @@ class HttpSink:
 
     def sending(self) -> bool:
         return self.transport.body_started
+
+    def begin_attempt(self) -> None:
+        self.transport.begin_attempt()
 
     def close(self) -> None:
         self.transport.watchdog.stop()
@@ -153,6 +159,9 @@ class FileSink:
     def sending(self) -> bool:
         with self._lock:
             return self._writing
+
+    def begin_attempt(self) -> None:
+        """Nothing to forget: ``sending`` is the write in progress itself."""
 
     def close(self) -> None:
         self.lines.close()
@@ -363,7 +372,12 @@ class SpanExporter(Generic[T]):
     def _transmit(self, history: BatchHistory, body: bytes) -> bool:
         """Attempt until a transmission is final or no retry fits; False once frozen."""
         while True:
-            if not self._pause(self._probe_wait()) or not self.ledger.attempting():
+            if not self._pause(self._probe_wait()):
+                return False
+            # Before the ledger marks the attempt: a freeze from then on must
+            # not read the last attempt's "a body had left" for this one.
+            self.sink.begin_attempt()
+            if not self.ledger.attempting():
                 return False
             transmission = self._send(body, history.spans)
             if transmission.aborted:
