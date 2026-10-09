@@ -259,6 +259,22 @@ def test_the_breaker_opens_probes_and_closes() -> None:
     assert exporter.accounting()["refused"] == {"http_4xx": 3}
 
 
+def _settled_as_aborted(exporter: SpanExporter[int], spans: int) -> bool:
+    """The batch whose send the close aborted, settled one of the two ways.
+
+    The freeze may settle it first, as shutdown_in_flight, and the aborted
+    attempt's answer then comes back late; or the worker sees the reset
+    first and settles it itself, as reset_after_send, before the freeze.
+    Either way the spans are unknown, never exported or dropped.
+    """
+    unknown = exporter.accounting()["unknown"]
+    if unknown == {"reset_after_send": spans}:
+        return bool(exporter.accounting()["late_results"] == {})
+    return unknown == {"shutdown_in_flight": spans} and _wait(
+        lambda: exporter.accounting()["late_results"] == {"ambiguous": 1}
+    )
+
+
 def test_close_cuts_a_stuck_send_and_counts_it_unknown() -> None:
     with running([Reply(action=SILENT)]) as collector:
         exporter = _exporter(collector.url, attempt_seconds=30.0)
@@ -273,12 +289,10 @@ def test_close_cuts_a_stuck_send_and_counts_it_unknown() -> None:
         elapsed = time.monotonic() - started
         assert elapsed < 1.5
         accounting = exporter.accounting()
-        assert accounting["unknown"] == {"shutdown_in_flight": 5}
+        assert _settled_as_aborted(exporter, 5)
         assert accounting["dropped"] == {"shutdown": 2}
         assert accounting["max_extra_copies"] == 0
         assert _balanced(accounting) and accounting["in_flight"] == 0
-        # The aborted attempt's answer comes back after the freeze: late.
-        assert _wait(lambda: exporter.accounting()["late_results"] == {"ambiguous": 1})
     assert exporter.summary()["flush_seconds"] < 1.5
 
 
@@ -316,8 +330,10 @@ def test_an_interrupt_in_the_close_s_wait_still_finishes_the_close(
         accounting = exporter.accounting()
         assert accounting["frozen"] and _balanced(accounting)
         assert accounting["queued"] == accounting["in_flight"] == 0
-        assert accounting["unknown"] == {"shutdown_in_flight": 5}
-        assert accounting["dropped"] == {"shutdown": 2}
+        assert _settled_as_aborted(exporter, 5)
+        # Drained at the freeze, or taken by the worker into a send the
+        # aborted transport refuses: dropped either way.
+        assert sum(accounting["dropped"].values()) == 2
         exporter.close(5.0)  # already closed: nothing left to do
 
 
