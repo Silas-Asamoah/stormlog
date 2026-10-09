@@ -93,13 +93,37 @@ def _running(state: Path, name: str) -> psutil.Process | None:
         saved = json.loads(path.read_text())
         process = psutil.Process(int(saved["pid"]))
         moved = abs(process.create_time() - float(saved["started"]))
-        if moved > START_TOLERANCE_SECONDS or process.cmdline() != saved["cmdline"]:
+        cmdline = saved["cmdline"]
+        # An empty command line is no evidence either way (see
+        # _settled_cmdline), so only the start time is compared then.
+        if moved > START_TOLERANCE_SECONDS or (
+            cmdline and process.cmdline() not in (cmdline, [])
+        ):
             return None  # the pid now belongs to another process
         if process.status() == psutil.STATUS_ZOMBIE:
             return None
         return process
     except (OSError, ValueError, KeyError, psutil.Error):
         return None
+
+
+def _settled_cmdline(process: psutil.Process, wait: float = 2.0) -> list[str]:
+    """The command line, once exec has set it up.
+
+    On Linux, Popen returns once exec has closed the child's close-on-exec
+    descriptors, a moment before the new program's arguments are in place;
+    a read in that window is empty, and saved so, the service would later
+    look like another process.
+    """
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            cmdline: list[str] = process.cmdline()
+        except psutil.Error:
+            return []
+        if cmdline or time.monotonic() > deadline:
+            return cmdline
+        time.sleep(0.01)
 
 
 def start(state: Path, *, x1: bool, only: set[str]) -> int:
@@ -129,7 +153,7 @@ def start(state: Path, *, x1: bool, only: set[str]) -> int:
                 {
                     "pid": process.pid,
                     "started": started.create_time(),
-                    "cmdline": started.cmdline(),
+                    "cmdline": _settled_cmdline(started),
                     "x1": x1,
                 }
             )
