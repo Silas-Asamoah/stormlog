@@ -66,6 +66,21 @@ START_SLACK_SECONDS = 2.0
 # left of START_SLACK_SECONDS is room for its first poll's walk, during which
 # an orphan of the launch could start a process and leave, unseen.
 BOUND_WINDOW_SECONDS = START_SLACK_SECONDS - 1.0
+# The clock a launch's run is timed by. On Linux it counts a suspend, as the
+# start ticks in /proc do, so how long a leader ran is in the same time as
+# when its processes started. Elsewhere it is the monotonic clock, and psutil
+# gives starts in wall time: a sleep or a clock step between them moves the
+# late-start bound by as much.
+_LAUNCH_CLOCK = getattr(time, "CLOCK_BOOTTIME", None)
+
+
+def launch_clock() -> float:
+    """Seconds by the clock a launch's run is timed by (``_LAUNCH_CLOCK``)."""
+    if _LAUNCH_CLOCK is None:
+        return time.monotonic()
+    return time.clock_gettime(_LAUNCH_CLOCK)
+
+
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 # What ``identify`` records as a process's start: ticks since boot from
 # /proc, or psutil's creation time.
@@ -89,8 +104,8 @@ class Launched:
     stopped_by: str | None = None
     # Its PID and start time, read as it started (``identify``).
     identity: dict[str, Any] = field(default_factory=dict)
-    # The monotonic clock at its start and at its end, for how long it ran.
-    started_monotonic: float = field(default_factory=time.monotonic)
+    # The launch clock at its start and at its end, for how long it ran.
+    started_monotonic: float = field(default_factory=lambda: launch_clock())
     # Where it was journaled, if it was.
     journal: Path | None = None
     ended_monotonic: float | None = None
@@ -104,7 +119,7 @@ class Launched:
         code = self.process.poll()
         if code is not None and self.ended_at_ns is None:
             self.ended_at_ns = time.time_ns()
-            self.ended_monotonic = time.monotonic()
+            self.ended_monotonic = launch_clock()
             self.exit_code = code
             self._close_log()
         return code
@@ -124,7 +139,7 @@ class Launched:
         lasted = self.lasted_s()
         if lasted is None or self.ended_monotonic is None:
             return None
-        if time.monotonic() - self.ended_monotonic > BOUND_WINDOW_SECONDS:
+        if launch_clock() - self.ended_monotonic > BOUND_WINDOW_SECONDS:
             return None
         return lasted
 
@@ -980,6 +995,7 @@ __all__ = [
     "journaled",
     "listens",
     "launch",
+    "launch_clock",
     "parse_cpu_list",
     "remembered_tree",
     "run_step",

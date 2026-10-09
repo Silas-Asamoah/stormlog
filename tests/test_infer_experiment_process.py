@@ -25,6 +25,7 @@ from stormlog.infer.experiment_process import (
     identify,
     journaled,
     launch,
+    launch_clock,
     parse_cpu_list,
     remembered_tree,
     run_step,
@@ -860,11 +861,33 @@ def test_a_late_start_is_bounded_only_by_a_check_begun_within_a_second_of_the_ex
     launched.poll()
     assert launched.ended_monotonic is not None
     seen = launched.ended_monotonic
-    for ago, bounded in ((0.5, True), (1.5, False), (2.5, False)):
-        launched.ended_monotonic = time.monotonic() - ago
+    # 1.99 s: gate-213-close's NF5, the sliver a 2 s window left at its end,
+    # where /proc's start ticks (floored, taken at fork) put the bound's edge
+    # a tick or so before the window's.
+    for ago, bounded in ((0.5, True), (1.5, False), (1.99, False), (2.5, False)):
+        launched.ended_monotonic = launch_clock() - ago
         launched.started_monotonic = launched.ended_monotonic - 0.2
         assert (launched.bound_s() is not None) is bounded, ago
     launched.ended_monotonic = seen
+
+
+def test_a_launch_is_timed_by_the_clock_its_processes_start_by(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # gate-213-close's NF5: Linux's start ticks count a suspend, which the
+    # monotonic clock does not, so a suspend in a leader's run moved the
+    # late-start bound earlier by as much. On Linux a launch is timed by
+    # CLOCK_BOOTTIME, which counts it too.
+    from stormlog.infer import experiment_process as ep
+
+    if sys.platform == "linux":
+        assert ep._LAUNCH_CLOCK == getattr(time, "CLOCK_BOOTTIME")
+    readings = iter([100.0, 105.0])
+    monkeypatch.setattr(ep, "launch_clock", lambda: next(readings))
+    launched = launch("step", [sys.executable, "-c", "pass"])
+    launched.process.wait(timeout=5)
+    launched.poll()
+    assert launched.lasted_s() == 5.0
 
 
 def test_a_late_start_clears_nothing_once_the_leaders_exit_was_seen_long_before(
