@@ -133,6 +133,10 @@ class FileSink:
         self._lock = threading.Lock()
         self._aborted = False
         self._writing = False
+        # Whether the latest attempt began its write; kept until the next
+        # attempt begins, as the transport keeps its body_started, so a
+        # freeze before the write is recorded still counts it in flight.
+        self._write_began = False
         self._write_started = 0.0
 
     def start(self) -> None:
@@ -143,6 +147,7 @@ class FileSink:
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
             self._writing = True
+            self._write_began = True
             self._write_started = time.monotonic()
         outcome = self.lines.write_line(body)
         with self._lock:
@@ -154,14 +159,15 @@ class FileSink:
     def abort(self) -> bool:
         with self._lock:
             self._aborted = True
-            return self._writing
+            return self._write_began
 
     def sending(self) -> bool:
         with self._lock:
-            return self._writing
+            return self._write_began
 
     def begin_attempt(self) -> None:
-        """Nothing to forget: ``sending`` is the write in progress itself."""
+        with self._lock:
+            self._write_began = False
 
     def close(self) -> None:
         self.lines.close()

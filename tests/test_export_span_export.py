@@ -733,6 +733,48 @@ def test_the_file_sink_writes_otlp_json_lines(tmp_path: Path) -> None:
     assert source == SPAN_SOURCE_OTLP_JSON and len(spans) == 10
 
 
+def test_a_line_written_whole_before_the_freeze_is_not_counted_dropped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gate's probe: the file sink writes the batch's line whole, and the
+    # close freezes before the worker records it. The freeze read the write
+    # as finished, so not sending, and counted the written spans dropped.
+    path = tmp_path / "spans.jsonl"
+    exporter = _file_exporter(path)
+    sink = exporter.sink
+    real_send = sink.send
+    written, frozen = threading.Event(), threading.Event()
+
+    def send(body: bytes, *, spans: int) -> Transmission:
+        outcome = real_send(body, spans=spans)
+        written.set()
+        frozen.wait(3.0)
+        return outcome
+
+    monkeypatch.setattr(sink, "send", send)
+    real_freeze = exporter.ledger.freeze
+
+    def freeze(**kwargs: Any) -> None:
+        real_freeze(**kwargs)
+        frozen.set()
+
+    monkeypatch.setattr(exporter.ledger, "freeze", freeze)
+    _offer(exporter, 5)
+    exporter.start()
+    assert written.wait(5)
+    _interrupt_the_wait(exporter, monkeypatch)
+    with pytest.raises(KeyboardInterrupt):
+        exporter.close(5.0)
+    worker = exporter._worker
+    assert worker is not None
+    worker.join(5)
+    accounting = exporter.accounting()
+    # One batch of four written; the fifth span never left the queue.
+    assert len(path.read_text().splitlines()) == 1
+    assert accounting["unknown"] == {"shutdown_in_flight": 4}
+    assert accounting["dropped"] == {"shutdown": 1} and _balanced(accounting)
+
+
 def test_a_failed_file_write_drops_its_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
