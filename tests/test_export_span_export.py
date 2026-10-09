@@ -260,18 +260,20 @@ def test_the_breaker_opens_probes_and_closes() -> None:
 
 
 def _settled_as_aborted(exporter: SpanExporter[int], spans: int) -> bool:
-    """The batch whose send the close aborted, settled one of the two ways.
+    """The batch whose send the close aborted, settled by the freeze alone.
 
-    The freeze may settle it first, as shutdown_in_flight, and the aborted
-    attempt's answer then comes back late; or the worker sees the reset
-    first and settles it itself, as reset_after_send, before the freeze.
-    Either way the spans are unknown, never exported or dropped.
+    The aborted attempt's reset is the sender's own, so the worker leaves
+    the batch to the freeze, which counts it unknown as shutdown_in_flight;
+    nothing comes back late, and nothing claims an extra copy.
     """
-    unknown = exporter.accounting()["unknown"]
-    if unknown == {"reset_after_send": spans}:
-        return bool(exporter.accounting()["late_results"] == {})
-    return unknown == {"shutdown_in_flight": spans} and _wait(
-        lambda: exporter.accounting()["late_results"] == {"ambiguous": 1}
+    worker = exporter._worker
+    assert worker is not None
+    worker.join(5)
+    accounting = exporter.accounting()
+    return bool(
+        accounting["unknown"] == {"shutdown_in_flight": spans}
+        and accounting["late_results"] == {}
+        and accounting["max_extra_copies"] == 0
     )
 
 
@@ -331,9 +333,7 @@ def test_an_interrupt_in_the_close_s_wait_still_finishes_the_close(
         assert accounting["frozen"] and _balanced(accounting)
         assert accounting["queued"] == accounting["in_flight"] == 0
         assert _settled_as_aborted(exporter, 5)
-        # Drained at the freeze, or taken by the worker into a send the
-        # aborted transport refuses: dropped either way.
-        assert sum(accounting["dropped"].values()) == 2
+        assert accounting["dropped"] == {"shutdown": 2}
         exporter.close(5.0)  # already closed: nothing left to do
 
 
@@ -370,12 +370,8 @@ def test_a_retry_refused_after_the_abort_claims_no_extra_copy(
         _interrupt_the_wait(exporter, monkeypatch)
         with pytest.raises(KeyboardInterrupt):
             exporter.close(5.0)
-        worker = exporter._worker
-        assert worker is not None
-        worker.join(5)
-        accounting = exporter.accounting()
-        assert accounting["max_extra_copies"] == 0
-        assert sum(accounting["unknown"].values()) == 5 and _balanced(accounting)
+        assert not retried.is_set()  # the aborted attempt is not retried
+        assert _settled_as_aborted(exporter, 5) and _balanced(exporter.accounting())
         assert len(collector.received) == 1
 
 
