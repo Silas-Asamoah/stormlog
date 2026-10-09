@@ -368,6 +368,35 @@ def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
     assert _actuation(attempt) == "interrupted_by_other"
 
 
+def test_a_pulse_continued_before_its_stop_was_seen_reads_interrupted_by_other(
+    tmp_path: Path,
+) -> None:
+    # gate-221, F2's product half: a pulse someone continued before the
+    # pulser saw its stop raised "did not stop", and the episode read as a
+    # failed actuation. It is named as continued by another now, and the
+    # episode's actuation is interrupted_by_other.
+    from types import SimpleNamespace
+    from typing import cast
+
+    from examples.qualification.inject import InjectionRun, Server, _actuation
+    from examples.qualification.plan import parse_plan
+    from examples.qualification.pulser import ContinuedByOther
+    from examples.qualification.run_dir import RunDirectory
+
+    record = json.loads(_plan(tmp_path / "plan.json").read_text())
+    plan = parse_plan({**record, "episodes": [{"type": "F4a"}]})
+    run = InjectionRun(
+        plan, RunDirectory(tmp_path / "runs", "q221-z"), Server("", "m", tmp_path, {})
+    )
+    cut = {"stop_sent_ns": 1, "stopped_ns": None, "completed": False}
+    run._pulser = cast(Any, SimpleNamespace(pulses=[], cut_short=cut))
+    error = ContinuedByOther("continued_by_other: pid 1 ran on after its SIGSTOP")
+    injected = run._failed(plan.episodes[0], error)
+    assert injected["interrupted_by_other"] == [0]
+    attempt = cast(Any, SimpleNamespace(actuated=False, injected=injected))
+    assert _actuation(attempt) == "interrupted_by_other"
+
+
 @pytest.mark.parametrize("hung", [True, False])
 def test_the_next_episode_waits_while_the_engine_looks_hung(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hung: bool

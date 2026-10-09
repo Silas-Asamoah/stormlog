@@ -419,6 +419,44 @@ def test_a_stop_that_never_takes_is_refused() -> None:
         child.wait()
 
 
+@pytest.mark.parametrize("act", ["kill", "continue"])
+def test_a_stop_ended_before_the_pulser_saw_it_says_what_happened(
+    monkeypatch: pytest.MonkeyPatch, act: str
+) -> None:
+    # gate-221, F1 and F2: the pulser's first status read can come before
+    # the kernel shows the stop. If the target is killed, or continued by
+    # someone else, before a later read sees it stopped, every read after
+    # shows it gone or running, and the pulser spun for 1 s and said "did
+    # not stop". Here its reads never see the stop (as a slow read would
+    # miss it) while another thread kills or continues the target as soon
+    # as it is stopped: the refusal now says it is gone, or continued by
+    # another.
+    from examples.qualification.pulser import ContinuedByOther
+
+    target = subprocess.Popen([sys.executable, "-c", LOOP], start_new_session=True)
+
+    def act_once_stopped() -> None:
+        process = psutil.Process(target.pid)
+        assert wait_until(lambda: process.status() == psutil.STATUS_STOPPED, timeout=30)
+        if act == "kill":
+            target.kill()
+            target.wait()
+        else:
+            os.kill(target.pid, signal.SIGCONT)
+
+    monkeypatch.setattr(Target, "is_stopped", lambda self: False)
+    expected = TargetGone if act == "kill" else ContinuedByOther
+    prefix = "^target_gone: " if act == "kill" else "^continued_by_other: "
+    try:
+        with Pulser(Target.of(target.pid), watchdog=False) as pulser:
+            threading.Thread(target=act_once_stopped, daemon=True).start()
+            with pytest.raises(expected, match=prefix):
+                pulser.pulse(0.3)
+    finally:
+        target.kill()
+        target.wait()
+
+
 # ------------------------------------------------------------------ pulse timing
 
 

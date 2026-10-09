@@ -82,7 +82,7 @@ from .fake_engine.process import _environment
 from .neighbor import Neighbor
 from .outcomes import Slo, count_outcomes
 from .plan import POLL_SECONDS, EpisodePlan, Plan
-from .pulser import Pulser, Target, handle_termination
+from .pulser import ContinuedByOther, Pulser, Target, handle_termination
 from .reference import ReferenceChannel
 from .run_dir import RunDirectory
 from .victim import read_marker
@@ -395,7 +395,7 @@ class InjectionRun:
             actions, actuated, injected = self._actuate(index, episode)
         except Exception as error:  # a failed actuation: not actuated, on record
             actions, actuated = Actions(), False
-            injected = {**self._done_so_far(episode), "error": repr(error)}
+            injected = self._failed(episode, error)
         except BaseException:
             # Interrupted mid-action: what was done goes on record before the
             # run is published, then the interruption goes on.
@@ -432,6 +432,17 @@ class InjectionRun:
             actions_record, added_mechanisms(episode.type, checks),
             observation_of(checks),
         )  # fmt: skip
+
+    def _failed(self, episode: EpisodePlan, error: Exception) -> dict[str, Any]:
+        """What an actuation that raised did, with its error. A pulse someone
+        continued before its stop was seen is named, as one continued during
+        its hold is (gate-221, F2): the episode's actuation reads
+        interrupted_by_other, not failed."""
+        injected = {**self._done_so_far(episode), "error": repr(error)}
+        pulses = injected.get("pulses") or []
+        if isinstance(error, ContinuedByOther) and pulses:
+            injected["interrupted_by_other"] = [len(pulses) - 1]
+        return injected
 
     def _done_so_far(self, episode: EpisodePlan) -> dict[str, Any]:
         """What an episode cut short did: its dose, the pulses that
