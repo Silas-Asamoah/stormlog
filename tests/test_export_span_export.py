@@ -300,6 +300,51 @@ def test_close_cuts_a_stuck_send_and_counts_it_unknown() -> None:
     assert exporter.summary()["flush_seconds"] < 1.5
 
 
+@pytest.mark.parametrize("retry", [False, True])
+def test_the_attempt_the_close_cut_counts_before_close_returns(
+    monkeypatch: pytest.MonkeyPatch, retry: bool
+) -> None:
+    # The gate's probe: the worker counted the attempt the close cut only
+    # once it got back, after close() had returned, so a summary read at
+    # once left it out, and a cut retry was not counted as a retry. The
+    # freeze counts it: one ambiguous transmission, with its body's bytes.
+    # The worker is held after its send here, so it can count nothing.
+    replies = [Reply(503, store=False)] if retry else []
+    with running([*replies, Reply(action=SILENT)]) as collector:
+        exporter = _exporter(collector.url, attempt_seconds=30.0)
+        transport = exporter.sink.transport  # type: ignore[attr-defined]
+        sizes: list[int] = []
+        held = threading.Event()
+        real_send = transport.send
+
+        def send(body: bytes, *, spans: int) -> Any:
+            outcome = real_send(body, spans=spans)
+            sizes.append(outcome.sent_bytes)
+            if outcome.aborted:
+                held.wait(5.0)
+            return outcome
+
+        monkeypatch.setattr(transport, "send", send)
+        _offer(exporter, 5)
+        exporter.start()
+        assert _wait(lambda: len(collector.received) == len(replies) + 1)
+        exporter.close(0.2)
+        summary = exporter.summary()
+        held.set()
+        worker = exporter._worker
+        assert worker is not None
+        worker.join(5)
+        after = exporter.summary()
+    expected = {"refused": 1, "ambiguous": 1} if retry else {"ambiguous": 1}
+    assert summary["transmissions"] == expected
+    assert summary["retries"] == int(retry)
+    assert summary["sent_bytes"] == sum(sizes) > 0
+    assert summary["categories"] == ({"throttled": 1} if retry else {})
+    # The worker, once back, adds nothing: the attempt counts once.
+    for figure in ("transmissions", "retries", "sent_bytes"):
+        assert after[figure] == summary[figure]
+
+
 def _interrupt_the_wait(
     exporter: SpanExporter[int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -430,6 +475,12 @@ def test_a_retry_not_yet_sending_is_not_taken_for_its_last_attempt(
         else:
             assert accounting["refused"] == {"throttled": 5}
             assert accounting["unknown"] == {}
+        # Refused before its body began to leave, the retry was no
+        # transmission: only the first attempt counts.
+        summary = exporter.summary()
+        first_kind = "ambiguous" if first == "reset" else "refused"
+        assert summary["transmissions"] == {first_kind: 1}
+        assert summary["retries"] == 0
 
 
 def test_a_close_while_the_worker_connects_sends_nothing_and_leaks_nothing(
@@ -472,7 +523,10 @@ def test_a_close_while_the_worker_connects_sends_nothing_and_leaks_nothing(
         assert len(collector.received) == 0
         assert accounting["dropped"] == {"shutdown": 5} and _balanced(accounting)
         assert accounting["late_results"] == {}
-        assert exporter.summary()["internal_errors"] == {}
+        summary = exporter.summary()
+        assert summary["internal_errors"] == {}
+        # Refused before it connected: no transmission, no bytes.
+        assert summary["transmissions"] == {} and summary["sent_bytes"] == 0
         assert closed and all(sock.fileno() == -1 for sock in closed)
 
 
@@ -776,6 +830,49 @@ def test_a_line_written_whole_before_the_freeze_is_not_counted_dropped(
     assert len(path.read_text().splitlines()) == 1
     assert accounting["unknown"] == {"shutdown_in_flight": 4}
     assert accounting["dropped"] == {"shutdown": 1} and _balanced(accounting)
+    # The line counts as one ambiguous transmission, as the freeze settled it.
+    summary = exporter.summary()
+    assert summary["transmissions"] == {"ambiguous": 1}
+    assert summary["sent_bytes"] == len(path.read_bytes().rstrip(b"\n"))
+
+
+def test_a_file_attempt_refused_before_its_line_began_counts_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fable's probe: the worker is held between marking the attempt and the
+    # file sink's send, and the close freezes then. The sink refuses the
+    # write, no line began, and the attempt is no transmission.
+    path = tmp_path / "spans.jsonl"
+    exporter = _file_exporter(path)
+    sink = exporter.sink
+    real_send = sink.send
+    in_window, frozen = threading.Event(), threading.Event()
+
+    def send(body: bytes, *, spans: int) -> Transmission:
+        in_window.set()
+        frozen.wait(3.0)
+        return real_send(body, spans=spans)
+
+    monkeypatch.setattr(sink, "send", send)
+    real_freeze = exporter.ledger.freeze
+
+    def freeze(**kwargs: Any) -> None:
+        real_freeze(**kwargs)
+        frozen.set()
+
+    monkeypatch.setattr(exporter.ledger, "freeze", freeze)
+    _offer(exporter, 5)
+    exporter.start()
+    assert in_window.wait(5)
+    exporter.close(0.2)
+    worker = exporter._worker
+    assert worker is not None
+    worker.join(5)
+    accounting = exporter.accounting()
+    assert path.read_text() == ""
+    assert accounting["dropped"] == {"shutdown": 5} and _balanced(accounting)
+    summary = exporter.summary()
+    assert summary["transmissions"] == {} and summary["sent_bytes"] == 0
 
 
 def test_a_failed_file_write_drops_its_batch(

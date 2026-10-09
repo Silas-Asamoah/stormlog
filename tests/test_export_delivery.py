@@ -16,6 +16,7 @@ from stormlog._export.delivery import (
     SHUTDOWN_IN_FLIGHT,
     BatchHistory,
     Breaker,
+    CutAttempt,
     DeliveryLedger,
     RetryPolicy,
     Settlement,
@@ -189,7 +190,7 @@ def test_the_freeze_settles_the_batch_in_flight_once() -> None:
     ledger.begin(batch)
     ledger.attempting()
     # Five spans still building, three still queued, and a send in progress.
-    ledger.freeze(drained=3, sending=lambda: True)
+    ledger.freeze(drained=3, sending=lambda: 700)
     snap: dict[str, Any] = ledger.snapshot()
     assert snap["unknown"] == {SHUTDOWN_IN_FLIGHT: 10}
     assert snap["dropped"] == {SHUTDOWN: 8}
@@ -203,8 +204,25 @@ def test_the_freeze_settles_the_batch_in_flight_once() -> None:
     assert after["late_results"] == {CONFIRMED: 1}
     assert after["unknown"] == snap["unknown"] and after["exported"] == 0
     # A second freeze is a no-op.
-    ledger.freeze(drained=5, sending=lambda: True)
+    ledger.freeze(drained=5, sending=lambda: 700)
     assert ledger.snapshot()["dropped"] == {SHUTDOWN: 8}
+
+
+@pytest.mark.parametrize(("recorded", "began"), [(0, 0), (0, 700), (1, 700)])
+def test_the_freeze_keeps_the_transmission_it_cut(recorded: int, began: int) -> None:
+    # A transmission that had begun to send its body is kept, so its figures
+    # count from the freeze on; one that had not is not a transmission.
+    ledger = DeliveryLedger()
+    ledger.take(10)
+    batch = BatchHistory(10)
+    ledger.begin(batch)
+    for _ in range(recorded):
+        ledger.attempting()
+        ledger.record(batch, LOST_ACK)
+    ledger.attempting()
+    ledger.freeze(drained=0, sending=lambda: began)
+    expected = CutAttempt(retry=recorded > 0, sent_bytes=began) if began else None
+    assert ledger.cut == expected
 
 
 def test_a_batch_between_attempts_settles_by_its_history() -> None:
@@ -216,9 +234,9 @@ def test_a_batch_between_attempts_settles_by_its_history() -> None:
     ledger.record(batch, LOST_ACK)
     asked: list[bool] = []
 
-    def sending() -> bool:
+    def sending() -> int:
         asked.append(True)
-        return True
+        return 700
 
     ledger.freeze(drained=0, sending=sending)
     # Not attempting at the freeze, so the sink is not even asked.

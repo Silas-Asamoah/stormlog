@@ -189,9 +189,10 @@ class OtlpHttpTransport:
         self._aborted = False
         # Only the sending thread reads or changes it.
         self._connect_failures = 0
-        # Whether the latest attempt began to send its body; kept until the
-        # next attempt starts, so a late reader still sees it.
-        self._body_started = False
+        # The size of the body the latest attempt began to send, 0 before
+        # it began; kept until the next attempt starts, so a late reader
+        # still sees it.
+        self._body_bytes = 0
 
     def start(self, wait: float = 2.0) -> bool:
         """Resolve the destination, waiting at most ``wait`` seconds."""
@@ -204,16 +205,16 @@ class OtlpHttpTransport:
             return self._aborted
 
     def begin_attempt(self) -> None:
-        """Forget whether the last attempt's body began to leave; ``send``
-        does too, but the caller may need it done before ``send`` runs."""
+        """Forget the last attempt's body; ``send`` does too, but the caller
+        may need it done before ``send`` runs."""
         with self._lock:
-            self._body_started = False
+            self._body_bytes = 0
 
     @property
-    def body_started(self) -> bool:
-        """Whether the latest attempt began to send its body."""
+    def body_bytes(self) -> int:
+        """The size of the body the latest attempt began to send, or 0."""
         with self._lock:
-            return self._body_started
+            return self._body_bytes
 
     def send(self, body: bytes, *, spans: int) -> Transmission:
         """Export ``body``, holding ``spans`` spans, in one attempt.
@@ -222,7 +223,7 @@ class OtlpHttpTransport:
         the reset or the refusal is the sender's own, not the collector's.
         """
         with self._lock:
-            self._body_started = False
+            self._body_bytes = 0
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
         try:
@@ -261,7 +262,7 @@ class OtlpHttpTransport:
         with self._lock:
             self._aborted = True
             sock = self._current
-            started = self._body_started
+            started = self._body_bytes > 0
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -366,7 +367,7 @@ class OtlpHttpTransport:
         with self._lock:
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED)
-            self._body_started = True
+            self._body_bytes = len(body)
         try:
             connection.request(
                 "POST", self.destination.target, body=body, headers=self._headers
