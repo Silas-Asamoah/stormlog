@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import psutil
 import pytest
@@ -264,12 +264,39 @@ def test_a_target_replaced_since_the_run_began_is_never_pulsed(
         stand_in.wait()
 
 
-def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> None:
+def _after_the_stop_is_confirmed(
+    monkeypatch: pytest.MonkeyPatch, act: Callable[[], None]
+) -> None:
+    """Run ``act`` in a thread once the pulser has confirmed its first stop.
+    Acting on the target's own STOPPED state raced the pulser's first read
+    (gate-221, F1 and F2: 4 runs in 30): the stop could end before the
+    pulser saw it."""
+    import threading
+
+    from examples.qualification import pulser as pulser_module
+
+    real = pulser_module.Pulser._confirm_stopped
+    confirmed = threading.Event()
+
+    def confirm(self: Any, stop_sent: int) -> int:
+        seen = real(self, stop_sent)
+        confirmed.set()
+        return seen
+
+    def wait_then_act() -> None:
+        if confirmed.wait(30):
+            act()
+
+    monkeypatch.setattr(pulser_module.Pulser, "_confirm_stopped", confirm)
+    threading.Thread(target=wait_then_act, daemon=True).start()
+
+
+def test_the_pulse_a_failure_cut_short_is_in_what_was_done(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Fable's and rev-220-a's second A2 deltas: the engine went through a
     # stop that a failure cut short (here its process killed mid-pulse),
     # but the truth listed completed pulses only.
-    import threading
-
     from examples.qualification.inject import InjectionRun, Server
     from examples.qualification.plan import parse_plan
     from examples.qualification.pulser import PulseRefused, Target
@@ -285,23 +312,12 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> No
         stand_in.kill()
         stand_in.wait()
 
-    def kill_once_stopped() -> None:
-        # Inside the first 300 ms pulse, however long the watchdog took to
-        # start: a fixed timer killed the target before its first stop when
-        # the host was loaded.
-        process = psutil.Process(stand_in.pid)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if process.status() == psutil.STATUS_STOPPED:
-                break
-            time.sleep(0.002)
-        kill()
-
     try:
         target = Target.of(stand_in.pid, "engine_core")
         server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
         run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-x"), server)
-        threading.Thread(target=kill_once_stopped, daemon=True).start()
+        # Inside the first 300 ms pulse, once its stop is confirmed.
+        _after_the_stop_is_confirmed(monkeypatch, kill)
         with pytest.raises(PulseRefused, match="^target_gone: .* exited during"):
             run._pulse(plan.episodes[0])
         done = run._done_so_far(plan.episodes[0])
@@ -312,13 +328,12 @@ def test_the_pulse_a_failure_cut_short_is_in_what_was_done(tmp_path: Path) -> No
 
 
 def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # rev-220-a's final A2 delta-2 note: nothing read continued_by_other.
     # A pulse someone else continued wasn't the stop the dose asked for, so
     # the episode is not actuated, with actuation interrupted_by_other (the
     # lead's ruling), and its record names the pulse.
-    import threading
     from types import SimpleNamespace
     from typing import cast
 
@@ -333,20 +348,14 @@ def test_a_pulse_continued_by_someone_else_leaves_the_episode_not_actuated(
     loop = "import time\nwhile True:\n    time.sleep(0.01)\n"
     stand_in = subprocess.Popen([sys.executable, "-c", loop], start_new_session=True)
 
-    def continue_once_stopped() -> None:
-        process = psutil.Process(stand_in.pid)
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if process.status() == psutil.STATUS_STOPPED:
-                os.kill(stand_in.pid, signal.SIGCONT)  # the operator's
-                return
-            time.sleep(0.002)
+    def continue_it() -> None:
+        os.kill(stand_in.pid, signal.SIGCONT)  # the operator's
 
     try:
         target = Target.of(stand_in.pid, "engine_core")
         server = Server("http://127.0.0.1:9", "m", tmp_path, {"engine_core": target})
         run = InjectionRun(plan, RunDirectory(tmp_path / "runs", "q221-y"), server)
-        threading.Thread(target=continue_once_stopped, daemon=True).start()
+        _after_the_stop_is_confirmed(monkeypatch, continue_it)
         _actions, actuated, injected = run._pulse(plan.episodes[0])
     finally:
         stand_in.kill()
