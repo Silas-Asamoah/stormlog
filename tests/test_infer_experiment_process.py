@@ -848,6 +848,25 @@ def test_a_clean_poll_after_one_that_found_something_verifies_only_if_the_next_i
     assert verify_cleanup(4000, wait_s=0.2).verified
 
 
+def test_a_late_start_is_bounded_only_by_a_check_begun_within_a_second_of_the_exit() -> (
+    None
+):
+    # fable-213-close's F1: with a 2 s window, a check begun at its very end
+    # walked /proc while an orphan of the launch could start an emptied
+    # process and leave, and that process's late start cleared it. The clock
+    # is moved, not waited for.
+    launched = launch("step", [sys.executable, "-c", "pass"])
+    launched.process.wait(timeout=5)
+    launched.poll()
+    assert launched.ended_monotonic is not None
+    seen = launched.ended_monotonic
+    for ago, bounded in ((0.5, True), (1.5, False), (2.5, False)):
+        launched.ended_monotonic = time.monotonic() - ago
+        launched.started_monotonic = launched.ended_monotonic - 0.2
+        assert (launched.bound_s() is not None) is bounded, ago
+    launched.ended_monotonic = seen
+
+
 def test_a_late_start_clears_nothing_once_the_leaders_exit_was_seen_long_before(
     tmp_path: Path,
 ) -> None:
