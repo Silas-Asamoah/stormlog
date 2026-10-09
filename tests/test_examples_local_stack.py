@@ -139,6 +139,35 @@ def test_a_service_read_mid_exec_is_still_stopped(
             os.kill(pid, signal.SIGKILL)
 
 
+def _saved(state: Path, pid: int, cmdline: list[str]) -> None:
+    state.mkdir(parents=True, exist_ok=True)
+    started = psutil.Process(pid).create_time()
+    (state / "otelcol.pid.json").write_text(
+        json.dumps({"pid": pid, "started": started, "cmdline": cmdline, "x1": False})
+    )
+
+
+def test_a_process_reading_no_command_line_is_not_the_saved_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gate's probe P4: a pid with the saved start time that now reads
+    # an empty command line, as a kernel thread does, is not the service a
+    # non-empty saved command line names.
+    _saved(tmp_path, os.getpid(), ["x"])
+    monkeypatch.setattr(psutil.Process, "cmdline", lambda _self: [])
+    assert local_stack._running(tmp_path, "otelcol") is None
+
+
+def test_a_saved_empty_command_line_compares_the_start_time_only(
+    tmp_path: Path,
+) -> None:
+    # A pid file from before the command line was read once set up: the
+    # start time alone still names the live service.
+    _saved(tmp_path, os.getpid(), [])
+    running = local_stack._running(tmp_path, "otelcol")
+    assert running is not None and running.pid == os.getpid()
+
+
 def test_a_zombie_service_is_not_running(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

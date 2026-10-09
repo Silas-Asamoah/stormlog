@@ -94,10 +94,10 @@ def _running(state: Path, name: str) -> psutil.Process | None:
         process = psutil.Process(int(saved["pid"]))
         moved = abs(process.create_time() - float(saved["started"]))
         cmdline = saved["cmdline"]
-        # An empty command line is no evidence either way (see
-        # _settled_cmdline), so only the start time is compared then.
+        # A saved empty command line is no evidence (see _settled_cmdline):
+        # only the start time is compared then.
         if moved > START_TOLERANCE_SECONDS or (
-            cmdline and process.cmdline() not in (cmdline, [])
+            cmdline and process.cmdline() != cmdline
         ):
             return None  # the pid now belongs to another process
         if process.status() == psutil.STATUS_ZOMBIE:
