@@ -573,6 +573,46 @@ def test_a_treatment_that_stops_early_is_unhealthy(tmp_path: Path) -> None:
     assert "treatment_unhealthy:watcher" in watch["reasons"]
 
 
+IGNORES_SIGTERM = (
+    "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+    "time.sleep(60)"
+)
+
+
+def test_a_check_long_after_a_treatments_exit_bounds_no_late_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gate-213-close's NF6, NF3's own scenario: a treatment whose leader left
+    # early was checked only after an earlier one's slow stop, and its check
+    # still bounded late starts by how long it ran. The checks of what was
+    # seen to exit just before them keep the bound.
+    from stormlog.infer import experiment
+
+    bounds: dict[int, Any] = {}
+    real = experiment.verify_cleanup
+
+    def verify(pgid: int, *args: Any, **kwargs: Any) -> Any:
+        bounds[pgid] = kwargs.get("lasted_s")
+        return real(pgid, *args, **kwargs)
+
+    monkeypatch.setattr(experiment, "verify_cleanup", verify)
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["watch", "off"]]}
+    slow = {
+        "name": "slow",
+        "command": ["{python}", "-c", IGNORES_SIGTERM],
+        "stop_timeout_s": 1.5,
+        "expect_exit": [-9],
+    }
+    daemon = {"name": "daemon", "command": ["{python}", "-c", "pass"]}
+    document["arms"]["watch"]["treatments"] = [slow, daemon]
+    watch, _ = _run(tmp_path, document)
+    pids = {p["name"]: p["pid"] for p in watch["processes"]}
+    assert bounds[pids["treatment:daemon"]] is None
+    assert bounds[pids["treatment:slow"]] is not None
+    assert bounds[pids["server"]] is not None
+
+
 def test_a_server_that_never_becomes_healthy_is_a_protocol_failure(
     tmp_path: Path,
 ) -> None:
