@@ -12,12 +12,13 @@ from typing import Any
 
 import pytest
 
-from stormlog._export import filesink
+from stormlog._export import filesink, otlp_http
 from stormlog._export.delivery import Breaker, RetryPolicy
 from stormlog._export.otlp_encoding import JsonEncoding, ProtobufEncoding
 from stormlog._export.otlp_http import Destination, OtlpHttpTransport, Transmission
 from stormlog._export.span_export import FileSink, HttpSink, SpanExporter
 from stormlog._export.spans import KIND_INTERNAL, Scope, Span
+from stormlog._export.watchdog import Watchdog
 from stormlog.infer.vllm_spans import read_span_file
 from stormlog.infer.vllm_telemetry import SPAN_SOURCE_OTLP_JSON
 from tests.fake_otlp_collector import (
@@ -52,6 +53,7 @@ def _exporter(url: str, **kw: Any) -> SpanExporter[int]:
         Destination.parse(url),
         media_type="application/x-protobuf",
         attempt_seconds=attempt_seconds,
+        watchdog=kw.pop("watchdog", None),
     )
     kw.setdefault("retry", FAST)
     kw.setdefault("schedule_delay", 0.05)
@@ -425,6 +427,115 @@ def test_a_retry_not_yet_sending_is_not_taken_for_its_last_attempt(
         else:
             assert accounting["refused"] == {"throttled": 5}
             assert accounting["unknown"] == {}
+
+
+def test_a_close_while_the_worker_connects_sends_nothing_and_leaks_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The gate's probe: the worker is past send()'s abort check, connecting,
+    # when the close finishes and stops the watchdog. Arming it then raised:
+    # a late ambiguous result, an internal error, and the socket left open.
+    with running([Reply()]) as collector:
+        exporter = _exporter(collector.url, attempt_seconds=30.0)
+        transport = exporter.sink.transport  # type: ignore[attr-defined]
+        real_connect = transport._connect
+        inside, go = threading.Event(), threading.Event()
+
+        def connect(deadline: float) -> Any:
+            inside.set()
+            go.wait(3.0)
+            return real_connect(deadline)
+
+        closed: list[socket.socket] = []
+        real_close = otlp_http._close
+
+        def noting_close(sock: socket.socket) -> None:
+            closed.append(sock)
+            real_close(sock)
+
+        monkeypatch.setattr(transport, "_connect", connect)
+        monkeypatch.setattr(otlp_http, "_close", noting_close)
+        _offer(exporter, 5)
+        exporter.start()
+        assert inside.wait(5)
+        _interrupt_the_wait(exporter, monkeypatch)
+        with pytest.raises(KeyboardInterrupt):
+            exporter.close(5.0)
+        go.set()
+        worker = exporter._worker
+        assert worker is not None
+        worker.join(5)
+        accounting = exporter.accounting()
+        assert len(collector.received) == 0
+        assert accounting["dropped"] == {"shutdown": 5} and _balanced(accounting)
+        assert accounting["late_results"] == {}
+        assert exporter.summary()["internal_errors"] == {}
+        assert closed and all(sock.fileno() == -1 for sock in closed)
+
+
+def test_a_watchdog_thread_that_cannot_start_is_not_taken_for_the_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The gate's probe: arming raised because the watchdog's thread could
+    # not start, not because the close had stopped it, and the exporter took
+    # it for the close: its worker left, and every later span was dropped at
+    # shutdown with no error recorded. That attempt is an internal error, its
+    # batch unknown, its socket closed, nothing of it left armed, and
+    # delivery goes on.
+    with running([Reply(), Reply()]) as collector:
+        exporter = _exporter(collector.url)
+        transport = exporter.sink.transport  # type: ignore[attr-defined]
+        watchdog = transport.watchdog
+        real_ensure_thread = watchdog._ensure_thread
+        failures = [RuntimeError("can't start new thread")]
+
+        def ensure_thread() -> None:
+            if failures:
+                raise failures.pop()
+            real_ensure_thread()
+
+        registered: list[socket.socket] = []
+        real_register = transport._register
+
+        def noting_register(sock: socket.socket, deadline: float) -> Any:
+            registered.append(sock)
+            return real_register(sock, deadline)
+
+        monkeypatch.setattr(watchdog, "_ensure_thread", ensure_thread)
+        monkeypatch.setattr(transport, "_register", noting_register)
+        _offer(exporter, 5)
+        exporter.start()
+        assert _wait(lambda: exporter.accounting()["unknown"] == {"send_failed": 5})
+        assert watchdog.stats.armed == 0 and not watchdog._sockets
+        _offer(exporter, 3, start=5)
+        assert _wait(lambda: exporter.accounting()["exported"] == 3)
+        worker = exporter._worker
+        assert worker is not None and worker.is_alive()
+        assert exporter.summary()["internal_errors"] == {"send": 1}
+        exporter.close(1.0)
+        accounting = exporter.accounting()
+        assert accounting["dropped"] == {} and _balanced(accounting)
+    assert len(registered) == 2
+    assert all(sock.fileno() == -1 for sock in registered)
+
+
+def test_a_watchdog_stopped_by_another_owner_is_not_taken_for_the_close() -> None:
+    # The gate's probe: a watchdog shared with another owner, which has
+    # stopped it, though this exporter never closed. Each attempt is an
+    # internal error and its batch unknown, as for any other failure to
+    # arm; the worker does not take it for its own close and leave.
+    watchdog = Watchdog()
+    watchdog.stop()
+    with running([Reply()]) as collector:
+        exporter = _exporter(collector.url, watchdog=watchdog)
+        _offer(exporter, 5)
+        exporter.start()
+        assert _wait(lambda: exporter.accounting()["unknown"] == {"send_failed": 5})
+        worker = exporter._worker
+        assert worker is not None and worker.is_alive()
+        assert exporter.summary()["internal_errors"] == {"send": 1}
+        exporter.close(1.0)
+        assert _balanced(exporter.accounting())
 
 
 def test_a_close_cut_short_is_finished_by_the_next_one(

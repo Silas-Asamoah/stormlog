@@ -37,7 +37,7 @@ from .otlp_encoding import (
     status_message,
 )
 from .resolver import Candidate, Resolver
-from .watchdog import Watchdog
+from .watchdog import Watchdog, WatchdogStopped
 
 TRACES_PATH = "/v1/traces"
 # The most a response may hold, after decompression.
@@ -225,7 +225,14 @@ class OtlpHttpTransport:
             self._body_started = False
             if self._aborted:
                 return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
-        outcome = self._attempt(body, spans)
+        try:
+            outcome = self._attempt(body, spans)
+        except WatchdogStopped:
+            if not self.aborted:
+                raise  # stopped by another owner, not by this sink's close
+            # Closed while this attempt connected: no body left, and the
+            # socket is closed already.
+            return Transmission(NOT_SENT, SEND_FAILED, aborted=True)
         if self.aborted and outcome.kind in (AMBIGUOUS, NOT_SENT):
             return replace(outcome, aborted=True)
         return outcome
@@ -341,7 +348,16 @@ class OtlpHttpTransport:
     def _register(self, sock: socket.socket, deadline: float) -> int:
         with self._lock:
             self._current = sock
-        return self.watchdog.arm(sock, deadline)
+        try:
+            return self.watchdog.arm(sock, deadline)
+        except RuntimeError:
+            # Stopped, as the sink closed after send() began, or its thread
+            # could not start, which the caller counts as an error of its
+            # own: either way the socket goes unused.
+            with self._lock:
+                self._current = None
+            _close(sock)
+            raise
 
     def _exchange(
         self, sock: socket.socket, token: int, body: bytes, spans: int
