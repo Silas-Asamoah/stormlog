@@ -437,15 +437,33 @@ later. A heartbeat without `reserved` (a hook from before the count, #217's
 included) closes no span on any read: a record it counted, or one its
 `queued` left out, may have been overtaken by another thread's record and
 then lost at write, and even a read that holds every record the epoch wrote
-cannot tell. `held` counts the heartbeats that
-closed no span, by reason: `reserved_unknown` for those, `reserved_open`
-for one whose reserved records no later heartbeat has bounded yet. For a
-live or prefix read, such as #219's watcher's or the import `infer profile`
-runs while its server is up, this means a span never vouches past a record
+cannot tell. `held` counts the heartbeats whose reservations closed no
+span, by reason: `reserved_unknown` for those, `reserved_open` for one
+whose reserved records no later heartbeat has bounded yet; a span broken by
+a loss or a gap is not counted there.
+
+For a live or prefix read, such as #219's watcher's or the import `infer
+profile` runs while its server is up, this means a span never vouches past a record
 whose last stamp came before its closing heartbeat's stamp, even one still
 reserved there and overtaken by another thread's record: until a heartbeat
 with nothing reserved is read, the newest stretch of a busy server's log
-stays uncovered (usually a heartbeat or two), and the next read covers it.
+stays uncovered, and the next read covers it. How much stays uncovered
+depends on concurrency and loss, since a loss anywhere between a heartbeat
+and the one that settles its reservations breaks every span held behind
+it. On a synthetic writer with 8 threads reserving continuously (85-93% of
+heartbeats with records reserved), the share of a full log covered was:
+
+| Records lost at write | Before the `reserved` count | With it |
+| --- | --- | --- |
+| none | 100% | 100% |
+| 0.2% | 90-95% | 9-60% |
+| 1% | 58-62% | 8-12% |
+
+Part of the earlier coverage vouched for records it never saw. On vLLM
+every reservation but an enqueue's (held across `add_request`) lasts
+microseconds; the share of heartbeats with records reserved on a real
+server is not yet measured.
+
 `observes` is the hello's list, or null for a hook that does not give one.
 Every import computes the block from all the heartbeats it read, including
 ones an earlier import consumed, under `basis` `heartbeat_counters/1`.
