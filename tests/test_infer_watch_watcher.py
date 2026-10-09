@@ -881,6 +881,31 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
     assert 0.25 * 1e9 <= took < 5 * 1e9
 
 
+def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
+    """The watcher's clock steps back a minute during the scrape timeout:
+    the scrape it gives up on ends at its start, not 60 s before it."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    step = [0]
+    clock = WatchClock(wall_ns=lambda: time.time_ns() - step[0])
+    payload = watch_config("", scrape_timeout_seconds=0.3)
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+
+        async def scrape() -> Any:
+            started = clock.wall_ns()
+            step[0] = 60 * 10**9  # an NTP step back, while the fetch reads on
+            return await watcher._scrape(started, asyncio.Event())
+
+        try:
+            record = asyncio.run(scrape())
+        finally:
+            watcher.close()
+    assert record is not None and record.status == "error"
+    assert record.completed_at_ns == record.observed_at_ns
+
+
 def test_an_incident_whose_bundle_cannot_be_created_is_reported(
     tmp_path: Path,
 ) -> None:
