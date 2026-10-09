@@ -570,7 +570,13 @@ F4a and F4b pulse EngineCore and the API server, F5 a TP worker, and H0 its
 - **The right process.** A target is its pid and its start time, checked
   before every signal, so a recycled pid is never signalled.
 - **A confirmed stop.** After `SIGSTOP` the pulser polls until the process is
-  stopped, within 1 s, and records the latency.
+  stopped, within 1 s, and records the latency. A stop that ends before a
+  read sees it is named for what ended it: `target_gone` when the target
+  exited, and `continued_by_other` when it ran on though it could stop
+  throughout (never a zombie, never in uninterruptible sleep; `SIGSTOP`
+  can't be blocked, so someone continued it). That episode's actuation is
+  then `interrupted_by_other`. A target that can't stop (a zombie, or one
+  in uninterruptible sleep) is refused: it did not stop.
 - **Always continued.** The target is continued:
   - in a `finally` around each pulse;
   - at `atexit`;
