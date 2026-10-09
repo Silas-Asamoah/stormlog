@@ -433,9 +433,10 @@ the launch's when another user runs it (so anything run under `sudo` is
 excluded too, and `sudo` strips the mark anyway), when it started more than
 2 s before the launch or more than 2 s after the launch's leader had
 exited (nothing of the launch was left to start it, but another orphan,
-judged itself; this holds only for a check that begins within 2 s of the
-leader's exit being seen, since by a later check an orphan of the launch
-may have started one and left, and only until the check sees a survivor or
+judged itself; this holds only for a check that begins within 1 s of the
+leader's exit being seen, since by a later check, or during its first
+poll, an orphan of the launch may have started one and left, and only
+until the check sees a survivor or
 a `blind` process, which may start one and leave, so from then on a late
 start clears nothing, and a poll that finds nothing left verifies only when
 the next poll, which starts after anything that left during it, finds
