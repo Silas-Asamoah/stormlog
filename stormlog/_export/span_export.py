@@ -64,7 +64,8 @@ STALL_SECONDS = 5.0
 
 
 class SpanSink(Protocol):
-    """Where batches go. ``abort`` is final and says whether a body had left."""
+    """Where batches go. ``abort`` is final and says whether a body had left;
+    ``sending`` says so for the attempt in progress at the moment of asking."""
 
     kind: str
 
@@ -73,6 +74,8 @@ class SpanSink(Protocol):
     def send(self, body: bytes, *, spans: int) -> Transmission: ...
 
     def abort(self) -> bool: ...
+
+    def sending(self) -> bool: ...
 
     def close(self) -> None: ...
 
@@ -95,6 +98,9 @@ class HttpSink:
 
     def abort(self) -> bool:
         return self.transport.abort()
+
+    def sending(self) -> bool:
+        return self.transport.body_started
 
     def close(self) -> None:
         self.transport.watchdog.stop()
@@ -142,6 +148,10 @@ class FileSink:
     def abort(self) -> bool:
         with self._lock:
             self._aborted = True
+            return self._writing
+
+    def sending(self) -> bool:
+        with self._lock:
             return self._writing
 
     def close(self) -> None:
@@ -478,11 +488,14 @@ class SpanExporter(Generic[T]):
         with self._finishing:
             if self._closed:
                 return
-            sending = (
-                self.sink.abort() if worker is not None and worker.is_alive() else False
-            )
+            self.ledger.close_attempts()
+            if worker is not None and worker.is_alive():
+                self.sink.abort()
             drained = len(self.queue.drain())
-            self.ledger.freeze(drained=drained, sending=lambda: sending)
+            # Read at the freeze, under the ledger's lock: whether the
+            # attempt in progress then had begun to send, not whether one
+            # had when the sink was aborted.
+            self.ledger.freeze(drained=drained, sending=self.sink.sending)
             try:
                 self.sink.close()
             except Exception:

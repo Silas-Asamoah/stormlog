@@ -238,6 +238,9 @@ class DeliveryLedger:
         self._pending = 0
         self._current: BatchHistory | None = None
         self._attempting = False
+        # Set by the close before it aborts the sink: no new transmission
+        # starts after that, so none can begin after its abort was decided.
+        self._attempts_closed = False
         self.frozen = False
 
     def take(self, spans: int) -> bool:
@@ -265,10 +268,15 @@ class DeliveryLedger:
             return True
 
     def attempting(self) -> bool:
-        """Mark a transmission as started; False once frozen."""
+        """Mark a transmission as started; False once frozen or closed."""
         with self._lock:
-            self._attempting = not self.frozen
+            self._attempting = not (self.frozen or self._attempts_closed)
             return self._attempting
+
+    def close_attempts(self) -> None:
+        """Refuse new transmissions; one already started runs on."""
+        with self._lock:
+            self._attempts_closed = True
 
     def record(self, history: BatchHistory, transmission: Transmission) -> bool:
         with self._lock:
