@@ -61,6 +61,11 @@ POLL_SECONDS = 0.1
 # times are compared in the processes' own clock (ticks since boot, or
 # psutil's creation time), never against the wall clock.
 START_SLACK_SECONDS = 2.0
+# A cleanup check bounds late starts by how long the launch's leader ran
+# only if it begins this soon after the leader's exit was seen: the second
+# left of START_SLACK_SECONDS is room for its first poll's walk, during which
+# an orphan of the launch could start a process and leave, unseen.
+BOUND_WINDOW_SECONDS = START_SLACK_SECONDS - 1.0
 EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 # What ``identify`` records as a process's start: ticks since boot from
 # /proc, or psutil's creation time.
@@ -113,13 +118,13 @@ class Launched:
     def bound_s(self) -> float | None:
         """How long its leader ran, as the bound a cleanup check made now may
         put on late starts (``verify_cleanup``'s ``lasted_s``). None while it
-        runs, and when its exit was seen more than ``START_SLACK_SECONDS``
+        runs, and when its exit was seen more than ``BOUND_WINDOW_SECONDS``
         ago: an orphan of the launch may since have started a process and
-        left before the check, unseen."""
+        left before the check, or during its first poll, unseen."""
         lasted = self.lasted_s()
         if lasted is None or self.ended_monotonic is None:
             return None
-        if time.monotonic() - self.ended_monotonic > START_SLACK_SECONDS:
+        if time.monotonic() - self.ended_monotonic > BOUND_WINDOW_SECONDS:
             return None
         return lasted
 
