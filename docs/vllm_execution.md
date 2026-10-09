@@ -433,11 +433,11 @@ heartbeat with records still `reserved` cannot say where they will land, so
 its span reaches as far as the first heartbeat after it with nothing
 reserved does. The first heartbeat written after those records must also
 show nothing lost, since a record lost while being written counts only
-later. A heartbeat without `reserved` (a hook from before the count, whose
-heartbeats give only `queued`, a lower bound) cannot say whether its
-pending records keep their order, so it closes a span only on a read that
-holds every record the epoch wrote (the epoch ended or gone, nothing
-missing), never on a live or prefix read. `held` counts the heartbeats that
+later. A heartbeat without `reserved` (a hook from before the count, #217's
+included) closes no span on any read: a record it counted, or one its
+`queued` left out, may have been overtaken by another thread's record and
+then lost at write, and even a read that holds every record the epoch wrote
+cannot tell. `held` counts the heartbeats that
 closed no span, by reason: `reserved_unknown` for those, `reserved_open`
 for one whose reserved records no later heartbeat has bounded yet. For a
 live or prefix read, such as #219's watcher's or the import `infer profile`
@@ -446,8 +446,6 @@ whose last stamp came before its closing heartbeat's stamp, even one still
 reserved there and overtaken by another thread's record: until a heartbeat
 with nothing reserved is read, the newest stretch of a busy server's log
 stays uncovered (usually a heartbeat or two), and the next read covers it.
-A read of #217's logs, which say nothing of reservations, gets spans only
-once the epoch has ended or is gone.
 `observes` is the hello's list, or null for a hook that does not give one.
 Every import computes the block from all the heartbeats it read, including
 ones an earlier import consumed, under `basis` `heartbeat_counters/1`.
