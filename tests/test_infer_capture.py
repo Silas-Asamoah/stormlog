@@ -405,3 +405,90 @@ def test_ambiguous_or_unscoped_correlation_stays_unresolved() -> None:
 def test_capability_outcomes_must_be_subsets() -> None:
     with pytest.raises(ValueError, match="collected must be enabled"):
         CaptureCapabilities(supported=("gpu_activity",), collected=("gpu_activity",))
+
+
+def test_repeated_append_reuses_definitions_and_preserves_embedded_prefix(tmp_path):
+    artifact = tmp_path / "inference.jsonl"
+    event = _Engine().collect(run_id="run-1", session_id="session-1").events[0]
+    prefix = json.dumps(event.to_record()).encode()
+    artifact.write_bytes(prefix)
+    session = create_session_summary(source="test", session_id="session-1")
+    for _ in range(2):
+        append_inference_capture(
+            artifact, run_id="run-1", session=session, engine_adapter=_Engine()
+        )
+        assert artifact.read_bytes().startswith(prefix + b"\n")
+        rows = [json.loads(line) for line in artifact.read_text().splitlines()]
+        definitions = [r for r in rows if r.get("event_type") == "infer.context"]
+        assert len(definitions) == 2  # Engine and capture capability contexts.
+        assert len({r["context_id"] for r in definitions}) == 2
+    assert len(load_inference_artifact(artifact)) == 11
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+def test_corrupt_existing_registry_leaves_artifact_and_envelope_unchanged(
+    tmp_path, conflict
+):
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+
+    artifact, envelope = tmp_path / "inference.jsonl", tmp_path / "envelope.json"
+    event = _Engine().collect(run_id="run-1", session_id="session-1").events[0]
+    rows = CorrelationRecordEncoder().encode(event.to_record())
+    if conflict:
+        rows.append(dict(rows[0], context=dict(rows[0]["context"], host="other")))
+    else:
+        rows = rows[1:]
+    artifact.write_text("\n".join(map(json.dumps, rows)))
+    envelope.write_text("sentinel")
+    before = artifact.read_bytes(), envelope.read_bytes()
+    with pytest.raises(ValueError, match="context"):
+        append_inference_capture(
+            artifact,
+            run_id="run-1",
+            session=create_session_summary(source="test", session_id="session-1"),
+            envelope_path=envelope,
+        )
+    assert (artifact.read_bytes(), envelope.read_bytes()) == before
+
+
+def test_appending_new_context_emits_one_additional_definition(tmp_path):
+    artifact = tmp_path / "inference.jsonl"
+    artifact.write_text("")
+    session = create_session_summary(source="test", session_id="session-1")
+    append_inference_capture(
+        artifact, run_id="run-1", session=session, engine_adapter=_Engine()
+    )
+    before = artifact.read_bytes()
+
+    class NewContext:
+        def collect(self, *, run_id, session_id):
+            original = _Engine().collect(run_id=run_id, session_id=session_id)
+            iteration = original.events[0]
+            return EngineCapture(
+                capabilities=original.capabilities,
+                events=(
+                    replace(
+                        iteration,
+                        event_id="new-iteration",
+                        iteration_ref=EntityRef("engine-0", "new"),
+                        context=replace(iteration.context, device_uuid="GPU-other"),
+                    ),
+                ),
+            )
+
+    append_inference_capture(
+        artifact, run_id="run-1", session=session, engine_adapter=NewContext()
+    )
+    assert artifact.read_bytes().startswith(before)
+    added = [
+        json.loads(line)
+        for line in artifact.read_bytes()[len(before) :].decode().splitlines()
+    ]
+    assert sum(r["event_type"] == "infer.context" for r in added) == 1
+    records = load_inference_artifact(artifact)
+    assert (
+        next(
+            r for r in records if r.to_record().get("event_id") == "new-iteration"
+        ).context.device_uuid
+        == "GPU-other"
+    )

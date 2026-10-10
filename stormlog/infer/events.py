@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
 
+from .correlation_codec import CorrelationRecordEncoder
+
 INFER_SCHEMA_VERSION = 1
 
 
@@ -127,6 +129,7 @@ class JsonlEventWriter:
         self._handle: TextIO | None = None
 
     def __enter__(self) -> "JsonlEventWriter":
+        self._encoder = CorrelationRecordEncoder()
         self._handle = self.path.open("w", encoding="utf-8")
         return self
 
@@ -138,5 +141,8 @@ class JsonlEventWriter:
     def append(self, record: dict[str, Any]) -> None:
         if self._handle is None:
             raise RuntimeError("JsonlEventWriter is not open")
-        self._handle.write(json.dumps(record, sort_keys=True) + "\n")
+        rows = self._encoder.prepare(record)
+        text = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+        self._handle.write(text)
+        self._encoder.commit(rows)
         self._handle.flush()

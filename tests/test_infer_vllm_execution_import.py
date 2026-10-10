@@ -184,8 +184,23 @@ def test_import_appends_the_reduced_records_and_the_high_water(tmp_path: Path) -
     assert resolve_inference_events(records).unresolved == ()
 
 
-def test_a_second_import_adds_only_what_became_final(tmp_path: Path) -> None:
+@pytest.mark.parametrize("compact_seed", [False, True])
+def test_a_second_import_adds_only_what_became_final(
+    tmp_path: Path, compact_seed
+) -> None:
     artifact = _artifact(tmp_path / "infer.jsonl")
+    if compact_seed:
+        from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+
+        encoder = CorrelationRecordEncoder()
+        rows = [json.loads(line) for line in artifact.read_text().splitlines()]
+        artifact.write_text(
+            "".join(
+                json.dumps(row) + "\n"
+                for record in rows
+                for row in encoder.encode(record)
+            )
+        )
     hook = tmp_path / "hook"
     engine_log(hook, _records())
     import_execution_into_artifact(artifact, hook, importer=HERE)

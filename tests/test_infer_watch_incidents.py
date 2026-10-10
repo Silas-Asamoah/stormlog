@@ -275,7 +275,9 @@ def test_a_sealed_incident_is_published_as_a_bundle(harness: Harness) -> None:
         path = view.file("incident.jsonl")
         loaded = load_inference_artifact(path)
         lines = [json.loads(line) for line in path.read_text().splitlines()]
-    assert len(loaded) == len(lines)
+    assert len(loaded) + 1 == len(lines)
+    assert sum(r["event_type"] == "infer.context" for r in lines) == 1
+    assert sum(r.to_record()["event_type"] == "infer.artifact" for r in loaded) == 1
     kinds = [line["event_type"] for line in lines]
     assert kinds[0] == "infer.session" and kinds[-1] == INCIDENT
     windows_written = [
@@ -781,3 +783,31 @@ def test_a_seal_the_disk_refuses_makes_room_and_is_written(
     assert [r["event_type"] for r in records] == [INCIDENT, "pruned", INCIDENT]
     assert records[-1]["incident_id"] == second
     assert records[-1]["bundle"] == f"incidents/{second}"
+
+
+def test_compact_bundle_reservation_counts_actual_encoded_bytes(harness, monkeypatch):
+    from stormlog.infer.watch.incidents import _Lines
+
+    original = _Lines.nbytes.fget
+    checked = []
+
+    def verify(lines):
+        size = original(lines)
+        assert size == sum(len(line) for line in lines)
+        assert (
+            sum(
+                json.loads(line)["event_type"] == "infer.context" for line in lines.head
+            )
+            == 1
+        )
+        checked.append(size)
+        return size
+
+    monkeypatch.setattr(_Lines, "nbytes", property(verify))
+    harness.scrapes(80, 262)
+    incident_id = harness.fire(200)
+    harness.tick(261)
+    assert checked
+    with open_incident_bundle(harness.store.root / str(incident_id)) as view:
+        assert view.file("incident.jsonl").stat().st_size in checked
+    assert harness.store.budget.reserved_bytes == 0

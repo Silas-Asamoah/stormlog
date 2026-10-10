@@ -1,0 +1,697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/inference_correlation_v4.schema.json",
+  "title": "Stormlog compact inference correlation wire format v4",
+  "description": "One context definition or compact event. References must resolve to an earlier definition in the same artifact.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/artifact"
+    },
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/iteration"
+    },
+    {
+      "$ref": "#/$defs/stage"
+    },
+    {
+      "$ref": "#/$defs/membership"
+    },
+    {
+      "$ref": "#/$defs/activity_ref"
+    },
+    {
+      "$ref": "#/$defs/capabilities"
+    },
+    {
+      "$ref": "#/$defs/clock_alignment"
+    },
+    {
+      "$ref": "#/$defs/context_definition"
+    }
+  ],
+  "$defs": {
+    "ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "producer_id",
+        "id"
+      ],
+      "properties": {
+        "producer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "nullable_ref": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ref"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullable_count": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "session_id",
+        "producer_id",
+        "source",
+        "clock_domain",
+        "clock_kind",
+        "collection_mode",
+        "provenance"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "producer_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "engine": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "engine_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "backend": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "backend_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "pid": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "device_uuid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "rank": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "local_rank": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "world_size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "clock_domain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "clock_kind": {
+          "enum": [
+            "monotonic",
+            "wall",
+            "device"
+          ]
+        },
+        "collection_mode": {
+          "enum": [
+            "active",
+            "passive",
+            "imported"
+          ]
+        },
+        "provenance": {
+          "enum": [
+            "observed",
+            "reported",
+            "estimated"
+          ]
+        }
+      }
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "event_type",
+        "context_id",
+        "event_id",
+        "metadata"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 4,
+          "type": "integer"
+        },
+        "event_type": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "context_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "span": {
+      "properties": {
+        "start_ns": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "end_ns": {
+          "$ref": "#/$defs/nullable_count"
+        }
+      }
+    },
+    "tokens": {
+      "properties": {
+        "input_tokens": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/nullable_count"
+        },
+        "kv_bytes": {
+          "$ref": "#/$defs/nullable_count"
+        }
+      }
+    },
+    "artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "required": [
+            "artifact_kind",
+            "created_at_ns"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.artifact"
+            },
+            "artifact_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "created_at_ns": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "request": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/span"
+        },
+        {
+          "$ref": "#/$defs/tokens"
+        },
+        {
+          "required": [
+            "request_ref"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.request"
+            },
+            "request_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "attempt_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "backend_request_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "iteration": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/span"
+        },
+        {
+          "required": [
+            "iteration_ref"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.iteration"
+            },
+            "iteration_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "batch_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "stage": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/span"
+        },
+        {
+          "$ref": "#/$defs/tokens"
+        },
+        {
+          "required": [
+            "stage_ref",
+            "name"
+          ],
+          "anyOf": [
+            {
+              "properties": {
+                "request_ref": {
+                  "$ref": "#/$defs/ref"
+                }
+              }
+            },
+            {
+              "properties": {
+                "iteration_ref": {
+                  "$ref": "#/$defs/ref"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.stage"
+            },
+            "stage_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "request_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "iteration_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "membership": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/tokens"
+        },
+        {
+          "required": [
+            "request_ref",
+            "iteration_ref",
+            "role"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.membership"
+            },
+            "request_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "iteration_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "attempt_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "role": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "activity_ref": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "$ref": "#/$defs/span"
+        },
+        {
+          "required": [
+            "activity_ref",
+            "activity_kind",
+            "attribution_status"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.activity_ref"
+            },
+            "activity_ref": {
+              "$ref": "#/$defs/ref"
+            },
+            "activity_kind": {
+              "type": "string",
+              "minLength": 1
+            },
+            "activity_domain": {
+              "enum": [
+                "gpu",
+                "runtime",
+                "cpu",
+                "unknown"
+              ]
+            },
+            "attribution_status": {
+              "enum": [
+                "linked",
+                "unresolved"
+              ]
+            },
+            "iteration_ref": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "correlation_scope": {
+              "$ref": "#/$defs/nullable_ref"
+            },
+            "trace_attachment_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            },
+            "runtime_correlation_id": {
+              "$ref": "#/$defs/nullable_count"
+            },
+            "cuda_correlation_id": {
+              "$ref": "#/$defs/nullable_count"
+            },
+            "stream_id": {
+              "$ref": "#/$defs/nullable_count"
+            },
+            "graph_id": {
+              "$ref": "#/$defs/nullable_count"
+            },
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "intervals": {
+                  "$ref": "#/$defs/busy_intervals"
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "attribution_status": {
+                    "const": "linked"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "iteration_ref": {
+                    "$ref": "#/$defs/ref"
+                  }
+                },
+                "required": [
+                  "iteration_ref"
+                ]
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "attribution_status": {
+                    "const": "unresolved"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "iteration_ref": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "capabilities": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "required": [
+            "component",
+            "available",
+            "supported",
+            "enabled",
+            "collected"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.capabilities"
+            },
+            "component": {
+              "type": "string",
+              "minLength": 1
+            },
+            "available": {
+              "type": "boolean"
+            },
+            "supported": {
+              "$ref": "#/$defs/capability_names"
+            },
+            "enabled": {
+              "$ref": "#/$defs/capability_names"
+            },
+            "collected": {
+              "$ref": "#/$defs/capability_names"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "capability_names": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "busy_intervals": {
+      "description": "[offset_ns, duration_ns] pairs from start_ns: sorted, disjoint, inside the span.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "clock_alignment": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/base"
+        },
+        {
+          "required": [
+            "from_clock_domain",
+            "to_clock_domain",
+            "offset_ns",
+            "uncertainty_ns"
+          ],
+          "properties": {
+            "schema_version": {
+              "const": 4
+            },
+            "event_type": {
+              "const": "infer.clock_alignment"
+            },
+            "from_clock_domain": {
+              "type": "string",
+              "minLength": 1
+            },
+            "to_clock_domain": {
+              "type": "string",
+              "minLength": 1
+            },
+            "offset_ns": {
+              "type": "integer"
+            },
+            "uncertainty_ns": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "valid_from_ns": {
+              "$ref": "#/$defs/nullable_count"
+            },
+            "valid_to_ns": {
+              "$ref": "#/$defs/nullable_count"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "context_definition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "event_type",
+        "context_id",
+        "context"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 4
+        },
+        "event_type": {
+          "const": "infer.context"
+        },
+        "context_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "context": {
+          "$ref": "#/$defs/context"
+        }
+      }
+    }
+  }
+}
