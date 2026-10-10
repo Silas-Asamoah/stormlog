@@ -315,4 +315,4 @@ def test_compact_correlation_schema_and_examples_match():
         validator.validate(row)
     assert len(expand_inference_records(rows)) == 1
     assert "schemas/inference_correlation_v4.schema.json" in prose
-    assert (DOC_ROOT / "benchmarks/issue-259-context-compaction.md").exists()
+    assert (DOC_ROOT / "benchmarks/issue-259-modal-results.json").exists()

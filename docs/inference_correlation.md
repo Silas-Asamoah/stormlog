@@ -50,8 +50,8 @@ to an embedded-only artifact emits new definitions and retains the old bytes
 unchanged. Serialization completes before capture files are mutated; this does
 not create a transaction spanning the artifact and its run envelope.
 
-The [compaction benchmark](benchmarks/issue-259-context-compaction.md) documents
-the paired measurement procedure and real vLLM trace results. A context
+The [compaction results](benchmarks/issue-259-modal-results.json) record
+paired measurements from a real vLLM trace. A context
 used only once may increase file size. Smaller files do not guarantee lower
 peak reader memory.
 
@@ -322,7 +322,7 @@ the spans would overcount. The import summary reports `busy_ns` and
 `launch_span_ns` per device. The historical embedded encoding used about 1.3 KB per record, largely
 repeated context (roughly 280 MB at kernel detail and 45 MB at launch detail
 for the audit trace). New wire v4 artifacts share contexts; the paired
-[benchmark](benchmarks/issue-259-context-compaction.md) records a fresh,
+[results](benchmarks/issue-259-modal-results.json) record a fresh,
 maintainer-authorized Qwen3-0.6B Modal capture with 28.68%/28.88% savings at
 launch/kernel detail and unchanged GPU accounting. It is a separate workload
 from the historical audit above. Capture short windows.
