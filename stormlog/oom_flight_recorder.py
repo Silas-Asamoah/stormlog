@@ -12,10 +12,17 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .session import SessionSummary, session_summary_to_dict
-from .utils import get_system_info
+
+
+def get_system_info() -> dict[str, Any]:
+    """Preserve the legacy environment payload without an eager torch import."""
+    from .utils import get_system_info as legacy_system_info
+
+    return legacy_system_info()
+
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +92,14 @@ def classify_oom_exception(exc: BaseException) -> OOMExceptionClassification:
 class OOMFlightRecorder:
     """Bounded recorder that writes dump bundles on OOM."""
 
-    def __init__(self, config: OOMFlightRecorderConfig) -> None:
+    def __init__(
+        self,
+        config: OOMFlightRecorderConfig,
+        *,
+        system_info_provider: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
         self.config = config
+        self._system_info = system_info_provider or get_system_info
         bounded_size = max(1, int(config.buffer_size))
         self._events: deque[dict[str, Any]] = deque(maxlen=bounded_size)
         self._events_lock = threading.Lock()
@@ -153,7 +166,7 @@ class OOMFlightRecorder:
         environment_payload = {
             "pid": os.getpid(),
             "cwd": str(Path.cwd()),
-            "system": get_system_info(),
+            "system": self._system_info(),
         }
 
         self._write_json(bundle_dir / "events.json", events_payload)

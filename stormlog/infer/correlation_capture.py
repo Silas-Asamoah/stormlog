@@ -20,6 +20,12 @@ from ..run_catalog import (
 )
 from ..session import SessionSummary
 from .correlation_accounting import resolve_inference_events
+from .correlation_codec import (
+    ContextRegistry,
+    CorrelationRecordDecoder,
+    CorrelationRecordEncoder,
+    iter_inference_records,
+)
 from .correlation_events import (
     ActivityReferenceEvent,
     CapabilityEvent,
@@ -27,7 +33,7 @@ from .correlation_events import (
     CorrelationEvent,
     EntityRef,
     InferenceRecord,
-    load_inference_artifact,
+    parse_inference_record,
 )
 from .host_clock import host_boot_id, wall_clock_domain
 
@@ -127,7 +133,9 @@ def append_inference_capture(
         raise ValueError("inference artifact must already exist")
     if not run_id:
         raise ValueError("run_id is required")
-    existing_records = _validate_existing_artifact(artifact, run_id, session.session_id)
+    existing_records, registry = _validate_existing_artifact(
+        artifact, run_id, session.session_id
+    )
     envelope = Path(envelope_path or artifact.parent / RUN_ENVELOPE_FILENAME)
     engine, trace = _collect_optional(
         run_id, session.session_id, engine_adapter, trace_collector
@@ -152,15 +160,22 @@ def append_inference_capture(
     )
     _validate_attachment_references(events, payload)
     _validate_combined_events(existing_records, events)
-    serialized_events = _serialize_events(events)
+    serialized_events = _serialize_events(events, registry)
     _write_envelope(envelope, payload)
     _append_events(artifact, serialized_events)
 
 
 def _validate_existing_artifact(
     artifact: Path, run_id: str, session_id: str
-) -> tuple[InferenceRecord, ...]:
-    records = tuple(load_inference_artifact(artifact))
+) -> tuple[tuple[InferenceRecord, ...], ContextRegistry]:
+    decoder = CorrelationRecordDecoder()
+    records_list: list[InferenceRecord] = []
+    for line, raw in iter_inference_records(artifact, decoder):
+        try:
+            records_list.append(parse_inference_record(raw))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"line {line}: {exc}") from exc
+    records = tuple(records_list)
     for record in records:
         original = record.to_record()
         context = original.get("context")
@@ -173,7 +188,7 @@ def _validate_existing_artifact(
             raise ValueError("artifact contains a different session_id")
         if record_run is not None and record_run != run_id:
             raise ValueError("artifact contains a different run_id")
-    return records
+    return records, decoder.registry
 
 
 def _validate_combined_events(
@@ -184,9 +199,17 @@ def _validate_combined_events(
     resolve_inference_events((*existing_records, *new_events))
 
 
-def _serialize_events(events: tuple[CorrelationEvent, ...]) -> tuple[str, ...]:
+def _serialize_events(
+    events: tuple[CorrelationEvent, ...], registry: ContextRegistry | None = None
+) -> tuple[str, ...]:
     """Serialize every event before either artifact is changed."""
-    return tuple(json.dumps(event.to_record(), sort_keys=True) for event in events)
+    encoder = CorrelationRecordEncoder(registry)
+    lines: list[str] = []
+    for event in events:
+        rows = encoder.prepare(event.to_record())
+        lines.extend(json.dumps(row, sort_keys=True) for row in rows)
+        encoder.commit(rows)
+    return tuple(lines)
 
 
 def _collect_optional(

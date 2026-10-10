@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from . import scrape_window as _window
+from .correlation_codec import expand_inference_records
 from .report_stats import percentile
 from .scrape_window import (
     REASON_NON_FINITE,
@@ -108,6 +109,7 @@ def vllm_report(
     records: list[dict[str, Any]], external_spans: Iterable[VllmSpanRecord] = ()
 ) -> dict[str, Any]:
     """The ``telemetry.vllm`` block of an analysis report."""
+    records = expand_inference_records(records)
     scrapes, spans = load_vllm_records(records)
     spans = [*spans, *external_spans]
     capabilities = _capabilities(records)
@@ -144,6 +146,7 @@ def _measured(records: list[dict[str, Any]], event_type: str) -> list[dict[str, 
 
 
 def _artifact_identity(records: list[dict[str, Any]]) -> tuple[str, str]:
+    """Run/session from expanded semantic records, with the legacy fallback."""
     for record in records:
         if record.get("event_type") == "infer.artifact":
             context = record.get("context") or {}

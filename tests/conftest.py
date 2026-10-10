@@ -10,7 +10,15 @@ def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
     """Skip benchmarks unless ``-m`` names them; they report, never assert."""
-    if "benchmark" in (config.getoption("markexpr") or ""):
+    expression = config.getoption("markexpr") or ""
+    if "mlx_hardware" not in expression or "not mlx_hardware" in expression:
+        hardware_skip = pytest.mark.skip(
+            reason="select explicitly with -m mlx_hardware"
+        )
+        for item in items:
+            if item.get_closest_marker("mlx_hardware"):
+                item.add_marker(hardware_skip)
+    if "benchmark" in expression:
         return
     skip = pytest.mark.skip(reason="a benchmark: select it with -m benchmark")
     for item in items:

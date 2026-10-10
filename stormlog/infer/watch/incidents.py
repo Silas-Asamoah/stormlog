@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ... import __version__
+from ..correlation_codec import CorrelationRecordEncoder
 from ..correlation_events import ArtifactIdentityEvent, CorrelationContext
 from ..host_clock import host_boot_id, wall_clock_domain
 from .config import IncidentLimits
@@ -658,7 +659,8 @@ class IncidentManager:
                     "end_ns": self.clock.to_wall(end),
                 }
             )
-        return [_line(r) for r in records]
+        encoder = CorrelationRecordEncoder()
+        return [_line(row) for record in records for row in encoder.encode(record)]
 
 
 @dataclass(frozen=True)

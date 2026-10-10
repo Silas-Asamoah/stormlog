@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stormlog"
 dynamic = ["version"]
-description = "A comprehensive GPU memory profiler for JAX, PyTorch and TensorFlow with CLI, visualization, and analytics"
+description = "A comprehensive GPU memory profiler for MLX, JAX, PyTorch and TensorFlow with CLI, visualization, and analytics"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -17,7 +17,7 @@ maintainers = [
     {name = "Prince Agyei Tuffour", email = "prince.agyei.tuffour@gmail.com"},
     {name = "Derrick Dwamena", email = "derrickasante07@gmail.com"}
 ]
-keywords = ["gpu", "memory", "profiler", "jax", "pytorch", "tensorflow", "deep-learning", "monitoring"]
+keywords = ["gpu", "memory", "profiler", "mlx", "jax", "pytorch", "tensorflow", "deep-learning", "monitoring"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -68,11 +68,15 @@ wandb = [
 mlflow = [
     "mlflow>=2.10.0",
 ]
+mlx = [
+    "mlx>=0.32.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 jax = [
     "jax>=0.4.20",
     "protobuf>=6.31.1",
 ]
 all = [
+    "mlx>=0.32.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "matplotlib>=3.3.0",
     "seaborn>=0.11.0",
     "plotly>=5.0.0",
@@ -245,6 +249,8 @@ module = [
     "tensorflow.*",
     "jax",
     "jax.*",
+    "mlx",
+    "mlx.*",
     "psutil",
     "scipy",
     "numpy",
@@ -292,6 +298,8 @@ python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
+    "mlx: marks MLX integration contract tests",
+    "mlx_hardware: requires usable native Apple Silicon Metal runtime",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",

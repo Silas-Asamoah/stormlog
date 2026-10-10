@@ -710,3 +710,28 @@ def test_a_driver_api_graph_launch_marks_graph_work(tmp_path: Path) -> None:
 
     assert capture.summary is not None
     assert capture.summary["traces"][0]["graph_gpu_events"] == 2
+
+
+def test_compact_capture_preserves_process_device_identity_and_accounting(tmp_path):
+    from stormlog.infer.correlation_accounting import (
+        account_gpu_time,
+        resolve_inference_events,
+    )
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+
+    export = _export(tmp_path / "run.sqlite")
+    capture = TraceFileCollector([export]).collect(run_id="r", session_id="s")
+    encoder = CorrelationRecordEncoder()
+    path = tmp_path / "compact.jsonl"
+    path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for event in capture.events
+            for row in encoder.encode(event.to_record())
+        )
+    )
+    records = load_inference_artifact(path)
+    assert records == list(capture.events)
+    assert account_gpu_time(resolve_inference_events(records)) == account_gpu_time(
+        resolve_inference_events(capture.events)
+    )

@@ -7,6 +7,54 @@ v2 records in `stormlog.infer.correlation_events` add server-side evidence to
 the same JSONL stream. The schema is
 [`inference_correlation_v2.schema.json`](schemas/inference_correlation_v2.schema.json).
 
+## Compact artifact storage (wire v4)
+
+New artifacts store each distinct full correlation context once, immediately
+before its first use. The public
+[`inference_correlation_v4.schema.json`](schemas/inference_correlation_v4.schema.json)
+validates individual physical records. For example:
+
+```json
+{"schema_version":4,"event_type":"infer.context","context_id":"example","context":{"run_id":"run-1","session_id":"session-1","producer_id":"engine-0","source":"example","clock_domain":"host/monotonic","clock_kind":"monotonic","collection_mode":"imported","provenance":"observed"}}
+{"schema_version":4,"event_type":"infer.iteration","context_id":"example","event_id":"iteration-1","metadata":{},"iteration_ref":{"producer_id":"engine-0","id":"1"},"batch_ref":null,"start_ns":100,"end_ns":200}
+```
+
+Writers include optional context fields with their null defaults and generate
+artifact-local IDs from canonical context JSON using full SHA-256 digests.
+Readers accept any nonempty ID. Every context field participates in sharing;
+per-event metadata stays on its event. Different producers, devices, clocks,
+processes, ranks, or provenance therefore retain their separate identities.
+
+`load_inference_artifact(path)` consumes definition rows and returns the same
+complete typed event sequence as before. `read_inference_records(path)` in
+`stormlog.infer.correlation_codec` returns expanded dictionaries; direct sequence
+consumers can use `expand_inference_records(records)`. Expansion is idempotent.
+`CorrelationEvent.to_record()` still returns embedded v2, or v3 for an activity
+with busy intervals. Wire v4 changes storage only: interval union, attribution,
+request totals, deduplication, and clock alignment retain their meanings.
+
+| Representation | Current readers | Older readers |
+| --- | --- | --- |
+| Legacy v1 and embedded v2/v3 | Supported unchanged | Supported as before |
+| Compact v4 | Expanded to complete semantic records | Expected to reject |
+| Mixed v1/v2/v3/v4 artifact | Supported in original semantic order | Expected to reject v4 |
+
+Definitions are storage metadata, without event IDs; they do not count as
+requests or activities. They must precede their references in the same file.
+Unknown/forward IDs and conflicting definitions fail explicitly with a physical
+line number. Equal repeated definitions are accepted. Registry state never
+crosses artifact boundaries. JSON Schema alone cannot check stream ordering.
+
+Appending reuses the first existing definition for an equal context. Appending
+to an embedded-only artifact emits new definitions and retains the old bytes
+unchanged. Serialization completes before capture files are mutated; this does
+not create a transaction spanning the artifact and its run envelope.
+
+The [compaction results](benchmarks/issue-259-modal-results.json) record
+paired measurements from a real vLLM trace. A context
+used only once may increase file size. Smaller files do not guarantee lower
+peak reader memory.
+
 ## Identity and relationships
 
 Every v2 event has a `run_id`, `session_id`, `producer_id`, and `event_id`. An
@@ -271,9 +319,13 @@ time is the same at both details.
 
 The last column is what a consumer that ignored `metadata.intervals` and used
 the spans would overcount. The import summary reports `busy_ns` and
-`launch_span_ns` per device. Each record is about 1.3 KB of JSONL, most of it
-the repeated context, so a 30-second vLLM trace at kernel detail adds roughly
-280 MB to the artifact and about 45 MB at launch detail. Capture short windows.
+`launch_span_ns` per device. The historical embedded encoding used about 1.3 KB per record, largely
+repeated context (roughly 280 MB at kernel detail and 45 MB at launch detail
+for the audit trace). New wire v4 artifacts share contexts; the paired
+[results](benchmarks/issue-259-modal-results.json) record a fresh,
+maintainer-authorized Qwen3-0.6B Modal capture with 28.68%/28.88% savings at
+launch/kernel detail and unchanged GPU accounting. It is a separate workload
+from the historical audit above. Capture short windows.
 
 `examples/scenarios/trace_import_scenario.py` checks the import on a CUDA
 device. On an NVIDIA A30 it linked every GPU event launched inside an

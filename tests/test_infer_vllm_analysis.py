@@ -973,3 +973,40 @@ def test_a_receiver_that_got_no_span_admits_nothing(tmp_path: Path) -> None:
         0,
         0.0,
     )
+
+
+def test_direct_compact_sequence_preserves_report(tmp_path):
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+    from stormlog.infer.vllm_analysis import vllm_report
+
+    span = _span("stormlog-run-1-c8_in512_out128_measured_0_0")
+    records = _records(_artifact(tmp_path, _standard_scrapes(), spans=[span]))
+    encoder = CorrelationRecordEncoder()
+    compact = [row for record in records for row in encoder.encode(record)]
+    assert any(row["event_type"] == "infer.context" for row in compact)
+    assert vllm_report(compact) == vllm_report(records)
+
+
+def test_compact_hook_admission_remains_server_evidence(tmp_path):
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+    from stormlog.infer.correlation_events import (
+        CorrelationContext,
+        EntityRef,
+        RequestEvent,
+    )
+
+    path = _artifact(tmp_path, [], [_request(i) for i in range(2)])
+    records = _records(path)
+    artifact = next(r for r in records if r["event_type"] == "infer.artifact")
+    hook = RequestEvent(
+        context=CorrelationContext(**artifact["context"]),
+        event_id="hook-request",
+        request_ref=EntityRef("hook", "request"),
+        metadata={"x_request_id": _request(0)["x_request_id"]},
+    ).to_record()
+    encoder = CorrelationRecordEncoder()
+    compact = [row for record in [*records, hook] for row in encoder.encode(record)]
+    path.write_text("".join(json.dumps(r) + "\n" for r in compact))
+    population = analyze_inference_events(path)["cases"][CASE]["population"]
+    assert population["server_admitted"] == 1
+    assert population["server_evidence_coverage"] == 0.5
