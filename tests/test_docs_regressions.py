@@ -295,3 +295,24 @@ def test_docs_conf_uses_stormlog_canonical_baseurl() -> None:
     content = (DOC_ROOT / "conf.py").read_text(encoding="utf-8")
     assert "https://stormlog.readthedocs.io/en/latest/" in content
     assert "https://gpu-memory-profiler.readthedocs.io/" not in content
+
+
+def test_compact_correlation_schema_and_examples_match():
+    import json
+
+    from jsonschema import Draft202012Validator
+
+    from stormlog.infer.correlation_codec import expand_inference_records
+
+    schema_path = DOC_ROOT / "schemas/inference_correlation_v4.schema.json"
+    validator = Draft202012Validator(json.loads(schema_path.read_text()))
+    prose = (DOC_ROOT / "inference_correlation.md").read_text()
+    example = re.search(r"```json\n(\{\"schema_version\":4.*)\n```", prose, re.DOTALL)
+    assert example is not None
+    lines = example.group(1).split("\n")[:2]
+    rows = [json.loads(line) for line in lines]
+    for row in rows:
+        validator.validate(row)
+    assert len(expand_inference_records(rows)) == 1
+    assert "schemas/inference_correlation_v4.schema.json" in prose
+    assert (DOC_ROOT / "benchmarks/issue-259-context-compaction.md").exists()
