@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-from stormlog.session import session_summary_from_dict
+from stormlog.session import SessionSummary, session_summary_from_dict
 
 from .models import MemorySnapshot, ProfileResult
 from .runtime import validate_bytes
@@ -35,7 +35,7 @@ def _validate_profile(item: Any) -> None:
     ):
         raise ValueError("Profile must be an object with a nonempty name")
     _validate_keys(item, set(ProfileResult.__dataclass_fields__))
-    session_summary_from_dict(item.get("session_summary", {}))
+    _validate_session(item["session_summary"])
     for key in ("started_at_ns", "ended_at_ns", "elapsed_ns", "valid_sample_count"):
         validate_bytes(item.get(key), key)
     if item["ended_at_ns"] < item["started_at_ns"]:
@@ -45,6 +45,25 @@ def _validate_profile(item: Any) -> None:
         _validate_snapshot(item.get(key))
     if not isinstance(item.get("metadata"), dict):
         raise ValueError("Profile metadata must be an object")
+
+
+def _validate_session(item: Any) -> None:
+    if not isinstance(item, dict):
+        raise ValueError("Profile session must be an object")
+    _validate_keys(item, set(SessionSummary.__dataclass_fields__))
+    session_summary_from_dict(item)
+    validate_bytes(item["started_at_ns"], "session.started_at_ns")
+    if item["ended_at_ns"] is not None:
+        validate_bytes(item["ended_at_ns"], "session.ended_at_ns")
+    for key in ("pid", "rank", "local_rank", "world_size"):
+        if type(item[key]) is not int:
+            raise ValueError(f"Session {key} must be an integer")
+    for key in ("rank", "local_rank"):
+        validate_bytes(item[key], key)
+    if item["world_size"] < 1:
+        raise ValueError("Session world_size must be positive")
+    if item["job_id"] is not None and not isinstance(item["job_id"], str):
+        raise ValueError("Session job_id must be string or null")
 
 
 def _validate_policy(item: dict[str, Any]) -> None:
@@ -76,10 +95,16 @@ def _validate_snapshot(item: Any) -> None:
             raise ValueError(f"Missing snapshot {key}")
         if item[key] is not None:
             validate_bytes(item[key], key)
+    _validate_snapshot_metadata(item)
+
+
+def _validate_snapshot_metadata(item: dict[str, Any]) -> None:
     if not isinstance(item.get("metadata"), dict) or not isinstance(
         item.get("unavailable"), dict
     ):
         raise ValueError("Snapshot metadata/unavailable must be objects")
+    if not all(isinstance(reason, str) for reason in item["unavailable"].values()):
+        raise ValueError("Unavailable reasons must be strings")
 
 
 def _validate_keys(item: dict[str, Any], expected: set[str]) -> None:

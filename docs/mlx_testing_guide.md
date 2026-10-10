@@ -92,3 +92,77 @@ Profile exports use `format="stormlog.mlx.profile"`, `schema_version=1` and
 [the published schema](schemas/mlx_profile_v1.schema.json). Offline validation
 with `stormlog.mlx.profile_artifact.load_profiles` requires no native MLX.
 Tracker exports use telemetry v4; these are different artifact contracts.
+
+## Passive tracking and persistence
+
+Install with `pip install 'stormlog[mlx]'`. The optional dependency is included
+only on Darwin arm64; on other platforms the extra installs no native MLX wheel.
+Base/offline functionality still works there. This first rollout ships Python
+APIs; `mlxmemprof` commands and dedicated TUI support are later PRs.
+
+```python
+from pathlib import Path
+from stormlog.mlx import MemoryTracker
+from stormlog.telemetry_sink import TelemetrySinkConfig
+
+tracker = MemoryTracker(
+    sampling_interval=0.1,
+    max_history=1000,
+    telemetry_sink_config=TelemetrySinkConfig(
+        Path("mlx-telemetry"), max_buffer_bytes=4 * 1024**2,
+    ),
+)
+with tracker.tracking():
+    with tracker.phase("train", {"epoch": 1}):
+        train_or_generate()  # the application owns evaluation and its streams
+tracker.export("mlx-tracking.json")
+```
+
+Manual `start_tracking()` / `stop_tracking()` are supported. Starting twice
+keeps one sampler; restarting after stop creates a fresh session. Sampling
+uses monotonic deadlines and interruptible waits. Core collection failures
+produce nullable events, exponential retry backoff, collector health changes,
+and recovery evidence. First samples and recovery after a gap have null
+allocator deltas. Optional-counter failures preserve valid active measurements.
+
+Sampling never calls evaluation, synchronization, peak reset, cache clearing,
+GC, or allocator limit setters. Byte thresholds configured through
+`alert_threshold_mb` emit bounded, alert-only records; they are disabled by
+default. Session/job/rank identity comes from the shared utilities without
+initializing MLX distributed execution.
+
+Sample/event/alert windows are bounded by `max_history`. The returned
+`TrackingResult` includes full-session aggregates and retained/dropped counts.
+Append-only sinks have independent disk retention/rotation policies and expose
+flush/drop diagnostics. Use a bounded sink buffer for resilience to disk
+failures. The tracker stops its sampler and closes its sink on context exit;
+user exceptions and interrupts propagate with incomplete/interrupted sessions.
+Phase handles cannot append after their session stops.
+
+Optional `enable_oom_flight_recorder=True` records a bounded pre-failure window.
+The MLX classifier recognizes the versioned native allocator's
+`[malloc] Unable to allocate ... bytes.` signature and host `MemoryError`.
+Resource-count exhaustion, oversized single-buffer requests and compiler
+errors remain distinct from memory exhaustion. No real OOM allocation is used
+in tests. Recorder limits and diagnostic failures cannot replace a workload's
+original exception. The MLX path supplies neutral host information; existing
+PyTorch/TF classification and environment payloads are preserved.
+
+Saved telemetry remains readable through `stormlog.telemetry` without MLX.
+For a sink directory use `load_telemetry_sessions("mlx-telemetry")`; for tracker
+JSON exports use the same loader. Default session selection follows the shared
+completed/interrupted/incomplete policy.
+
+## Verification
+
+```bash
+python3 -m pytest tests/ -o 'python_files=test_mlx*.py' -m 'not mlx_hardware' -q
+python3 -m pytest tests/test_mlx_hardware.py -m mlx_hardware -v
+```
+
+Ordinary tests use an injectable runtime and need no framework installation.
+Hardware tests are opt-in; selecting them requires usable Metal and fails if
+it is unavailable. Linux CI runs fake contracts with all four frameworks absent.
+See [PR 1 hardware qualification](benchmarks/mlx-qualification.md) for the tested
+environment and limits of the evidence. Full CLI/TUI and overhead qualification
+belongs to later rollout PRs.

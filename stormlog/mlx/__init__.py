@@ -13,8 +13,10 @@ from stormlog import __version__
 _EXPORTS = {
     "MLXMemoryProfiler": "profiler",
     "ProfileRegion": "profiler",
+    "MemoryTracker": "tracker",
     "MemorySnapshot": "models",
     "ProfileResult": "models",
+    "TrackingResult": "models",
     "MLXRuntime": "runtime",
     "profile_function": "context_profiler",
     "profile_context": "context_profiler",

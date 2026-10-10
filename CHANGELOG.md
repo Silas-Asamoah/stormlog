@@ -30,6 +30,11 @@ the flaky benchmark memory gates
 
 ### Added
 
+- Optional `stormlog[mlx]` Python memory instrumentation on Apple Silicon macOS:
+  lazy runtime discovery, process allocator snapshots, evaluated-root profiling,
+  bounded passive tracking, telemetry v4 sessions/sinks/health/phases, and narrow
+  MLX OOM capture. MLX CLI and dedicated TUI support remain follow-up work.
+
 - `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
   sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
   which still exports it) with a new `origin_only` mode; `KnownSecrets`,

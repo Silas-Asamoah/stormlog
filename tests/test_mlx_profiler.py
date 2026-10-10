@@ -189,3 +189,25 @@ def test_reset_lease_released_after_setup_failure():
     core.sync_error = None
     with profiler.profile_context("good", peak_mode="reset"):
         pass
+
+
+def test_elapsed_time_uses_monotonic_clock(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    import stormlog.mlx.profiler as module
+
+    ticks = iter((1000, 5000))
+    wall = time.time_ns() + 10**12
+    monkeypatch.setattr(
+        module,
+        "time",
+        SimpleNamespace(perf_counter_ns=lambda: next(ticks), time_ns=lambda: wall),
+    )
+    profiler = MLXMemoryProfiler(runtime=make_runtime(), sampling_interval=100)
+    with profiler.profile_context("clock", already_evaluated=True):
+        pass
+    result = profiler.get_results()[0]
+    assert result.elapsed_ns == 4000
+    assert result.ended_at_ns == wall
+    assert result.ended_at_ns - result.started_at_ns != result.elapsed_ns

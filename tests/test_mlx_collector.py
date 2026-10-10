@@ -66,3 +66,38 @@ def test_zero_partial_and_optional_absence():
     assert first.metadata["mlx"]["memory_limit_bytes"] is None
     core.values["cache_memory"] = 12
     assert collector.capture_snapshot().cache_bytes == 12
+
+
+def test_failed_rss_preserves_system_memory(monkeypatch):
+    from types import SimpleNamespace
+
+    import stormlog.mlx.collector as module
+
+    monkeypatch.setattr(
+        module.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(total=9000, available=6000),
+    )
+    monkeypatch.setattr(
+        module.psutil,
+        "Process",
+        lambda: (_ for _ in ()).throw(OSError("rss inaccessible")),
+    )
+    snapshot = MLXCollector(make_runtime()).capture_snapshot()
+    assert snapshot.process_rss_bytes is None
+    assert snapshot.metadata["system_memory_total_bytes"] == 9000
+    assert snapshot.metadata["system_memory_available_bytes"] == 6000
+    assert "process_rss_bytes" in snapshot.unavailable
+    assert snapshot.active_bytes == 100
+
+
+def test_bad_optional_device_recommendation_remains_raw_and_unknown():
+    adapter = make_runtime()
+    adapter.device_info["max_recommended_working_set_size"] = -1
+    snapshot = MLXCollector(adapter).capture_snapshot()
+    assert snapshot.metadata["mlx"]["recommended_working_set_bytes"] is None
+    assert (
+        snapshot.metadata["mlx"]["raw_device_info"]["max_recommended_working_set_size"]
+        == -1
+    )
+    assert "recommended_working_set_bytes" in snapshot.unavailable

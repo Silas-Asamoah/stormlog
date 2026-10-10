@@ -73,3 +73,15 @@ def test_discovery_errors_and_retry(monkeypatch, cause, error):
 def test_no_fictitious_device(device):
     with pytest.raises(ValueError):
         MLXRuntime(device_id=device)
+
+
+def test_native_unavailable_metal_loader_is_distinct(monkeypatch):
+    monkeypatch.setattr(module, "_CORE", None)
+    monkeypatch.setattr(module, "_CORE_VERSION", None)
+    original = ImportError("[metal::load_device] No Metal device available. sandbox")
+    monkeypatch.setattr(
+        module.importlib, "import_module", lambda _: (_ for _ in ()).throw(original)
+    )
+    with pytest.raises(MLXMetalUnavailableError) as found:
+        MLXRuntime(platform_system="Darwin", platform_machine="arm64")
+    assert found.value.__cause__ is original

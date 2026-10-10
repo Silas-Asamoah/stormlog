@@ -46,10 +46,23 @@ from stormlog.mlx.tracker import MemoryTracker
 from stormlog.oom_flight_recorder import OOMFlightRecorder
 from stormlog.system_info import get_system_info
 get_system_info()
+from tests.mlx_fakes import make_runtime
+tracker = MemoryTracker(runtime=make_runtime(), sampling_interval=10,
+                        enable_oom_flight_recorder=True, oom_dump_dir=sys.argv[3])
+tracker.start_tracking()
+assert tracker.record_exception(RuntimeError('[malloc] Unable to allocate 4096 bytes.'))
+tracker.stop_tracking()
 assert not attempts, attempts
 """
     result = subprocess.run(
-        [sys.executable, "-c", code, str(profile), str(telemetry)],
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(profile),
+            str(telemetry),
+            str(tmp_path / "oom"),
+        ],
         capture_output=True,
         text=True,
     )

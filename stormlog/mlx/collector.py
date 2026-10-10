@@ -44,7 +44,7 @@ class MLXCollector:
         host_reader: Callable[[], dict[str, int]] | None = None,
     ) -> None:
         self.runtime = runtime
-        self.host_reader = host_reader or _host_memory
+        self.host_reader = host_reader
         self.capabilities = {
             "backend": "metal",
             "telemetry_collector": COLLECTOR,
@@ -72,11 +72,7 @@ class MLXCollector:
         cache = self._read("cache_memory", unavailable)
         peak = self._read("peak_memory", unavailable)
         limit = self._read("memory_limit", unavailable)
-        host: dict[str, int] = {}
-        try:
-            host = {k: validate_bytes(v, k) for k, v in self.host_reader().items()}
-        except Exception as exc:
-            unavailable["host_memory"] = f"{type(exc).__name__}: {exc}"
+        host = self._collect_host(unavailable)
         if self.runtime.device_info_error:
             unavailable["device_info"] = self.runtime.device_info_error
         mlx: dict[str, Any] = {
@@ -90,9 +86,7 @@ class MLXCollector:
             ),
             "snapshot_consistency": "sequential_non_atomic",
             "raw_device_info": dict(self.runtime.device_info),
-            "recommended_working_set_bytes": self.runtime.device_info.get(
-                "max_recommended_working_set_size"
-            ),
+            "recommended_working_set_bytes": self._recommendation(unavailable),
             "capabilities": {
                 "bounded_sampling": True,
                 "synchronized_host_timing": True,
@@ -120,6 +114,38 @@ class MLXCollector:
             metadata,
             unavailable,
         )
+
+    def _collect_host(self, unavailable: dict[str, str]) -> dict[str, int]:
+        if self.host_reader is None:
+            readers = {
+                "system_memory_total_bytes": lambda: psutil.virtual_memory().total,
+                "system_memory_available_bytes": lambda: psutil.virtual_memory().available,
+                "process_rss_bytes": lambda: psutil.Process().memory_info().rss,
+            }
+        else:
+            try:
+                raw = self.host_reader()
+            except Exception as exc:
+                unavailable["host_memory"] = f"{type(exc).__name__}: {exc}"
+                return {}
+            readers = {key: _constant_reader(value) for key, value in raw.items()}
+        values = {}
+        for key, read in readers.items():
+            try:
+                values[key] = validate_bytes(read(), key)
+            except Exception as exc:
+                unavailable[key] = f"{type(exc).__name__}: {exc}"
+        return values
+
+    def _recommendation(self, unavailable: dict[str, str]) -> int | None:
+        value = self.runtime.device_info.get("max_recommended_working_set_size")
+        if value is None:
+            return None
+        try:
+            return validate_bytes(value, "recommended_working_set_bytes")
+        except ValueError as exc:
+            unavailable["recommended_working_set_bytes"] = str(exc)
+            return None
 
     def telemetry_record(
         self,
@@ -164,10 +190,5 @@ class MLXCollector:
         return record
 
 
-def _host_memory() -> dict[str, int]:
-    memory = psutil.virtual_memory()
-    return {
-        "system_memory_total_bytes": memory.total,
-        "system_memory_available_bytes": memory.available,
-        "process_rss_bytes": psutil.Process().memory_info().rss,
-    }
+def _constant_reader(value: int) -> Callable[[], int]:
+    return lambda: value
