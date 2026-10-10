@@ -1,7 +1,7 @@
 """Compact transport preserves semantic events and fails closed on bad references."""
 
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -15,6 +15,7 @@ from stormlog.infer.correlation_events import (
     CorrelationContext,
     EntityRef,
     IterationEvent,
+    StageEvent,
     load_inference_artifact,
 )
 from stormlog.infer.events import JsonlEventWriter
@@ -61,6 +62,38 @@ def test_shared_context_roundtrip_and_schema(tmp_path):
     assert expand_inference_records(expanded) == expanded
     expanded[0]["context"]["run_id"] = "changed"
     assert expanded[1]["context"]["run_id"] == "run"
+
+
+@pytest.mark.parametrize("request_link", ["missing", "null", "valid"])
+@pytest.mark.parametrize("iteration_link", ["missing", "null", "valid"])
+def test_stage_schema_requires_a_valid_link(request_link, iteration_link):
+    ref = EntityRef("engine", "1")
+    event = StageEvent(
+        context=_event().context,
+        event_id="stage",
+        stage_ref=ref,
+        name="stage",
+        iteration_ref=ref,
+    )
+    rows = CorrelationRecordEncoder().encode(event.to_record())
+    for field, state in (
+        ("request_ref", request_link),
+        ("iteration_ref", iteration_link),
+    ):
+        if state == "missing":
+            rows[1].pop(field)
+        else:
+            rows[1][field] = None if state == "null" else asdict(ref)
+    schema = json.loads(
+        Path("docs/schemas/inference_correlation_v4.schema.json").read_text()
+    )
+    valid = "valid" in (request_link, iteration_link)
+    assert Draft202012Validator(schema).is_valid(rows[1]) == valid
+    if valid:
+        assert len(expand_inference_records(rows)) == 1
+    else:
+        with pytest.raises(ValueError, match="stage must reference"):
+            expand_inference_records(rows)
 
 
 def test_failed_serialization_does_not_emit_or_register(tmp_path):

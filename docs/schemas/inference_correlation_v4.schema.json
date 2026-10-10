@@ -364,6 +364,9 @@
           ],
           "anyOf": [
             {
+              "required": [
+                "request_ref"
+              ],
               "properties": {
                 "request_ref": {
                   "$ref": "#/$defs/ref"
@@ -371,6 +374,9 @@
               }
             },
             {
+              "required": [
+                "iteration_ref"
+              ],
               "properties": {
                 "iteration_ref": {
                   "$ref": "#/$defs/ref"
