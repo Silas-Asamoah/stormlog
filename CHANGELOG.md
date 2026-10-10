@@ -25,6 +25,51 @@ the flaky benchmark memory gates
 
 ### Added
 
+- Prometheus export for `stormlog infer profile` (#220). `--prometheus-listen
+  HOST:PORT` serves Stormlog's own measurements at `/metrics` while the run
+  lasts (with `--prometheus-linger` for a final scrape), and
+  `--prometheus-textfile-dir DIR` writes `DIR/stormlog-<slot>.prom` for
+  node_exporter. The measurements are client latencies, request outcomes,
+  token counts by source, dispatch lag, phases, scrape and receiver health,
+  and the exporter's own health; engine series and spans Stormlog collected
+  are never re-exposed. Every series is created when the run starts, so a
+  matrix over `--prometheus-max-series` (50,000 samples) or
+  `--prometheus-max-bytes` (16 MiB) exits 2 before anything is sent, as does
+  a `--prometheus-slot` another live run holds. The exporter closes before
+  the capability records, so its `export.prometheus` record holds final
+  counts. See `docs/inference_export.md`.
+- OTLP span export for `stormlog infer profile` (#220). `--otlp-endpoint URL`
+  sends the capture, its phases and every request sent as spans over
+  OTLP/HTTP (protobuf with the `infer-otlp` extra, JSON otherwise, gzip),
+  and `--otlp-file PATH` writes them as OTLP JSON lines. Every span offered
+  ends as exported, rejected, refused, dropped or unknown, exactly, with
+  `max_extra_copies` bounding what lost answers can duplicate; retries,
+  a breaker with recorded transitions, and `--otlp-flush-timeout` keep a
+  slow or dead collector from holding up the run. Span attributes are an
+  allowlist; resource attributes from `OTEL_RESOURCE_ATTRIBUTES` and
+  `--otlp-resource-attribute` pass only for a fixed list of keys; header
+  values and every credential the run holds are redacted wherever they
+  would appear. Prompts, outputs and server error text leave only with
+  `--export-content`. The final counts are in an `export.otlp` capability
+  record, and in `stormlog_export_*` metrics when Prometheus is on too.
+- `examples/observability/` (#220): a two-pipeline collector config that
+  forwards only vLLM's spans to Stormlog's analysis and everything else to
+  a trace store, a collector config for outage tests, Prometheus and Jaeger
+  configs, `local_stack.py` to run them from their binaries, and
+  `fake_collector.py`, which stores spans durably before answering and
+  reports raw and unique counts. See "Deployment examples" in
+  `docs/inference_export.md`.
+- `stormlog infer collect-server` reports its own health to Prometheus with
+  the same `--prometheus-*` flags (#220): polls, sample states, whether it is
+  running and why it stopped, with the identity it confirmed (host, boot,
+  process, GPU or MIG instance, replica, group, rank) as labels on
+  `stormlog_collector_info`. Memory values stay in its output. Exit codes are
+  unchanged.
+- `--trace-context {off,preserve-engine,follow-sampling}` on `stormlog infer
+  profile` sends a W3C `traceparent` with each request and records its
+  `trace_id` and `span_id` on `infer.request`; off by default.
+  `--server-trace-sampler` records the server's sampler as declared.
+  Completed requests now also record their `http_status`. (#220)
 - `stormlog.scrub`, shared scrubbing primitives for what Stormlog records or
   sends elsewhere: `redact_url` (moved from `stormlog.infer.cache_state`,
   which still exports it) with a new `origin_only` mode; `KnownSecrets`,

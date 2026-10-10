@@ -100,7 +100,11 @@ def make_envelope(
 def _cap(name: str, value: Value, limits: EnvelopeLimits) -> tuple[Value, int]:
     if isinstance(value, str):
         if name in limits.content_fields:
-            capped = truncate_utf8(value, limits.max_content_bytes)
+            # Every character is at least one byte, so the first cap's worth
+            # of characters holds the answer: a long value is never encoded
+            # whole on the producer.
+            cap = limits.max_content_bytes
+            capped = truncate_utf8(value[:cap], cap)
         else:
             capped = value[: limits.max_string]
         return capped, int(capped != value)

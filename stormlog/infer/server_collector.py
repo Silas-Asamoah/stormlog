@@ -8,7 +8,7 @@ import math
 import socket
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -23,6 +23,14 @@ STOP_DURATION_ELAPSED = "duration_elapsed"
 STOP_REQUESTED = "stop_requested"
 STOP_SERVER_PROCESS_ENDED = "server_process_ended"
 STOP_GPU_IDENTITY_CHANGED = "gpu_identity_changed"
+# Whether NVML showed the server, or a child of it, on the GPU it watches.
+GPU_MATCH_CONFIRMED = "confirmed"
+GPU_MATCH_NOT_SEEN = "not_seen"
+GPU_MATCH_UNKNOWN = "unknown"
+GPU_MATCH_STATES = (GPU_MATCH_CONFIRMED, GPU_MATCH_NOT_SEEN, GPU_MATCH_UNKNOWN)
+# Until confirmed, checked again at most this often: a server still loading
+# its model when the collector starts reaches its GPU later.
+MATCH_RECHECK_SECONDS = 1.0
 
 _PROCESS_ENDED_DETAIL = "server process ended or its PID was reused"
 _NVML_SUCCESS = 0
@@ -172,6 +180,26 @@ class NvmlUnavailableError(RuntimeError):
     """The NVML library cannot be loaded on this host."""
 
 
+class CollectionObserver(Protocol):
+    """Told the collector's identity, each poll, and why it stopped.
+
+    ``identify`` runs before anything is collected; its ``ValueError`` is
+    a usage error. ``gpu_process_match`` says whether NVML showed the server
+    on the GPU it watches; ``matched`` is told when a later check confirms
+    it. ``matched``, ``poll`` and ``close`` must not raise.
+    """
+
+    def identify(
+        self, identity: ServerIdentity, gpu_process_match: str = GPU_MATCH_UNKNOWN
+    ) -> None: ...
+
+    def matched(self, gpu_process_match: str) -> None: ...
+
+    def poll(self, samples: Sequence[TelemetrySample]) -> None: ...
+
+    def close(self, stop_reason: str) -> None: ...
+
+
 class NvmlMemorySource:
     """Read NVML v2 memory counters from a verified GPU or MIG handle."""
 
@@ -274,6 +302,7 @@ def collect_server_telemetry(
     gpu_source: GpuMemorySource | None = None,
     stop_event: threading.Event | None = None,
     on_warning: Callable[[str], None] | None = None,
+    observer: CollectionObserver | None = None,
 ) -> CollectionResult:
     """Sample a live server process until the duration, a stop, or a change.
 
@@ -282,7 +311,9 @@ def collect_server_telemetry(
     changes. The result says which, so callers can tell a clean stop from one
     that leaves later case windows unobserved. ``group_id``, ``rank`` and
     ``world_size`` declare this process as one member of a server group, such as
-    one tensor-parallel worker.
+    one tensor-parallel worker. An ``observer``, such as the health
+    export, is told the identity before the first poll, each poll after it
+    is written, and the stop reason.
     """
     try:
         _validate_collection_options(run_id, pid, no_gpu, device_uuid, gpu_source)
@@ -294,27 +325,46 @@ def collect_server_telemetry(
         raise InferUsageError(str(exc)) from exc
     source, own_source = _gpu_source(gpu_source, no_gpu, device_index, device_uuid)
     try:
-        warnings = _gpu_process_warnings(process, source)
+        warnings, match = _gpu_process_check(process, source)
         for message in warnings:
             if on_warning is not None:
                 on_warning(message)
         identity = _server_identity(
             process, source, replica_id, (group_id, rank, world_size)
         )
-        polls, stop_reason, detail = _collect_loop(
-            run_id,
-            process,
-            identity,
-            source,
-            Path(output_path),
-            interval_seconds,
-            duration_seconds,
-            stop_event or threading.Event(),
-        )
+        _identify(observer, identity, match)
+        stop_reason = "error"
+        try:
+            polls, stop_reason, detail = _collect_loop(
+                run_id,
+                process,
+                identity,
+                source,
+                Path(output_path),
+                interval_seconds,
+                duration_seconds,
+                stop_event or threading.Event(),
+                observer,
+                _MatchWatch(process, source, match),
+            )
+        finally:
+            if observer is not None:
+                observer.close(stop_reason)
         return CollectionResult(polls, stop_reason, detail, tuple(warnings))
     finally:
         if own_source and source:
             source.close()
+
+
+def _identify(
+    observer: CollectionObserver | None, identity: ServerIdentity, match: str
+) -> None:
+    if observer is None:
+        return
+    try:
+        observer.identify(identity, gpu_process_match=match)
+    except ValueError as exc:
+        raise InferUsageError(str(exc)) from exc
 
 
 def _server_process(pid: int) -> psutil.Process:
@@ -322,9 +372,25 @@ def _server_process(pid: int) -> psutil.Process:
         process = psutil.Process(pid)
     except psutil.NoSuchProcess as exc:
         raise ValueError(f"no process with pid {pid}") from exc
-    if not process.is_running():
+    try:
+        ended = _ended(process)
+    except psutil.NoSuchProcess:  # includes ZombieProcess
+        ended = True
+    except psutil.AccessDenied:
+        ended = False  # cannot tell here; the first poll will
+    if ended:
         raise ValueError("server process is not running")
     return process
+
+
+def _ended(process: psutil.Process) -> bool:
+    """Whether the process has exited, or its PID now names another one.
+
+    ``is_running`` compares the creation time with the original, so it also
+    catches a PID the OS reused. A zombie has exited too: on Linux it still
+    counts as running, with an RSS of 0, until its parent reaps it.
+    """
+    return not process.is_running() or process.status() == psutil.STATUS_ZOMBIE
 
 
 def _validate_collection_options(
@@ -383,23 +449,26 @@ def _server_identity(
     )
 
 
-def _gpu_process_warnings(
+def _gpu_process_check(
     process: psutil.Process, source: GpuMemorySource | None
-) -> list[str]:
-    """Warn when NVML does not show the server PID on the sampled GPU.
+) -> tuple[list[str], str]:
+    """Whether NVML shows the server on the sampled GPU, and warnings if not.
 
     NVML numbers GPUs in its own order, and CUDA_VISIBLE_DEVICES renumbers them
     for the server, so an index can name a different GPU than the server uses.
     """
     list_compute_pids = getattr(source, "compute_pids", None)
     if source is None or list_compute_pids is None:
-        return []
-    return describe_gpu_process_match(
-        process.pid,
-        source.device_uuid,
-        list_compute_pids(),
-        _descendant_pids(process),
+        return [], GPU_MATCH_UNKNOWN
+    gpu_pids = list_compute_pids()
+    descendants = _descendant_pids(process)
+    warnings = describe_gpu_process_match(
+        process.pid, source.device_uuid, gpu_pids, descendants
     )
+    if gpu_pids is None:
+        return warnings, GPU_MATCH_UNKNOWN
+    seen = process.pid in gpu_pids or bool(descendants & gpu_pids)
+    return warnings, GPU_MATCH_CONFIRMED if seen else GPU_MATCH_NOT_SEEN
 
 
 def describe_gpu_process_match(
@@ -441,6 +510,31 @@ def _descendant_pids(process: psutil.Process) -> set[int]:
         return set()
 
 
+class _MatchWatch:
+    """Checks the GPU match again until NVML shows the server on its GPU."""
+
+    def __init__(
+        self, process: psutil.Process, source: GpuMemorySource | None, match: str
+    ) -> None:
+        self.process = process
+        self.source = source
+        self.match = match
+        self.checked_at = time.monotonic()
+
+    def check(self, observer: CollectionObserver) -> None:
+        """Tell ``observer`` once a later check confirms the match."""
+        now = time.monotonic()
+        if self.match == GPU_MATCH_CONFIRMED or (
+            now - self.checked_at < MATCH_RECHECK_SECONDS
+        ):
+            return
+        self.checked_at = now
+        _warnings, match = _gpu_process_check(self.process, self.source)
+        if match == GPU_MATCH_CONFIRMED:
+            self.match = match
+            observer.matched(match)
+
+
 def _collect_loop(
     run_id: str,
     process: psutil.Process,
@@ -450,6 +544,8 @@ def _collect_loop(
     interval_seconds: float,
     duration_seconds: float | None,
     stop_event: threading.Event,
+    observer: CollectionObserver | None = None,
+    match_watch: _MatchWatch | None = None,
 ) -> tuple[int, str, str | None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
@@ -475,6 +571,10 @@ def _collect_loop(
                 )
                 handle.flush()
                 polls += 1
+                if observer is not None:
+                    observer.poll(samples)
+                    if match_watch is not None:
+                        match_watch.check(observer)
                 if stop is not None:
                     return polls, stop[0], stop[1]
                 next_poll = next_poll_time(
@@ -560,13 +660,10 @@ def _process_sample(
 
 
 def read_process_rss(process: psutil.Process) -> tuple[str, int | None, str | None]:
-    """Return ``(state, rss, detail)``; only a gone or replaced process is invalid.
-
-    ``is_running`` compares the process creation time with the original, so it
-    also detects a PID that the OS reused for another process.
-    """
+    """Return ``(state, rss, detail)``; only an ended or replaced process is
+    invalid (see ``_ended``)."""
     try:
-        if not process.is_running():
+        if _ended(process):
             return "invalid", None, _PROCESS_ENDED_DETAIL
         return "valid", int(process.memory_info().rss), None
     except psutil.NoSuchProcess:  # includes ZombieProcess

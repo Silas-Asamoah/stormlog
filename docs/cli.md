@@ -106,6 +106,14 @@ For server memory, run `stormlog infer collect-server` on the serving host,
 pass the same `--run-id` to `infer profile`, and import the collector JSONL with
 `infer analyze --server-telemetry`. The guide explains the direct-route and
 clock evidence required before a server sample enters a case report.
+To feed Prometheus while a profile runs, add `--prometheus-listen HOST:PORT`
+or `--prometheus-textfile-dir DIR`; to send Stormlog's spans to an
+OpenTelemetry collector, add `--otlp-endpoint URL` or `--otlp-file PATH`;
+see [Exporting inference metrics and spans](inference_export.md).
+`--trace-context preserve-engine` sends W3C trace context with each
+request, so a tracing server's spans join Stormlog's traces.
+`infer collect-server` takes the same `--prometheus-*` flags to report its
+own health, labelled with the identity it observes.
 
 ### Watch a vLLM server for incidents
 

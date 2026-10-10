@@ -577,6 +577,7 @@ class _SlowThenRejectingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> ChatCompletionResult:
         self.calls += 1
         if self.calls > 1:

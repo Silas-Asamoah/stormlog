@@ -605,6 +605,32 @@ class InferenceProfileTests(unittest.TestCase):
                 self.assertEqual(len(measured), 2)
                 self.assertTrue(all(record["status"] == "error" for record in measured))
 
+    def test_completed_requests_record_their_http_status(self) -> None:
+        with _fake_server() as endpoint:
+            for stream in (False, True):
+                with self.subTest(stream=stream), tempfile.TemporaryDirectory() as d:
+                    output = Path(d) / "infer.jsonl"
+                    InferenceProfiler(
+                        ProfileConfig(
+                            endpoint=endpoint,
+                            model="fake-model",
+                            concurrency=(1,),
+                            input_tokens=(8,),
+                            output_tokens=(4,),
+                            request_count=2,
+                            output_path=str(output),
+                            stream=stream,
+                            system_sampler="none",
+                            tokenizer="none",
+                        )
+                    ).run()
+                    statuses = {
+                        (r["status"], r["http_status"])
+                        for r in _records(output)
+                        if r.get("event_type") == "infer.request"
+                    }
+                    self.assertEqual(statuses, {("ok", 200)})
+
     def test_failures_are_classified_as_rejected_timeout_or_error(self) -> None:
         cases = {
             "rate-limited-model": ("rejected", 429),
@@ -851,6 +877,7 @@ class _BlockingClient:
         stream: bool,
         stream_include_usage: bool,
         request_id: str | None = None,
+        headers: dict[str, str] | None = None,
     ) -> ChatCompletionResult:
         started_at_ns = time.time_ns()
         started_perf = time.perf_counter()

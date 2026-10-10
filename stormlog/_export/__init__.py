@@ -3,6 +3,6 @@
 The inference exporters (``stormlog.infer.export``) map records onto these
 pieces: bounded queues, capped envelopes, a metric registry with fixed
 budgets, a bounded ``/metrics`` server, a textfile writer, a line file sink,
-a destination resolver and a socket watchdog. Each one bounds what it holds
-and counts what it drops.
+a destination resolver, a socket watchdog, and capped spans with their OTLP
+encodings. Each one bounds what it holds and counts what it drops.
 """

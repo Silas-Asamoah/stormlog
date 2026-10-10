@@ -4,19 +4,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import signal
+import sys
 import threading
 import time
 import urllib.error
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 from .. import __version__
-from ..scrub import redact_url
+from ..scrub import KnownSecrets, redact_url, url_secrets
 from ..session import (
     SESSION_STATUS_INCOMPLETE,
     SESSION_STATUS_INTERRUPTED,
@@ -32,6 +36,10 @@ from .cache_state import cache_state_record, reset_cache
 from .config import ProfileConfig, WorkloadCase
 from .correlation_events import ArtifactIdentityEvent, CorrelationContext
 from .events import InferenceRequestEvent, InferenceSummaryEvent, JsonlEventWriter
+from .export import RECEIVER_HEALTH, ExportPipeline, ReceiverHealth
+from .export_config import sampler_warnings
+from .export_metrics import ProfileLabels
+from .export_spans import SpanIdentity
 from .host_clock import host_boot_id, wall_clock_domain
 from .open_loop import Arrival, InFlightLimiter, cancel_all, dispatch_schedule
 from .openai_client import (
@@ -48,6 +56,7 @@ from .samplers import SystemSampler, build_system_sampler
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
 from .trace_capture import TraceWindows
+from .trace_context import OFF, TRACEPARENT, TraceIds, new_trace_ids, traceparent
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
     flush_execution_log,
@@ -73,9 +82,12 @@ class InferenceProfiler:
         *,
         run_id: str | None = None,
         on_warning: Callable[[str], None] | None = None,
+        on_notice: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
         self.on_warning = on_warning
+        # What the run is doing when it would otherwise seem stuck.
+        self.on_notice = on_notice
         self.session = create_session_summary(source="stormlog.infer.profile")
         self.run_id = run_id or config.run_id or new_session_id()
         self.token_counter = build_token_counter(
@@ -109,6 +121,7 @@ class InferenceProfiler:
         # Pool threads remove finished calls while the event loop reads the set.
         self._unfinished_lock = threading.Lock()
         self._opened_artifact = False
+        self._ctrl_c = _CtrlC()
         self.vllm_scraper = self._build_vllm_scraper()
         self.span_receiver: OtlpSpanReceiver | None = None
         self._span_receiver_error: str | None = None
@@ -118,6 +131,74 @@ class InferenceProfiler:
             else None
         )
         self.execution_dir = config.vllm_execution_dir
+        # The traceparent IDs of requests in flight, by request ID; empty
+        # unless --trace-context is on.
+        self._trace_ids: dict[str, TraceIds] = {}
+        # Built now so a budget or slot problem stops the run before it sends.
+        self.export = self._build_export()
+        for message in sampler_warnings(config.export):
+            self._warn(message)
+
+    def _build_export(self) -> ExportPipeline | None:
+        config = self.config
+        if not config.export.enabled:
+            return None
+        _check_span_file(config)
+        labels = ProfileLabels(
+            model=config.model,
+            server=redact_url(config.endpoint, origin_only=True),
+            cases=tuple((case.case_id, case.arrival.mode) for case in config.cases()),
+            run_id=self.run_id,
+            session_id=self.session.session_id,
+            version=__version__,
+            metrics_server=(
+                redact_url(config.vllm_metrics_url, origin_only=True)
+                if config.vllm_metrics_url is not None
+                else None
+            ),
+            traces=config.trace is not None,
+            case_label=config.export.prometheus_case_label,
+        )
+        health = (
+            [(RECEIVER_HEALTH, ReceiverHealth.health_metrics())]
+            if config.vllm_spans_listen is not None
+            else []
+        )
+        pipeline = ExportPipeline(
+            config.export,
+            labels,
+            health=health,
+            forbidden_paths=[Path(config.output_path)],
+            on_warning=self.on_warning,
+            spans=SpanIdentity(
+                run_id=self.run_id,
+                session_id=self.session.session_id,
+                model=config.model,
+                endpoint=config.endpoint,
+                sample_ratio=config.export.sample_ratio,
+                content=config.export.export_content,
+            ),
+            secrets=self._known_secrets(),
+            environ=os.environ,
+            host=self.session.host,
+        )
+        return pipeline
+
+    def _known_secrets(self) -> KnownSecrets:
+        """Every credential this run was given, to redact from what it exports."""
+        config = self.config
+        secrets = KnownSecrets([config.api_key])
+        urls = [
+            config.endpoint,
+            config.vllm_metrics_url,
+            config.cache_reset_url,
+            config.export.otlp_endpoint,
+            config.trace.control_url if config.trace is not None else None,
+        ]
+        for url in urls:
+            for value in url_secrets(url):
+                secrets.add(value)
+        return secrets
 
     def _build_vllm_scraper(self) -> VllmMetricsScraper | None:
         """The ``/metrics`` scraper when native vLLM telemetry is on."""
@@ -159,27 +240,72 @@ class InferenceProfiler:
                     seed=config.seed,
                 )
 
+    def prepare(self) -> None:
+        """Take what the run will hold, before it sends anything.
+
+        That is the textfile's slot, so a clash is an ``ExportUsageError``
+        here rather than mid-run. ``run`` does it too; building a profiler
+        takes nothing, so one that never runs holds nothing.
+        """
+        if self.export is not None:
+            self.export.prepare()
+
     def run(self) -> dict[str, Any]:
         """Run profiling and return an aggregate report."""
         try:
-            return asyncio.run(self._run_async())
+            self.prepare()
+            with _ctrl_c_raises(self._ctrl_c):
+                try:
+                    return asyncio.run(self._run_async())
+                except asyncio.CancelledError:
+                    self._ctrl_c.check()  # the watch's cancel: a Ctrl+C
+                    raise
         finally:
             self.request_executor.shutdown(wait=True, cancel_futures=True)
+            self._end_export(
+                interrupted=sys.exc_info()[0] is not None or self._ctrl_c.pressed
+            )
+
+    def _end_export(self, *, interrupted: bool) -> None:
+        """Close (a no-op after the capture closed it), linger, stop serving.
+
+        The close here is the first one when the capture never reached its
+        own, so it has the interrupted run's deadline, not none.
+        """
+        export = self.export
+        if export is None:
+            return
+        try:
+            export.close(EXPORT_INTERRUPT_CLOSE_SECONDS)
+            linger = self.config.export.prometheus_linger_seconds
+            if linger > 0 and not interrupted and export.server is not None:
+                if self.on_notice is not None:
+                    self.on_notice(
+                        f"Serving the final metrics at http://{export.server.address}"
+                        f"/metrics for {linger:g} s; Ctrl+C ends the wait"
+                    )
+                try:
+                    time.sleep(linger)
+                except KeyboardInterrupt:
+                    pass  # Ctrl+C during the linger only ends the linger
+        finally:
+            export.stop_serving()
 
     async def _run_async(self) -> dict[str, Any]:
         output_path = Path(self.config.output_path)
         try:
             await self._capture(output_path)
+            await self._import_server_evidence(output_path)
+            self._ctrl_c.check()
         except BaseException as exc:
             # A crash or Ctrl+C still ends the artifact with a session record,
             # once this run has opened it; an older file at the path is left be.
+            # The import of the server's evidence is covered too.
             if self._opened_artifact:
                 self._write_terminal_session(
                     output_path=output_path, report=None, status=_stop_status(exc)
                 )
             raise
-
-        await self._import_server_evidence(output_path)
         try:
             report = analyze_inference_events(output_path)
         except Exception:
@@ -255,7 +381,9 @@ class InferenceProfiler:
 
     async def _capture(self, output_path: Path) -> None:
         self._start_span_receiver()
-        with JsonlEventWriter(output_path) as writer:
+        self._start_export()
+        observer = self.export.observe if self.export is not None else None
+        with JsonlEventWriter(output_path, observer=observer) as writer:
             self._opened_artifact = True
             writer.append(
                 {
@@ -306,6 +434,14 @@ class InferenceProfiler:
                             else None
                         ),
                         "environment_proxies": ignored_proxies(),
+                        "trace_context": {
+                            "policy": self.config.export.trace_context,
+                            "sample_ratio": self.config.export.sample_ratio,
+                            # As the operator declared it; never verified.
+                            "server_trace_sampler": (
+                                self.config.export.server_trace_sampler
+                            ),
+                        },
                     },
                 }
             )
@@ -338,12 +474,16 @@ class InferenceProfiler:
             span_task = asyncio.create_task(
                 self._drain_spans_loop(writer=writer, stop_event=stop_spans)
             )
+            ctrl_c_task = self._ctrl_c.start_watch()
             completed = False
             try:
                 for case in self.config.cases():
                     await self._run_case(case=case, writer=writer)
                 completed = True
             finally:
+                # Before any await: the shutdown below is not to be cut short
+                # by the watch, which stands in only for a lost Ctrl+C.
+                ctrl_c_task.cancel()
                 # The helpers are waited for, never awaited: under a real
                 # Ctrl+C asyncio.run has cancelled them too, and a bare
                 # await would raise here and skip the rest of this block.
@@ -358,10 +498,53 @@ class InferenceProfiler:
                     stop_spans.set()
                     await _wait_for(span_task)
                     self._stop_span_receiver(writer)
-                    # Written on the way out of an interrupted run too, so
-                    # the artifact says what the engine exposed before it
-                    # says why the run stopped.
-                    self._write_capabilities(writer)
+                    try:
+                        # Before the capability records, so the export's
+                        # counts in them are final; synchronous, so a
+                        # cancellation cannot skip it, and an interrupt
+                        # inside it still finishes it.
+                        self._offer_capture_span(completed)
+                        self._close_export(completed)
+                    finally:
+                        # Written on the way out of an interrupted run too,
+                        # so the artifact says what the engine exposed
+                        # before it says why the run stopped.
+                        self._write_capabilities(writer)
+            # A Ctrl+C whose KeyboardInterrupt was lost ends the run here.
+            self._ctrl_c.check()
+
+    def _start_export(self) -> None:
+        export = self.export
+        if export is None:
+            return
+        export.start(started_at=time.time())
+        if self.span_receiver is not None:
+            export.attach_health(RECEIVER_HEALTH, ReceiverHealth(self.span_receiver))
+
+    def _offer_capture_span(self, completed: bool) -> None:
+        if self.export is None:
+            return
+        error = sys.exc_info()[1]
+        if self._ctrl_c.pressed:  # the press may have been lost, not raised
+            outcome, error_type = "interrupted", None
+        elif completed or error is None:
+            outcome, error_type = "completed", None
+        elif isinstance(error, (KeyboardInterrupt, asyncio.CancelledError)):
+            outcome, error_type = "interrupted", None
+        else:
+            outcome, error_type = "failed", type(error).__name__
+        self.export.offer_capture(
+            started_ns=self.session.started_at_ns,
+            outcome=outcome,
+            error_type=error_type,
+        )
+
+    def _close_export(self, completed: bool) -> None:
+        if self.export is not None:
+            deadline = self.config.export.otlp_flush_timeout_seconds
+            if not completed or self._ctrl_c.pressed:
+                deadline = min(deadline, EXPORT_INTERRUPT_CLOSE_SECONDS)
+            self.export.close(deadline)
 
     async def _wait_for_late_spans(self) -> None:
         """Keep the receiver up after the last phase for the exporter's last batch.
@@ -424,20 +607,26 @@ class InferenceProfiler:
                 pass
 
     def _write_capabilities(self, writer: JsonlEventWriter) -> None:
-        """Say what the engine exposed, once the run knows."""
-        if self.vllm_scraper is None and self.config.vllm_spans_listen is None:
-            return
-        context = self._artifact_identity().context
-        if self.vllm_scraper is not None:
-            writer.append(self.vllm_scraper.capability_event(context).to_record())
-        if self.config.vllm_spans_listen is not None:
-            event = span_capability_event(
-                context,
-                receiver=self.span_receiver,
-                listen=self.config.vllm_spans_listen,
-                error=self._span_receiver_error,
-            )
-            writer.append(event.to_record())
+        """Say what the engine exposed, and what was exported, once the run knows.
+
+        A Ctrl+C while these are written takes effect once they are, so an
+        interrupted run still records its export's final counts.
+        """
+        with _ctrl_c_held():
+            context = self._artifact_identity().context
+            if self.export is not None:
+                for event in self.export.capability_events(context):
+                    writer.append(event.to_record())
+            if self.vllm_scraper is not None:
+                writer.append(self.vllm_scraper.capability_event(context).to_record())
+            if self.config.vllm_spans_listen is not None:
+                event = span_capability_event(
+                    context,
+                    receiver=self.span_receiver,
+                    listen=self.config.vllm_spans_listen,
+                    error=self._span_receiver_error,
+                )
+                writer.append(event.to_record())
 
     def _artifact_identity(self) -> ArtifactIdentityEvent:
         session = self.session
@@ -925,8 +1114,11 @@ class InferenceProfiler:
     ) -> None:
         """Send one request and record it, or record that it was cancelled."""
         sent_at_ns = time.time_ns()
+        export = self.config.export
+        if export.trace_context != OFF:
+            self._trace_ids[request_id] = new_trace_ids(export.sample_ratio)
         try:
-            event = await self._run_one_request(
+            event, extras = await self._run_one_request(
                 request_id=request_id, request=request, arrival=arrival
             )
         except asyncio.CancelledError:
@@ -939,9 +1131,11 @@ class InferenceProfiler:
             request.writer.append(cancelled.to_record())
             request.prompts.forget(arrival.index)
             raise
+        finally:
+            self._trace_ids.pop(request_id, None)
         # Keep only the prompt's digest once its request is done.
         request.prompts.forget(arrival.index)
-        request.writer.append(event.to_record())
+        request.writer.append(event.to_record(), extras)
 
     def _drain_timeout(self) -> float:
         if self.config.drain_timeout_seconds is not None:
@@ -966,10 +1160,13 @@ class InferenceProfiler:
         never went out, which therefore carried no ``X-Request-Id``.
         """
         case = request.case
+        ids = self._trace_ids.get(request_id) if sent else None
         return {
             "session_id": self.session.session_id,
             "request_id": request_id,
             "x_request_id": self._x_request_id(request_id) if sent else None,
+            "trace_id": ids.trace_id if ids is not None else None,
+            "span_id": ids.span_id if ids is not None else None,
             "case_id": case.case_id,
             "phase": request.phase,
             "endpoint": self.config.endpoint,
@@ -1000,9 +1197,16 @@ class InferenceProfiler:
         request_id: str,
         request: "_PhaseRequest",
         arrival: Arrival,
-    ) -> InferenceRequestEvent:
+    ) -> tuple[InferenceRequestEvent, dict[str, Any] | None]:
+        """The request's event, and what an exporter may use beside it."""
         case = request.case
         prompt = request.prompts.take(arrival.index)
+        ids = self._trace_ids.get(request_id)
+        headers = (
+            {TRACEPARENT: traceparent(ids, self.config.export.trace_context)}
+            if ids is not None
+            else None
+        )
         call = self.request_executor.submit(
             self._call_and_count,
             prompt,
@@ -1013,16 +1217,19 @@ class InferenceProfiler:
                 stream=self.config.stream,
                 stream_include_usage=self.config.stream_include_usage,
                 request_id=self._x_request_id(request_id),
+                headers=headers,
             ),
         )
         self._track(call)
         outcome = await asyncio.wrap_future(call)
         if outcome.error is None:
             try:
-                return self._ok_event(request_id, request, arrival, prompt, outcome)
+                event = self._ok_event(request_id, request, arrival, prompt, outcome)
+                return event, outcome.extras
             except Exception as exc:
                 outcome = replace(outcome, error=exc)
-        return self._failure_event(request_id, request, arrival, prompt, outcome)
+        event = self._failure_event(request_id, request, arrival, prompt, outcome)
+        return event, outcome.extras
 
     def _call_and_count(
         self, prompt: Prompt, call: Callable[[], ChatCompletionResult]
@@ -1034,6 +1241,20 @@ class InferenceProfiler:
         """
         outcome = _timed_call(call)
         result = outcome.result
+        if self.export is not None:
+            # Here, where the response is, so the event loop only copies a
+            # fixed-size result for the exporters.
+            outcome = replace(
+                outcome,
+                extras=self.export.request_extras(
+                    prompt=prompt.text,
+                    output=result.text if result is not None else None,
+                    chunk_gaps_ms=(
+                        result.chunk_interarrival_ms if result is not None else None
+                    ),
+                    error=outcome.error,
+                ),
+            )
         try:
             if result is None:
                 return replace(outcome, prompt_count=prompt.count)
@@ -1083,6 +1304,7 @@ class InferenceProfiler:
             output_token_exact=output_count.exact,
             total_tokens=total_tokens,
             finish_reason=result.finish_reason,
+            http_status=result.http_status,
         )
 
     def _failure_event(
@@ -1199,6 +1421,8 @@ class _TimedCall:
     error: Exception | None = None
     prompt_count: TokenCount | None = None
     output_count: TokenCount | None = None
+    # What the exporters need beyond the record; None when nothing exports.
+    extras: dict[str, Any] | None = None
 
 
 def _timed_call(call: Callable[[], ChatCompletionResult]) -> _TimedCall:
@@ -1303,6 +1527,104 @@ async def _wait_for(task: asyncio.Task[Any], timeout: float | None = None) -> bo
     return task in done
 
 
+class _CtrlC:
+    """Whether a Ctrl+C reached the run, even if its KeyboardInterrupt did not.
+
+    Python runs a signal handler at the next bytecode, which can be in a
+    weakref callback or a ``__del__`` run by the garbage collector. An
+    exception raised there is printed and dropped, so the run would go on
+    as if the key was never pressed. The handler records the press before
+    it raises, and the run stops on the record where it can.
+    """
+
+    # How often the capture looks for a press whose interrupt was lost.
+    WATCH_SECONDS = 0.1
+
+    def __init__(self) -> None:
+        self.pressed = False
+
+    def handler(self, _signum: int, _frame: FrameType | None) -> None:
+        self.pressed = True
+        raise KeyboardInterrupt
+
+    def check(self) -> None:
+        """Raise the KeyboardInterrupt of a press that was lost."""
+        if self.pressed:
+            raise KeyboardInterrupt
+
+    def start_watch(self) -> asyncio.Task[None]:
+        """Watch, from now on, on behalf of the task that calls this."""
+        task = asyncio.current_task()
+        assert task is not None
+        return asyncio.create_task(self.watch(task))
+
+    async def watch(self, task: asyncio.Task[Any]) -> None:
+        """Cancel ``task`` once a press is seen, as asyncio's own handler would.
+
+        ``run`` turns the cancellation back into the KeyboardInterrupt.
+        """
+        while not self.pressed:
+            await asyncio.sleep(self.WATCH_SECONDS)
+        task.cancel()
+
+
+@contextmanager
+def _ctrl_c_raises(ctrl_c: _CtrlC) -> Iterator[None]:
+    """Keep Ctrl+C a KeyboardInterrupt where it lands, on every Python.
+
+    From 3.11, asyncio.run swaps the default SIGINT handler for one that
+    cancels the main task, and a cancel only lands at the next await. The
+    run's last steps (the export's close, the capability records) are
+    synchronous, so a Ctrl+C there would wait out the close's deadline and
+    leave the run recorded as completed. asyncio.run keeps any other
+    handler, so this one, which raises as the default does, keeps 3.10's
+    behaviour, and records the press in ``ctrl_c`` first. Off the main
+    thread, or under another handler, it does nothing.
+    """
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or signal.getsignal(signal.SIGINT) is not signal.default_int_handler
+    ):
+        yield
+        return
+    signal.signal(signal.SIGINT, ctrl_c.handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+@contextmanager
+def _ctrl_c_held() -> Iterator[None]:
+    """Hold a Ctrl+C back until the block ends, then deliver it.
+
+    The held signal goes to the handler that was in place, which during a
+    run raises KeyboardInterrupt (``_ctrl_c_raises``). A second Ctrl+C goes
+    to it at once, so a write stuck in the block can still be broken off.
+    Off the main thread, where no handler can be set, or under a handler
+    not set from Python, the block runs as is.
+    """
+    previous = signal.getsignal(signal.SIGINT)
+    if threading.current_thread() is not threading.main_thread() or previous is None:
+        yield
+        return
+    presses: list[int] = []
+
+    def hold(signum: int, _frame: FrameType | None) -> None:
+        presses.append(signum)
+        if len(presses) > 1:
+            signal.signal(signal.SIGINT, previous)
+            signal.raise_signal(signal.SIGINT)
+
+    signal.signal(signal.SIGINT, hold)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        if len(presses) == 1:
+            signal.raise_signal(signal.SIGINT)
+
+
 @asynccontextmanager
 async def _no_trace_window() -> AsyncIterator[None]:
     yield None
@@ -1339,6 +1661,51 @@ def _lag_ms(arrival: Arrival, sent_at_ns: int) -> float:
     return (sent_at_ns - arrival.intended_at_ns) / 1_000_000.0
 
 
+def _check_span_file(config: ProfileConfig) -> None:
+    """Refuse a span file another writer or reader of the run owns.
+
+    The artifact, a file in the textfile collector's directory, or one the
+    vLLM execution import reads: each would be written over or read as
+    something it is not.
+    """
+    span_file = config.export.otlp_file
+    if span_file is None:
+        return
+    target = Path(span_file).resolve()
+    if _same_path(target, Path(config.output_path)):
+        raise ValueError(
+            f"--otlp-file {span_file} is the artifact, or differs from it only "
+            "in case; choose another path"
+        )
+    for flag, directory in (
+        ("--prometheus-textfile-dir", config.export.prometheus_textfile_dir),
+        ("--vllm-execution-dir", config.vllm_execution_dir),
+    ):
+        if directory is not None and any(
+            _same_path(parent, Path(directory)) for parent in target.parents
+        ):
+            raise ValueError(
+                f"--otlp-file {span_file} is inside {flag} {directory}; "
+                "choose a path of its own"
+            )
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    """Whether two paths may name one file or directory.
+
+    The same inode when both exist. Otherwise the resolved paths compared
+    ignoring case, since a case-insensitive disk (macOS's default) folds
+    it: two names that differ only in case are taken as one everywhere.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return str(a.resolve()).casefold() == str(b.resolve()).casefold()
+
+
+# How long closing the exporters may take after Ctrl+C, at most; otherwise
+# --otlp-flush-timeout (5 s). They finish what is queued, then freeze.
+EXPORT_INTERRUPT_CLOSE_SECONDS = 2.0
 # The server declined the request: rate limited or overloaded.
 REJECTED_HTTP_STATUSES = frozenset({429, 503})
 # How long the finished run waits for the vLLM execution hook to seal its open

@@ -1,0 +1,36 @@
+# The collector for #221's X1 outage episode: killed and restarted mid-run.
+#
+# Nothing sits between the receiver and the file: no batch processor, and
+# rotation set, which makes the file exporter write each export as it
+# arrives instead of buffering it for its flush_interval. The receiver can
+# still answer just before the write, so a span the collector acknowledged
+# in the moment it was killed may be missing: the collector-side bounds
+# checked on this file are approximate. fake_collector.py, which fsyncs
+# before it answers, gives exact ones. Run Stormlog with
+# --otlp-probe-interval 1.
+#
+# The file path comes from X1_OUT (default ./x1-traces.jsonl).
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+exporters:
+  file:
+    path: ${env:X1_OUT:-./x1-traces.jsonl}
+    rotation:
+      max_megabytes: 1000
+
+service:
+  # Jaeger v2, built on the collector too, serves its own metrics on 8888;
+  # with this collector's off, the two can run on one host.
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: []
+      exporters: [file]

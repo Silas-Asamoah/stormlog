@@ -1,0 +1,194 @@
+{
+  "contract": "stormlog.export",
+  "version": 1,
+  "owner": "#220",
+  "readers": ["#221 qualification harness", "#219 watch export section"],
+  "flags": {
+    "--prometheus-listen": {"key": "prometheus_listen", "default": null, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-linger": {"key": "prometheus_linger_seconds", "default": 0.0, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-textfile-dir": {"key": "prometheus_textfile_dir", "default": null, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-slot": {"key": "prometheus_slot", "default": "default", "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-textfile-interval": {"key": "prometheus_textfile_interval_seconds", "default": 15.0, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-textfile-remove-on-exit": {"key": "prometheus_textfile_remove_on_exit", "default": false, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-max-series": {"key": "prometheus_max_series", "default": 50000, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-max-bytes": {"key": "prometheus_max_bytes", "default": 16777216, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-series-headroom": {"key": "prometheus_series_headroom", "default": null, "defaults_by_command": {"profile": 0, "watch": 64, "collect-server": 0}, "commands": ["profile", "watch", "collect-server"]},
+    "--prometheus-case-label": {"key": "prometheus_case_label", "default": true, "choices": ["on", "off"], "commands": ["profile", "watch", "collect-server"]},
+    "--otlp-endpoint": {"key": "otlp_endpoint", "default": null, "commands": ["profile", "watch"]},
+    "--otlp-file": {"key": "otlp_file", "default": null, "commands": ["profile", "watch"]},
+    "--otlp-file-fsync": {"key": "otlp_file_fsync", "default": false, "commands": ["profile", "watch"]},
+    "--otlp-header": {"key": "otlp_headers", "default": [], "repeatable": true, "commands": ["profile", "watch"]},
+    "--otlp-allow-insecure-headers": {"key": "otlp_allow_insecure_headers", "default": false, "commands": ["profile", "watch"]},
+    "--otlp-resource-attribute": {"key": "otlp_resource_attributes", "default": [], "repeatable": true, "commands": ["profile", "watch"]},
+    "--otlp-resource-attribute-allow": {"key": "otlp_resource_attribute_allow", "default": [], "repeatable": true, "commands": ["profile", "watch"]},
+    "--otlp-flush-timeout": {"key": "otlp_flush_timeout_seconds", "default": 5.0, "commands": ["profile", "watch"]},
+    "--otlp-probe-interval": {"key": "otlp_probe_interval_seconds", "default": 8.0, "range": [0.5, 30.0], "commands": ["profile", "watch"]},
+    "--export-content": {"key": "export_content", "default": [], "choices": ["digests", "errors", "prompts", "outputs"], "commands": ["profile", "watch"]},
+    "--trace-context": {"key": "trace_context", "default": "off", "choices": ["off", "preserve-engine", "follow-sampling"], "commands": ["profile"]},
+    "--server-trace-sampler": {"key": "server_trace_sampler", "default": null, "commands": ["profile"]},
+    "--otlp-sample-ratio": {"key": "sample_ratio", "default": 1.0, "range": [0.0, 1.0], "commands": ["profile"]}
+  },
+  "export_keys": [
+    "prometheus_listen",
+    "prometheus_linger_seconds",
+    "prometheus_textfile_dir",
+    "prometheus_slot",
+    "prometheus_textfile_interval_seconds",
+    "prometheus_textfile_remove_on_exit",
+    "prometheus_max_series",
+    "prometheus_max_bytes",
+    "prometheus_series_headroom",
+    "prometheus_case_label",
+    "trace_context",
+    "sample_ratio",
+    "server_trace_sampler",
+    "otlp_endpoint",
+    "otlp_file",
+    "otlp_file_fsync",
+    "otlp_headers",
+    "otlp_allow_insecure_headers",
+    "otlp_resource_attributes",
+    "otlp_resource_attribute_allow",
+    "otlp_flush_timeout_seconds",
+    "otlp_probe_interval_seconds",
+    "export_content"
+  ],
+  "watch_refuses": ["trace_context"],
+  "trace_context": {
+    "header": "traceparent",
+    "record_fields": ["trace_id", "span_id"],
+    "session_config": "config.trace_context",
+    "flags_sent": {"preserve-engine": "01", "follow-sampling": "the head decision at sample_ratio"}
+  },
+  "capabilities": {
+    "prometheus": "export.prometheus",
+    "otlp": "export.otlp"
+  },
+  "metrics": {
+    "summary_keys": ["offered", "applied", "dropped", "tokens_rejected", "exact", "queue_high_water"],
+    "dropped_reasons": ["queue_full", "closed", "shutdown", "error"],
+    "identity": "offered = applied + dropped.queue_full + dropped.closed + dropped.shutdown + dropped.error",
+    "exact": "dropped.queue_full + dropped.shutdown + dropped.error == 0 and internal_errors.observe == 0 and tokens_rejected == 0"
+  },
+  "spans": {
+    "accounting_keys": [
+      "offered",
+      "exported",
+      "rejected",
+      "refused",
+      "dropped",
+      "unknown",
+      "queued",
+      "in_flight",
+      "max_extra_copies",
+      "late_results",
+      "frozen",
+      "loss_accounting",
+      "sampled_out"
+    ],
+    "identity": "offered = exported + rejected + sum(refused) + sum(dropped) + sum(unknown) + queued + in_flight",
+    "after_freeze": {"queued": 0, "in_flight": 0},
+    "outside_identity": ["sampled_out", "late_results", "max_extra_copies"],
+    "transmission_kinds": ["confirmed", "refused", "ambiguous", "not_sent"],
+    "categories": [
+      "connect_refused",
+      "connect_timeout",
+      "dns",
+      "tls",
+      "send_failed",
+      "timeout_after_send",
+      "reset_after_send",
+      "http_4xx",
+      "http_5xx",
+      "throttled",
+      "redirect",
+      "unreadable_response",
+      "nonconformant_response"
+    ],
+    "reasons": {
+      "refused": ["http_4xx", "throttled", "redirect"],
+      "dropped": [
+        "queue_full",
+        "closed",
+        "shutdown",
+        "encode_error",
+        "connect_refused",
+        "connect_timeout",
+        "dns",
+        "tls",
+        "send_failed",
+        "file_full",
+        "file_error",
+        "file_disabled"
+      ],
+      "unknown": [
+        "timeout_after_send",
+        "reset_after_send",
+        "http_5xx",
+        "unreadable_response",
+        "nonconformant_response",
+        "rejected_after_ambiguous",
+        "refused_after_ambiguous",
+        "shutdown_in_flight",
+        "file_partial",
+        "send_failed"
+      ]
+    },
+    "bounds": [
+      "exported <= unique_received <= exported + sum(unknown)",
+      "raw_received - unique_received <= max_extra_copies"
+    ],
+    "max_extra_copies": "sum over batches of n * max(0, ambiguous_transmissions + confirmed - 1)"
+  },
+  "destination": {
+    "transition_fields": ["at_ns", "event", "reason"],
+    "transition_events": ["first_failure", "breaker_open", "first_success", "breaker_closed"],
+    "max_transitions": 64,
+    "breaker_threshold_batches": 3
+  },
+  "defaults": {
+    "attempt_seconds": 5.0,
+    "max_attempts": 5,
+    "retry_budget_seconds": 30.0,
+    "backoff_initial_seconds": 0.5,
+    "backoff_max_seconds": 8.0,
+    "schedule_delay_seconds": 1.0,
+    "batch_spans": 512,
+    "batch_bytes": 4194304,
+    "span_queue_spans": 2048,
+    "span_queue_bytes": 8388608,
+    "metric_queue_records": 65536,
+    "metric_queue_bytes": 8388608,
+    "otlp_file_max_bytes": 268435456,
+    "max_response_bytes": 65536,
+    "interrupt_flush_timeout_seconds": 2.0
+  },
+  "arms": {
+    "export-client-prom": {
+      "command": "profile",
+      "flags": ["--prometheus-listen", "HOST:PORT"],
+      "consumer": "a Prometheus scraping every 15 s"
+    },
+    "export-client-otlp": {
+      "command": "profile",
+      "flags": [
+        "--otlp-endpoint",
+        "URL",
+        "--trace-context",
+        "preserve-engine",
+        "--server-trace-sampler",
+        "NAME[:ARG]"
+      ],
+      "declares": ["traceparent"]
+    },
+    "export-watch": {
+      "command": "watch",
+      "config_section": "export"
+    }
+  },
+  "outages": {
+    "X1": {"flags": ["--otlp-probe-interval", "1"], "expect": ["first_failure", "first_success"], "within_seconds": "1 + epsilon"},
+    "X2": {"expect": "no Stormlog-side drops while Prometheus is down"},
+    "X3": {"expect_unknown_reason": "timeout_after_send"}
+  }
+}

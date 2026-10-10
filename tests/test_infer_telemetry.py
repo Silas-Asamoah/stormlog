@@ -427,6 +427,47 @@ def test_collector_stops_cleanly_when_the_server_process_ends(tmp_path: Path) ->
     assert {s.state for s in samples[:-1]} == {"valid"}
 
 
+def test_a_server_already_a_zombie_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Linux shows an exited server its parent has not reaped as running; a
+    # collection would end at its first poll and exit 0. It is refused as a
+    # server that is not running, before anything is written.
+    zombie = _Process(status=psutil.STATUS_ZOMBIE)
+    monkeypatch.setattr(psutil, "Process", lambda _pid: zombie)
+    path = tmp_path / "zombie.jsonl"
+    with pytest.raises(ValueError, match="server process is not running"):
+        collect_server_telemetry(
+            run_id="run-zombie", pid=7, output_path=path, no_gpu=True
+        )
+    assert not path.exists()
+
+
+def test_a_real_unreaped_server_is_refused(tmp_path: Path) -> None:
+    # The same with a real child, killed and not reaped. Linux keeps it as a
+    # zombie; macOS already reports it gone.
+    server = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        server.kill()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                if psutil.Process(server.pid).status() == psutil.STATUS_ZOMBIE:
+                    break
+            except psutil.NoSuchProcess:  # a zombie on macOS reads as gone
+                break
+            time.sleep(0.02)
+        with pytest.raises(ValueError, match="not running|no process with pid"):
+            collect_server_telemetry(
+                run_id="run-zombie",
+                pid=server.pid,
+                output_path=tmp_path / "zombie.jsonl",
+                no_gpu=True,
+            )
+    finally:
+        server.wait()
+
+
 def test_stop_event_ends_collection_as_a_requested_stop(tmp_path: Path) -> None:
     stop_event = threading.Event()
 
@@ -500,12 +541,22 @@ def test_poll_schedule_skips_missed_polls_instead_of_bursting() -> None:
 class _Process:
     pid = 7
 
-    def __init__(self, *, running: bool = True, error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        error: Exception | None = None,
+        status: str = psutil.STATUS_RUNNING,
+    ):
         self.running = running
         self.error = error
+        self._status = status
 
     def is_running(self) -> bool:
         return self.running
+
+    def status(self) -> str:
+        return self._status
 
     def memory_info(self) -> SimpleNamespace:
         if self.error is not None:
@@ -518,6 +569,9 @@ class _Process:
     [
         (_Process(), "valid"),
         (_Process(running=False), "invalid"),
+        # As Linux shows a killed child its parent has not reaped: still
+        # running, with an RSS of 0.
+        (_Process(status=psutil.STATUS_ZOMBIE), "invalid"),
         (_Process(error=psutil.NoSuchProcess(7)), "invalid"),
         (_Process(error=psutil.ZombieProcess(7)), "invalid"),
         (_Process(error=psutil.AccessDenied(7)), "missing"),

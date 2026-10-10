@@ -38,7 +38,10 @@ Every request goes out with an `X-Request-Id: stormlog-<run_id>-<request_id>`
 header, recorded on its event as `x_request_id`. OpenAI-compatible servers
 ignore headers they do not know; vLLM embeds it in its own request id and in
 the span it emits per request, which is how
-[vLLM native telemetry](vllm_telemetry.md) joins spans to requests.
+[vLLM native telemetry](vllm_telemetry.md) joins spans to requests. With
+`--trace-context preserve-engine`, a `traceparent` header goes out too, and
+the request's `trace_id` and `span_id` are recorded; see
+[Trace context](inference_export.md#trace-context).
 
 The profiler sends controlled traffic for each workload case in the matrix:
 
@@ -566,6 +569,13 @@ Read process titles with `ps -o args`; `/proc/<pid>/comm` cuts them at 15
 characters. The same flags describe one process that spreads a model over
 several GPUs: run one collector per GPU with the same `--pid`.
 
+Each collector can report its own health to Prometheus with
+`--prometheus-listen` or `--prometheus-textfile-dir` (give concurrent
+collectors different `--prometheus-slot` names). The health is labelled with
+the identity the collector observed, and whether NVML showed the server on its
+GPU; the memory values stay in its output.
+See [Collector health](inference_export.md#collector-health).
+
 The analyzer joins a group only when every rank from 0 to N-1 appears exactly
 once. Otherwise the report stays unjoined with one of these reasons:
 
@@ -752,6 +762,26 @@ flags, the metric map and the capability matrix.
 It scrapes `/metrics` once per tick into a bounded history, and when a
 trigger's condition has been bad for long enough it seals the scrapes around
 it into an incident bundle. See [Inference incident capture](incident_capture.md).
+
+## Exporting to Prometheus and OpenTelemetry
+
+`--prometheus-listen HOST:PORT` serves Stormlog's own measurements at
+`/metrics` while a profile runs, and `--prometheus-textfile-dir DIR` writes
+them to a node_exporter textfile. The measurements include client latencies,
+request outcomes, token counts by source, scrape health and the exporter's
+health. Engine series that Stormlog scraped are never re-exposed. Every label
+value comes from the run's configuration, so a matrix too large for the
+metric budget is refused before anything is sent.
+
+`--otlp-endpoint URL` sends Stormlog's own spans (the capture, its phases
+and every request sent) to an OpenTelemetry collector, and `--otlp-file PATH`
+writes them as OTLP JSON lines. Every span offered is accounted for, as
+exported, rejected, refused, dropped or unknown, and the run never waits
+more than `--otlp-flush-timeout` for a collector. Prompts, outputs and
+server error text leave only with `--export-content`.
+
+See [Exporting inference metrics and spans](inference_export.md) for the
+metrics, spans, labels, budget, accounting and failure behaviour.
 
 ## Profiler traces
 

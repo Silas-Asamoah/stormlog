@@ -1,0 +1,30 @@
+# UNVALIDATED: written for reference and not yet run. local_stack.py with
+# the binaries is the tested way to run this stack (docs/inference_export.md).
+#
+# The collector, Prometheus and Jaeger on the host network, so the configs'
+# 127.0.0.1 addresses reach vLLM and Stormlog on the same machine (Linux).
+
+services:
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol/otelcol.yaml"]
+    network_mode: host
+    environment:
+      OTELCOL_TRACES_FILE: /out/otelcol-traces.jsonl
+    volumes:
+      - ./otelcol.yaml:/etc/otelcol/otelcol.yaml:ro
+      - ./out:/out
+
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    network_mode: host
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    command: ["--config=/etc/jaeger/jaeger.yaml"]
+    network_mode: host
+    volumes:
+      - ./jaeger.yaml:/etc/jaeger/jaeger.yaml:ro
