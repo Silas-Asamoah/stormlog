@@ -15,6 +15,8 @@ pytest-xdist>=2.4.0
 pexpect>=4.9.0
 pytest-textual-snapshot>=1.1.0
 jsonschema>=4.0.0
+# The exporters' conformance tests read the exposition with an independent parser.
+prometheus_client>=0.18
 opentelemetry-proto>=1.20
 textual>=0.57.0
 coverage>=5.5.0
