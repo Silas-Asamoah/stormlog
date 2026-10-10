@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional, TextIO
 
+from .correlation_codec import CorrelationRecordEncoder
+
 INFER_SCHEMA_VERSION = 1
 
 # Every status an infer.request record can have. Exporters pre-create one
@@ -161,6 +163,7 @@ class JsonlEventWriter:
         self.observer_errors = 0
 
     def __enter__(self) -> "JsonlEventWriter":
+        self._encoder = CorrelationRecordEncoder()
         self._handle = self.path.open("w", encoding="utf-8")
         return self
 
@@ -174,7 +177,10 @@ class JsonlEventWriter:
     ) -> None:
         if self._handle is None:
             raise RuntimeError("JsonlEventWriter is not open")
-        self._handle.write(json.dumps(record, sort_keys=True) + "\n")
+        rows = self._encoder.prepare(record)
+        text = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+        self._handle.write(text)
+        self._encoder.commit(rows)
         self._handle.flush()
         if self._observer is not None:
             try:

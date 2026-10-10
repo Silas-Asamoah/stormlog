@@ -17,6 +17,7 @@ from stormlog.exit_codes import ExitCode
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.correlation_codec import expand_inference_records
 from stormlog.infer.correlation_events import (
     ArtifactIdentityEvent,
     load_inference_artifact,
@@ -231,6 +232,10 @@ class InferenceProfileTests(unittest.TestCase):
                     json.loads(line)
                     for line in output.read_text(encoding="utf-8").splitlines()
                 ]
+                self.assertTrue(
+                    any(r.get("event_type") == "infer.context" for r in records)
+                )
+                records = expand_inference_records(records)
                 measured = [
                     record
                     for record in records

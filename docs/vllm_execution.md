@@ -376,3 +376,12 @@ clock scope, never a sum:
 A case's figure covers every step one of its requests shared, so a case
 that shared a batch with another case or with other clients is labelled
 `non_additive`. No per-request GPU cost is computed.
+
+## Reading compact correlation records
+
+New inference artifacts use [wire v4 context definitions and references](inference_correlation.md#compact-artifact-storage-wire-v4).
+Use `load_inference_artifact` for complete typed events, or
+`read_inference_records` from `stormlog.infer.correlation_codec` for expanded
+dictionaries. Definitions are storage metadata and are excluded from loaded
+event counts. Legacy v1 records keep their existing fields and interpretation.
+Older readers must be upgraded to consume new compact artifacts.

@@ -455,3 +455,70 @@ def test_device_and_monotonic_clock_kinds_do_not_merge() -> None:
         ].busy_ns
         == 8_000_000
     )
+
+
+def test_compact_accounting_keeps_conflicts_runs_and_device_clock_dimensions():
+    from stormlog.infer.correlation_codec import (
+        CorrelationRecordEncoder,
+        expand_inference_records,
+    )
+    from stormlog.infer.correlation_events import parse_inference_record
+
+    events, *_ = _shared_events()
+    activity = next(e for e in events if isinstance(e, ActivityReferenceEvent))
+    variants = [
+        replace(
+            activity,
+            event_id="intervals",
+            activity_ref=EntityRef("trace-a", "intervals"),
+            metadata={"intervals": [[0, 1_000_000], [3_000_000, 1_000_000]]},
+        ),
+        replace(
+            activity,
+            event_id="device",
+            activity_ref=EntityRef("trace-a", "device"),
+            context=replace(activity.context, device_uuid="GPU-other"),
+        ),
+        replace(
+            activity,
+            event_id="clock",
+            activity_ref=EntityRef("trace-a", "clock"),
+            context=replace(activity.context, clock_domain="other/monotonic"),
+        ),
+    ]
+    original = [*events, *variants]
+
+    def roundtrip(values):
+        encoder = CorrelationRecordEncoder()
+        rows = [row for event in values for row in encoder.encode(event.to_record())]
+        return [parse_inference_record(row) for row in expand_inference_records(rows)]
+
+    graph = resolve_inference_events(original)
+    restored = resolve_inference_events(roundtrip(original))
+    assert restored == graph
+    assert account_gpu_time(restored) == account_gpu_time(graph)
+    assert len(account_gpu_time(restored).device_totals) == 3
+    with pytest.raises(ValueError):
+        resolve_inference_events(
+            roundtrip([activity, replace(activity, metadata={"changed": True})])
+        )
+    with pytest.raises(ValueError):
+        resolve_inference_events(
+            roundtrip(
+                [
+                    activity,
+                    replace(activity, context=replace(activity.context, host="other")),
+                ]
+            )
+        )
+    with pytest.raises(ValueError):
+        resolve_inference_events(
+            roundtrip(
+                [
+                    activity,
+                    replace(
+                        activity, context=replace(activity.context, run_id="other")
+                    ),
+                ]
+            )
+        )

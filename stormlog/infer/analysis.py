@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -13,6 +12,7 @@ from ..session import SESSION_STATUS_COMPLETED
 from .arrival_report import arrival_lines, arrival_summary, latency_from_intended_ms
 from .cache_state import cache_lines, cache_summary
 from .correlation_accounting import AlignedTimestamp
+from .correlation_codec import read_inference_records
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
 from .latency_report import latency_summary, streaming_summary
@@ -606,17 +606,7 @@ def _load_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            payload = json.loads(line)
-            if not isinstance(payload, dict):
-                raise ValueError(f"Line {line_number} is not a JSON object")
-            records.append(payload)
-    return records
+    return read_inference_records(path)
 
 
 def _reason(exc: Exception) -> str:
