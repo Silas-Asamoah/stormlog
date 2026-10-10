@@ -11,8 +11,15 @@ from typing import Any
 from stormlog import __version__
 
 _EXPORTS = {
+    "MLXMemoryProfiler": "profiler",
+    "ProfileRegion": "profiler",
     "MemorySnapshot": "models",
+    "ProfileResult": "models",
     "MLXRuntime": "runtime",
+    "profile_function": "context_profiler",
+    "profile_context": "context_profiler",
+    "get_global_profiler": "context_profiler",
+    "clear_global_profiler": "context_profiler",
     "get_device_info": "utils",
     "get_system_info": "utils",
 }
