@@ -862,6 +862,24 @@ def test_the_preregistered_block_count_holds_the_attainment_gate_too() -> None:
     assert comparison.to_payload()["spec"]["min_complete_blocks"]["preregistered"] == 6
 
 
+def test_the_attainment_gate_counts_in_the_reports_gate_totals() -> None:
+    # Codex on #303: with only --min-attainment, the report said "every gate
+    # passed (0 gates)", or "1 gate(s) failed ... of 0", and metrics.gates
+    # was 0, since the totals counted only the metric gates.
+    from stormlog.infer.compare_report import comparison_report
+
+    baseline, _ = _arms(SAME)
+    for meets, summary in ((0.995, "every gate passed (1 gates)"), (0.9, "of 1")):
+        candidate = [
+            _run("candidate", i, e, attainment=meets) for i, e in enumerate(SAME)
+        ]
+        spec = ComparisonSpec(min_attainment=0.99, min_run_pass=0.5)
+        comparison = compare_runs(baseline, candidate, spec)
+        report = comparison_report(comparison, exit_code=comparison.exit_code)
+        assert summary in report["verdict"]["summary"]
+        assert report["metrics"]["gates"] == 1
+
+
 def test_a_candidate_run_whose_slo_was_not_judged_does_not_meet_it() -> None:
     # Dropping the unmeasurable runs would keep only the ones that met it.
     baseline = [_run("baseline", i, 100.0, started=2 * i) for i in range(10)]

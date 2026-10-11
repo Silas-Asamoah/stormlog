@@ -230,6 +230,14 @@ class Comparison:
         return found
 
     @property
+    def gate_count(self) -> int:
+        """Every gate judged: the metric gates and each case's attainment gate."""
+        attainment = sum(
+            1 for case in self.cases.values() if case.get("attainment_gate")
+        )
+        return len(self.gates) + attainment
+
+    @property
     def failed(self) -> list[tuple[str, str]]:
         failed = [
             (case, name) for case, name, gate in self.gates if gate.status == FAIL

@@ -49,7 +49,7 @@ def comparison_report(
             "metrics_compared": sum(
                 len(c["metrics"]) for c in comparison.cases.values()
             ),
-            "gates": len(comparison.gates),
+            "gates": comparison.gate_count,
             "gates_failed": len(comparison.failed),
             "gates_not_evaluable": len(comparison.not_evaluable),
             "runs_excluded": len(comparison.excluded),
@@ -82,7 +82,7 @@ def error_report(
 
 
 def _summary(comparison: Comparison, exit_code: int) -> str:
-    gates = len(comparison.gates)
+    gates = comparison.gate_count
     if not gates and comparison.spec.min_attainment is None:
         return f"{_metric_count(comparison)} metrics compared; no gate configured"
     failed, unknown = len(comparison.failed), len(comparison.not_evaluable)
