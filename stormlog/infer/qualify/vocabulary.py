@@ -1,12 +1,12 @@
 """The diagnosis vocabulary and edge table the qualification labels use.
 
 The kinds, where each may be located, the workload kinds and the causes are
-#218's, imported from ``stormlog.infer.diagnosis_vocabulary``; the severity
-names are ``stormlog.report``'s. What #218's later PRs add is not on
-``release/dev`` yet, so it is copied from its design (v2.2 §4.4 and §4.6)
-until they land, then imported: a finding's role and claim, the order of
-the two severities a diagnosis finding takes, and the edge table. A test
-pins the edge table to #218's PR 2 table.
+#218's, imported from ``stormlog.infer.diagnosis_vocabulary``, and a
+finding's role and claim from ``stormlog.infer.diagnosis_model`` (#218's
+PR 1); the severity names are ``stormlog.report``'s. What #218's PR 2 adds
+is copied from its design (v2.2 §4.4 and §4.6) until it lands, then
+imported: the order of the two severities a diagnosis finding takes, and
+the edge table. A test pins the edge table to #218's PR 2 table.
 """
 
 from __future__ import annotations
@@ -15,6 +15,13 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Mapping
 
+from stormlog.infer.diagnosis_model import (
+    CLAIM_CONDITION,
+    CLAIM_FAULT,
+    CLAIM_OBSERVATION,
+    PRIMARY,
+    SECONDARY,
+)
 from stormlog.infer.diagnosis_vocabulary import (
     CAPTURE_PAUSE,
     CAUSE_FAULT,
@@ -44,12 +51,6 @@ from stormlog.report import SEVERITY_INFO, SEVERITY_WARNING
 # at ``warning``. #218 never emits the report's ``critical``, so the scorer
 # refuses it as outside the vocabulary.
 SEVERITIES = (SEVERITY_INFO, SEVERITY_WARNING)
-
-PRIMARY = "primary"
-SECONDARY = "secondary"
-CLAIM_FAULT = "fault"
-CLAIM_CONDITION = "condition"
-CLAIM_OBSERVATION = "observation"
 
 
 @dataclass(frozen=True)

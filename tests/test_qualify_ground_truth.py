@@ -260,9 +260,14 @@ def test_impact_is_partial_when_slo_evidence_is_thin() -> None:
 
 def test_the_vocabulary_is_218s() -> None:
     # fable-221-delta, N1: #218's diagnosis_vocabulary reached release/dev,
-    # so by the module's own rule the labels import it; only what #218's
-    # later PRs add (roles, claims, the severity order, the edges) is copied.
+    # so by the module's own rule the labels import it; and with #218's PR 1
+    # (#300) below this PR, its role and claim names too. Only what #218's
+    # PR 2 adds (the severity order, the edges) is copied.
+    import ast
+    import inspect
+
     from stormlog import report
+    from stormlog.infer import diagnosis_model
     from stormlog.infer import diagnosis_vocabulary as theirs
 
     assert vocabulary.KIND_COMPONENTS is theirs.KIND_COMPONENTS
@@ -271,6 +276,27 @@ def test_the_vocabulary_is_218s() -> None:
     assert vocabulary.WORKLOAD_KINDS is theirs.WORKLOAD_KINDS
     assert set(vocabulary.SEVERITIES) < report.SEVERITIES
     assert vocabulary.SEVERITIES == (report.SEVERITY_INFO, report.SEVERITY_WARNING)
+    # Equal strings are often one object anyway, so the module is read: the
+    # role and claim names come from #218's model, and nothing redefines them.
+    shared = {"PRIMARY", "SECONDARY", "CLAIM_FAULT", "CLAIM_CONDITION",
+              "CLAIM_OBSERVATION"}  # fmt: skip
+    tree = ast.parse(inspect.getsource(vocabulary))
+    imported = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "stormlog.infer.diagnosis_model"
+        for alias in node.names
+    }
+    assigned = {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert shared <= imported and not shared & assigned
+    assert all(getattr(vocabulary, n) == getattr(diagnosis_model, n) for n in shared)
 
 
 @pytest.mark.parametrize(
