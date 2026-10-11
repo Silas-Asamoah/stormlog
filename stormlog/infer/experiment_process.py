@@ -87,6 +87,11 @@ EXPECTED_ROLES = frozenset(SERVER_ROLES) | frozenset(HELPER_ROLES)
 _STARTS = ("start_ticks", "create_time")
 
 
+class LaunchError(OSError):
+    """A command that could not start for a reason other than an OSError of
+    its own: its CPUs could not be set before it ran."""
+
+
 @dataclass
 class Launched:
     """A process the runner started, in a session of its own."""
@@ -228,7 +233,8 @@ def _start(
     cpus: set[int] | None,
 ) -> subprocess.Popen[bytes]:
     """The process, in a session of its own. One that cannot start (its
-    executable missing or not runnable) raises OSError, said in its log."""
+    executable missing or not runnable, or its CPUs not ones it may be
+    pinned to) raises OSError, said in its log."""
     try:
         return subprocess.Popen(
             list(command),
@@ -240,11 +246,14 @@ def _start(
             start_new_session=True,
             preexec_fn=_pin(cpus) if cpus else None,
         )
-    except OSError as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         if log is not None:
             log.write(f"launch failed: {exc}\n".encode())
             log.close()
-        raise
+        if isinstance(exc, OSError):
+            raise
+        # preexec_fn failed: sched_setaffinity refused the CPUs.
+        raise LaunchError(f"{exc} (pinning to CPUs {sorted(cpus or ())})") from exc
 
 
 def _journal(path: Path, launched: Launched) -> None:
@@ -985,6 +994,7 @@ def run_step(
 __all__ = [
     "EXPECTED_ROLES",
     "Cleanup",
+    "LaunchError",
     "Launched",
     "affinity_matches",
     "clean_up_after",

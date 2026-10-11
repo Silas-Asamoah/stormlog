@@ -514,6 +514,34 @@ def test_a_command_that_cannot_start_is_a_protocol_failure(
         assert any("could not be launched" in note for note in record["notes"])
 
 
+def test_cpus_a_command_cannot_be_pinned_to_are_a_launch_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Codex on #304: sched_setaffinity failing in preexec_fn (a CPU outside
+    # a container's cpuset) makes Popen raise SubprocessError, not OSError:
+    # the runner ended there, an earlier treatment still running.
+    from stormlog.infer import experiment_process
+
+    def cannot_pin(cpus: set[int]) -> Any:
+        def pin() -> None:
+            raise OSError(22, "Invalid argument")
+
+        return pin
+
+    monkeypatch.setattr(experiment_process, "_pin", cannot_pin)
+    document = _plan(_port(), blocks=1)
+    document["order"] = {"kind": "explicit", "blocks": [["watch", "off"]]}
+    first = document["arms"]["watch"]["treatments"][0]
+    pinned = {**first, "name": "pinned", "cpu_affinity": "0"}
+    document["arms"]["watch"]["treatments"] = [first, pinned]
+    watch, _ = _run(tmp_path, document)
+    assert watch["state"] == "protocol_failure"
+    assert "launch_failed:treatment:pinned" in watch["reasons"]
+    (watcher,) = [p for p in watch["processes"] if p["name"] == "treatment:watcher"]
+    assert watcher["cleanup"]["verified"] is True
+    assert not list((tmp_path / "exp" / "runs").glob("*.partial"))
+
+
 def test_a_cause_or_an_outcome_must_name_an_interrupted_attempt(
     tmp_path: Path,
 ) -> None:
