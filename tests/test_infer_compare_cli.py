@@ -331,6 +331,22 @@ def test_gates_on_overlap_segments_alone_point_at_why(
         assert _resolve(report, evidence["pointer"])["reason"] == "overlap_not_gated"
 
 
+def test_min_complete_blocks_reaches_the_attainment_gate() -> None:
+    # Codex on #303: the floor reached only the --gate rules, never the spec
+    # the --min-attainment gate reads.
+    from stormlog.infer.cli import _comparison_spec, build_parser
+
+    args = build_parser().parse_args(
+        [
+            *("compare", "--baseline", "a.jsonl", "--candidate", "b.jsonl"),
+            *("--min-attainment", "0.5", "--min-complete-blocks", "6"),
+        ]
+    )
+    spec = _comparison_spec(args)
+    assert spec.min_complete_blocks == 6
+    assert spec.block_floor()["preregistered"] == 6
+
+
 def test_a_run_given_twice_is_invalid_input(arms: dict[str, list[str]]) -> None:
     # A retried block's attempts are separate artifacts; one artifact twice
     # would count a single run as two.

@@ -111,6 +111,9 @@ class ComparisonSpec:
     seed: int = 0
     # Pre-registered fallback budgets: (metric name or pattern, budget, unit).
     fallbacks: tuple[tuple[str, float, str], ...] = ()
+    # The pre-registered fewest complete blocks, for the attainment gate as
+    # for the metric gates (whose rules carry it too).
+    min_complete_blocks: int | None = None
 
     def __post_init__(self) -> None:
         checks = (
@@ -181,6 +184,8 @@ class ComparisonSpec:
         3 pairs stops attrition from shrinking a contrast.
         """
         planned = {rule.min_complete_blocks for _pattern, rule in self.gates}
+        if self.min_complete_blocks is not None:
+            planned = (planned - {None}) | {self.min_complete_blocks}
         value = planned.pop() if len(planned) == 1 else None
         if value is None:
             statement = f"not pre-registered (floor of {MIN_GATE_PAIRS} pairs)"
@@ -1205,6 +1210,11 @@ def _attainment_undecided(
     if blocked is not None:
         status = FAIL if blocked == PROTOCOL_FAILURE else NOT_EVALUABLE
         return {"status": status, "reason": blocked}
+    if (
+        spec.min_complete_blocks is not None
+        and len(candidate) < spec.min_complete_blocks
+    ):
+        return {"status": NOT_EVALUABLE, "reason": "blocks_below_preregistered"}
     if spec.attainment_model == "bernoulli" and _lost_slo(case_id, candidate):
         return {"status": FAIL, "reason": OUTCOME_UNRECOVERABLE}
     if not known:

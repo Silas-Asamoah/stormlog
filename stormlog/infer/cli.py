@@ -1356,6 +1356,7 @@ def _comparison_spec(args: argparse.Namespace) -> ComparisonSpec:
         gates=gates,
         allow_not_evaluable=args.allow_not_evaluable,
         min_attainment=args.min_attainment,
+        min_complete_blocks=args.min_complete_blocks,
         min_run_pass=args.min_run_pass,
         attainment_model=args.attainment_model,
         family=args.family,

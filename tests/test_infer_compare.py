@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -816,6 +817,34 @@ def test_min_attainment_is_a_claim_about_runs(missing: int, status: str) -> None
     )
     assert gate["model"] == "independent_runs"
     assert comparison.cases[CASE]["attainment_mean"]["model"] == "normal_run_means"
+
+
+def test_the_preregistered_block_count_holds_the_attainment_gate_too() -> None:
+    # Codex on #303: --min-complete-blocks reached only the --gate rules, so
+    # after protocol failures set aside blocks below the planned count, the
+    # --min-attainment gate still passed on the runs left.
+    baseline, _ = _arms(SAME)
+    candidate = [_run("candidate", i, e, attainment=0.995) for i, e in enumerate(SAME)]
+    for block in (2, 4):
+        candidate[block] = _run(
+            "candidate",
+            block,
+            100.0,
+            started=block,
+            protocol=("external:preempted",),
+            attainment=0.995,
+        )
+    loose = ComparisonSpec(min_attainment=0.9, min_run_pass=0.3)
+    gate = compare_runs(baseline, candidate, loose).cases[CASE]["attainment_gate"]
+    assert (gate["runs"], gate["status"]) == (4, "pass")
+    planned = replace(loose, min_complete_blocks=6)
+    comparison = compare_runs(baseline, candidate, planned)
+    gate = comparison.cases[CASE]["attainment_gate"]
+    assert (gate["status"], gate["reason"]) == (
+        "not_evaluable",
+        "blocks_below_preregistered",
+    )
+    assert comparison.to_payload()["spec"]["min_complete_blocks"]["preregistered"] == 6
 
 
 def test_a_candidate_run_whose_slo_was_not_judged_does_not_meet_it() -> None:
