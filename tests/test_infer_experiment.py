@@ -613,6 +613,61 @@ def test_a_check_long_after_a_treatments_exit_bounds_no_late_start(
     assert bounds[pids["server"]] is not None
 
 
+def test_a_server_whose_early_exit_was_seen_long_before_its_check_gets_no_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # gate-213-on-300's NF6 residual: the run's server and a prelude's are
+    # checked just after stop() sees them exit, so their sites taking
+    # lasted_s() for bound_s() went unnoticed. Here each dies early, its exit
+    # is seen, and its check comes over a second later, as after a
+    # treatment's slow stop.
+    from stormlog.infer import experiment
+    from stormlog.infer.experiment_process import Launched
+
+    bounds: dict[int, Any] = {}
+    real_verify = experiment.verify_cleanup
+
+    def verify(pgid: int, *args: Any, **kwargs: Any) -> Any:
+        bounds[pgid] = kwargs.get("lasted_s")
+        return real_verify(pgid, *args, **kwargs)
+
+    def dies_early(server: Launched) -> None:
+        server.process.kill()
+        server.process.wait(timeout=5)
+        server.poll()
+        time.sleep(1.5)
+
+    real_ran = experiment._prelude_ran
+
+    def prelude_ran(plan: Any, prelude: Any, server: Any, *args: Any) -> Any:
+        ran = real_ran(plan, prelude, server, *args)
+        dies_early(server)
+        return ran
+
+    real_stop = experiment._Run._stop_treatments
+
+    def stop_treatments(run: Any) -> None:
+        dies_early(run.server)
+        real_stop(run)
+
+    monkeypatch.setattr(experiment, "verify_cleanup", verify)
+    monkeypatch.setattr(experiment, "_prelude_ran", prelude_ran)
+    monkeypatch.setattr(experiment._Run, "_stop_treatments", stop_treatments)
+    document = _plan(_port(), blocks=1)
+    document["arms"] = {"off": document["arms"]["off"]}
+    document["order"] = {"kind": "explicit", "blocks": [["off"]]}
+    warm = {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    document["block_prelude"] = [warm]
+    (record,) = _run(tmp_path, document)
+    assert "server_exited:-9" in record["reasons"]
+    server = next(p["pid"] for p in record["processes"] if p["name"] == "server")
+    journal = tmp_path / "exp" / "preludes" / "b00-warm" / "launches.ndjson"
+    lines = [json.loads(line) for line in journal.read_text().splitlines()]
+    prelude = next(e["pid"] for e in lines if e.get("name") == "server")
+    assert bounds[server] is None
+    assert bounds[prelude] is None
+
+
 def test_a_server_that_never_becomes_healthy_is_a_protocol_failure(
     tmp_path: Path,
 ) -> None:
