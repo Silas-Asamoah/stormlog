@@ -922,3 +922,32 @@ def test_a_late_start_clears_nothing_once_the_leaders_exit_was_seen_long_before(
     finally:
         if out.exists() and out.read_text().strip():
             os.kill(int(out.read_text()), signal.SIGKILL)
+
+
+def test_the_launch_clock_and_the_bound_follow_the_clock_named(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # gate-213-on-300's NF8: launch_clock() returning the monotonic clock,
+    # or bound_s() timing "now" by it, went unnoticed, since on a host that
+    # never suspended the two clocks agree. A fake clock id, read through
+    # time.clock_gettime, runs apart from the monotonic one here.
+    from stormlog.infer import experiment_process as ep
+
+    now = {"seconds": 1000.0}
+    real = time.clock_gettime
+
+    def clock(clock_id: int) -> float:
+        return now["seconds"] if clock_id == 4242 else real(clock_id)
+
+    monkeypatch.setattr(ep, "_LAUNCH_CLOCK", 4242)
+    monkeypatch.setattr(time, "clock_gettime", clock)
+    assert ep.launch_clock() == 1000.0
+    launched = launch("step", [sys.executable, "-c", "pass"])
+    launched.process.wait(timeout=5)
+    now["seconds"] = 1003.0
+    launched.poll()
+    assert launched.lasted_s() == 3.0
+    now["seconds"] = 1003.5
+    assert launched.bound_s() == 3.0
+    now["seconds"] = 1004.5
+    assert launched.bound_s() is None
