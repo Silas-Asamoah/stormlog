@@ -373,14 +373,18 @@ def compare_runs(
 
 
 def _check_each_run_once(arms: Mapping[str, list[RunSummary]]) -> None:
-    """One artifact given twice in an arm would count a single run as two."""
-    for runs in arms.values():
-        seen: set[str] = set()
+    """One artifact, by path or by SHA-256, given twice would count a single
+    run as two: twice in an arm, or once in each, as its own baseline, so
+    every within-block difference is zero."""
+    seen: dict[str, str] = {}
+    for arm, runs in arms.items():
         for run in runs:
             keys = {run.name} | ({run.sha256} if run.sha256 else set())
-            if keys & seen:
-                raise InferInputError(f"run {run.name} is given twice")
-            seen |= keys
+            other = next((seen[key] for key in keys if key in seen), None)
+            if other is not None:
+                where = "twice" if other == arm else "in both arms"
+                raise InferInputError(f"run {run.name} is given {where}")
+            seen.update(dict.fromkeys(keys, arm))
 
 
 def _item(arm: str, run: RunSummary, case_id: str, reasons: list[str]) -> dict:

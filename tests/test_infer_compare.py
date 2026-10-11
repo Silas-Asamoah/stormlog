@@ -271,6 +271,21 @@ def test_a_run_given_twice_is_refused() -> None:
         compare_runs(baseline, [*candidate, candidate[0]], ComparisonSpec())
 
 
+def test_a_run_given_in_both_arms_is_refused() -> None:
+    # Codex on #303: the check ran per arm, so one artifact in each arm was
+    # its own baseline, every within-block difference zero, and a gate on
+    # it passed with no candidate run at all.
+    baseline, candidate = _arms(SAME)
+    with pytest.raises(InferInputError, match="is given in both arms"):
+        compare_runs(baseline, [baseline[0], *candidate[1:]], ComparisonSpec())
+    # The same bytes under another path are the same run.
+    digest = "d" * 64
+    first = replace(baseline[0], sha256=digest)
+    copy = replace(candidate[0], sha256=digest)
+    with pytest.raises(InferInputError, match="is given in both arms"):
+        compare_runs([first, *baseline[1:]], [copy, *candidate[1:]], ComparisonSpec())
+
+
 def test_a_retry_never_replaces_an_outcome_failure() -> None:
     # Otherwise a treatment that crashes half its runs passes once retried.
     baseline, candidate = _arms(SAME)

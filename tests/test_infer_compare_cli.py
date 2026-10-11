@@ -59,7 +59,7 @@ def test_a_comparison_without_gates_reports_and_exits_0(
     arms: dict[str, list[str]]
 ) -> None:
     code, out, _err = _compare(
-        "--baseline", *arms["baseline"], "--candidate", *arms["baseline"]
+        "--baseline", *arms["baseline"], "--candidate", *arms["slower"]
     )
     assert code == ExitCode.OK
     assert "Design: paired_blocks" in out

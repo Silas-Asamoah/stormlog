@@ -95,7 +95,7 @@ or `rate_unavailable`.
 | --- | --- |
 | 0 | No gate, or every gate passed |
 | 4 | A gate failed, or one could not be evaluated without `--allow-not-evaluable` |
-| 5 | The runs could not be compared: an artifact missing, one artifact given twice in an arm, incompatible arms, an arm with no usable run, an observer contract broken |
+| 5 | The runs could not be compared: an artifact missing, one artifact (by path or SHA-256) given twice, in one arm or once in each, incompatible arms, an arm with no usable run, an observer contract broken |
 | 2 | Flags it cannot read |
 
 `--format json` and `--report` give a `stormlog.report` v1 envelope with
@@ -164,7 +164,7 @@ and lists the others with `superseded` and `attempt_kept`, so a block
 retried after a protocol failure (`--attempt 2`) is compared once. A retry
 never replaces an outcome failure: the first attempt that failed as an
 outcome stands, and later ones are listed with `retry_of_outcome_failure`.
-The same artifact given twice in an arm is invalid input.
+The same artifact, by path or by SHA-256, given twice in an arm, or once in each arm, is invalid input: in both arms it would be its own baseline.
 
 The kept runs must have measured one server. Every run is checked against
 its arm's first run, and every run against the other arm's first, because
