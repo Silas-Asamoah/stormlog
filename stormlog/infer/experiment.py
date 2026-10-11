@@ -124,6 +124,8 @@ OUTCOME_FAILURE = "outcome_failure"
 PROTOCOL_FAILURE = "protocol_failure"
 # A planned run the runner never started: an earlier cleanup left processes.
 NOT_RUN = "not_run"
+# A finished attempt whose digests do not match: a resume may retry it.
+UNVERIFIED = "unverified"
 NEVER_HEALTHY = "server_never_healthy"
 PENDING = "pending"
 INDEX = "index.jsonl"
@@ -1027,12 +1029,35 @@ def _finished_attempts(runs: Path, base: str) -> list[Path]:
     return [path for _, path in sorted(found)]
 
 
+def unfinished_runs(plan: ExperimentPlan, output_dir: Path) -> dict[str, str]:
+    """Each planned run that has not finished, whichever runner ran it, by
+    label, with its last attempt's state: ``not_run`` when no attempt
+    finished, ``unverified`` when its digests do not match. A run has
+    finished when its last attempt verifies and ended ``completed`` or
+    ``outcome_failure``, the rule by which a resume never runs it again."""
+    runs = output_dir / "runs"
+    unfinished: dict[str, str] = {}
+    for block, arms in enumerate(plan_order(plan).blocks):
+        for position, arm in enumerate(arms):
+            base = f"{plan.experiment_id}-b{block:02d}-p{position}-{arm}"
+            finished = _finished_attempts(runs, base) if runs.is_dir() else []
+            state = _last_state(finished[-1]) if finished else NOT_RUN
+            if state in (NOT_RUN, UNVERIFIED, PROTOCOL_FAILURE):
+                unfinished[base] = state
+    return unfinished
+
+
 def _retry_wanted(last: Path, retry: bool) -> bool:
     """Whether a run's last attempt should be followed by another."""
+    return retry and _last_state(last) in (UNVERIFIED, PROTOCOL_FAILURE)
+
+
+def _last_state(last: Path) -> str:
+    """A finished attempt's state, or ``unverified`` when its digests do
+    not match."""
     if not _sums_verify(last):
-        return retry
-    state = json.loads((last / "run.json").read_text()).get("state")
-    return state == PROTOCOL_FAILURE and retry
+        return UNVERIFIED
+    return str(json.loads((last / "run.json").read_text()).get("state"))
 
 
 def _affinity_overlap(plan: ExperimentPlan, arm: Arm) -> str | None:
@@ -1822,4 +1847,5 @@ __all__ = [
     "ExternalCause",
     "RunRecord",
     "run_plan",
+    "unfinished_runs",
 ]

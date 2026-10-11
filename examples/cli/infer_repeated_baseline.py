@@ -16,10 +16,11 @@ explained: give its cause with its evidence, which sets it aside and lets
     --external-cause t221-b03-p1-watch-a1=spot_preemption:"box paused at 03:12"
     --interrupted-as-outcome t221-b03-p1-watch-a1
 
-Exit codes: 0 when every planned run finished (completed, or an outcome
-failure, which is data); 3 when some run ended in a protocol failure; 5 for
-a plan or output directory it cannot use; 2 for a secret the plan names
-that is not set.
+Exit codes, for the whole experiment, not only the runs this invocation
+ran: 0 when every planned run finished (completed, or an outcome failure,
+which is data); 3 when some has not, its last attempt a protocol failure or
+none finished (``not_run``), each named on stderr; 5 for a plan or output
+directory it cannot use; 2 for a secret the plan names that is not set.
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ from typing import Any
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.errors import InferInputError, InferUsageError
-from stormlog.infer.experiment import PROTOCOL_FAILURE, ExternalCause, run_plan
+from stormlog.infer.experiment import ExternalCause, run_plan, unfinished_runs
 from stormlog.infer.experiment_plan import load_plan
 
 
@@ -69,8 +70,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        records = run_plan(
-            load_plan(args.plan),
+        plan = load_plan(args.plan)
+        run_plan(
+            plan,
             args.output,
             resume=args.resume,
             retry_incomplete=args.retry_incomplete,
@@ -84,10 +86,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     except InferInputError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return int(ExitCode.INVALID_INPUT)
-    last = {}
-    for record in records:
-        last[(record["block"], record["arm"])] = record["state"]
-    if any(state == PROTOCOL_FAILURE for state in last.values()):
+    unfinished = unfinished_runs(plan, args.output)
+    if unfinished:
+        runs = "run" if len(unfinished) == 1 else "runs"
+        named = ", ".join(f"{label} ({state})" for label, state in unfinished.items())
+        print(
+            f"{len(unfinished)} planned {runs} not finished: {named}", file=sys.stderr
+        )
         return int(ExitCode.FINDINGS)
     return int(ExitCode.OK)
 

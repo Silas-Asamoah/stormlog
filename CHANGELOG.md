@@ -142,8 +142,8 @@ the flaky benchmark memory gates
   unacknowledged cold-cache reset). (#213)
 - `python -m examples.cli.infer_repeated_baseline --plan PLAN --output DIR`
   runs an experiment plan from the command line, with `--resume` and
-  `--retry-incomplete`; it exits 3 when a run ended in a protocol
-  failure. (#213)
+  `--retry-incomplete`; it exits 3 while any planned run has not finished,
+  whichever invocation ran it (`unfinished_runs`). (#213)
 - Launch-bound model identity for the runner (`server.model`): a
   `pinned_hub` snapshot is resolved to a commit and every file checked
   against the name of the blob it links to, then served with

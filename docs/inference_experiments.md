@@ -288,6 +288,14 @@ protocol failure (or whose digests do not verify) gets another attempt; the
 earlier attempt stays on disk and in the index, and the new one records
 `order_broken: true`, since it runs later than planned.
 
+`unfinished_runs(plan, output_dir)` applies that rule to every planned run,
+whichever runner ran it, and returns those that have not finished, by
+label, with their last attempt's state: `protocol_failure`, `unverified`
+(digests that do not match), or `not_run` when no attempt finished, as
+after a stop. An empty result means every planned run finished. It reads
+the run directories, not the index, so a `not_run` line a later stop
+appended for a run that had already finished does not count against it.
+
 A run the runner itself was killed in (a preempted box, an operator's
 abort) leaves its attempt in `runs/<label>.partial`, with no state. What
 stopped the runner may have been the treatment, so a resume refuses (a
@@ -331,13 +339,16 @@ python -m examples.cli.infer_repeated_baseline --plan plan.json --output exp213 
   --interrupted-as-outcome t213-b02-p1-watch-a1
 ```
 
-It prints one line per run, with its state and reasons. It exits `0` when
-every planned run finished (completed, or an outcome failure, which is
-data), `3` when some run ended in a protocol failure (retry it with
-`--resume --retry-incomplete`), `5` for a plan or output directory it
-cannot use, and `2` for a secret the plan names that is not set, an
-interrupted run neither flag explains, or a flag it refuses. Then
-compare the arms:
+It prints one line per run, with its state and reasons. Its exit code is
+the whole experiment's, not only the runs this invocation ran
+(`stormlog.infer.experiment.unfinished_runs`): `0` when every planned run
+finished (completed, or an outcome failure, which is data), `3` when some
+has not, each named on stderr with its last attempt's state: a protocol
+failure (retry it with `--resume --retry-incomplete`), or `not_run` when
+no attempt finished, as after a stop (resume once the host is clean). It
+exits `5` for a plan or output directory it cannot use, and `2` for a
+secret the plan names that is not set, an interrupted run neither flag
+explains, or a flag it refuses. Then compare the arms:
 
 ```bash
 stormlog infer compare --baseline exp213/runs/*-off-a*/c1.jsonl \
@@ -494,9 +505,10 @@ plan = load_plan("plan.json")       # InferInputError for a plan it cannot run
 order = plan_order(plan)            # each block's arms, balanced, position counts
 seed = block_seed(plan, block=3)
 
-from stormlog.infer.experiment import run_plan
+from stormlog.infer.experiment import run_plan, unfinished_runs
 
-records = run_plan(plan, Path("exp213-pilot"), resume=False)
+records = run_plan(plan, Path("exp213-pilot"), resume=False)  # this call's index entries
+left = unfinished_runs(plan, Path("exp213-pilot"))  # {label: state}, every invocation's
 ```
 
 ## Related pages

@@ -1732,6 +1732,76 @@ def test_the_example_cli_runs_a_plan_and_says_how_it_ended(
     )
 
 
+def test_the_example_cli_exits_on_every_planned_run_not_only_those_it_ran(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Codex's c4241768860: the exit code came from the runs this invocation
+    # wrote, so a resume that skipped a protocol failure, as it does without
+    # --retry-incomplete, exited 0 though that run never finished.
+    from examples.cli.infer_repeated_baseline import main
+
+    _unhealthy_on(monkeypatch, 1)
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(_plan(_port(), blocks=1)))
+    run = ["--plan", str(plan_path), "--output", str(tmp_path / "exp")]
+    assert main(run) == 3
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert main([*run, "--resume"]) == 3
+    assert capsys.readouterr().err == (
+        "1 planned run not finished: t213-b00-p0-off (protocol_failure)\n"
+    )
+    assert main([*run, "--resume", "--retry-incomplete"]) == 0
+
+
+def test_unfinished_runs_reads_each_runs_last_attempt_not_the_index(
+    tmp_path: Path,
+) -> None:
+    import shutil
+
+    from stormlog.infer.experiment import unfinished_runs
+
+    document = _plan(_port(), blocks=1)
+    _run(tmp_path, document)
+    plan, exp = plan_from_document(document), tmp_path / "exp"
+    assert unfinished_runs(plan, exp) == {}
+    # A not_run line a later stop appended for a run that had finished.
+    stale = {"type": "not_run", "label": "t213-b00-p0-off", "state": "not_run"}
+    with (exp / "index.jsonl").open("a") as handle:
+        handle.write(json.dumps(stale) + "\n")
+    assert unfinished_runs(plan, exp) == {}
+    with (exp / "runs" / "t213-b00-p1-watch-a1" / "commands.sh").open("a") as handle:
+        handle.write("# changed\n")
+    shutil.rmtree(exp / "runs" / "t213-b00-p0-off-a1")
+    assert unfinished_runs(plan, exp) == {
+        "t213-b00-p0-off": "not_run",
+        "t213-b00-p1-watch": "unverified",
+    }
+
+
+def test_the_example_cli_exits_3_when_a_stop_leaves_planned_runs_unstarted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Codex's c4241768860: a prelude whose server's cleanup did not verify
+    # stops the experiment before any run, and every run is indexed not_run;
+    # with no protocol failure among them, the example exited 0.
+    from examples.cli.infer_repeated_baseline import main
+
+    _survivor_on_calls(monkeypatch, 1)
+    document = _plan(_port(), blocks=1)
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": ["{python}", "-c", "pass"]}
+    ]
+    plan_path = tmp_path / "plan.json"
+    plan_path.write_text(json.dumps(document))
+    run = ["--plan", str(plan_path), "--output", str(tmp_path / "exp")]
+    assert main(run) == 3
+    assert capsys.readouterr().err == (
+        "2 planned runs not finished: t213-b00-p0-off (not_run), "
+        "t213-b00-p1-watch (not_run)\n"
+    )
+
+
 def test_treatments_are_observers_a_comparison_can_see(tmp_path: Path) -> None:
     records = _run(tmp_path, _plan(_port(), blocks=2))
     by_arm: dict[str, list[Any]] = {"off": [], "watch": []}
