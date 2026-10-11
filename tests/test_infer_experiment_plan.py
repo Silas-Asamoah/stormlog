@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import itertools
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,77 @@ def test_an_unknown_placeholder_is_refused_when_the_plan_loads() -> None:
     document["arms"]["off"]["workload"][0]["command"].append("{output_dir}")
     with pytest.raises(ValueError, match="unknown placeholders: output_dir"):
         plan_from_document(document)
+
+
+def _with_prelude(command: list[str], **prelude: Any) -> dict[str, Any]:
+    document = _plan()
+    document["block_prelude"] = [{"name": "warm", "command": command, **prelude}]
+    return document
+
+
+def _refused(tmp_path: Path, document: dict[str, Any], message: str) -> None:
+    """load_plan refuses the document with exactly this message."""
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(document))
+    expected = f"experiment plan {path}: {message}"
+    with pytest.raises(InferInputError, match=f"^{re.escape(expected)}$"):
+        load_plan(path)
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        # Codex's c4241768868: a placeholder the runner fills only for a run
+        # or a server it has launched was accepted in a prelude, and raised
+        # KeyError mid-experiment.
+        (
+            _with_prelude(["warm", "{server_pid}"]),
+            "placeholders with no value in block prelude warm: server_pid",
+        ),
+        (
+            _with_prelude(["warm", "{run_id}", "{attempt}", "{arm}"]),
+            "placeholders with no value in block prelude warm: arm, attempt, run_id",
+        ),
+        (
+            _with_prelude(["warm"], server_arm="off", env={"A": "{label}"}),
+            "placeholders with no value in block prelude warm: label",
+        ),
+        (
+            _plan(server={**_plan()["server"], "command": ["vllm", "{server_pid}"]}),
+            "placeholders with no value in the server's command: server_pid",
+        ),
+        (
+            _plan(
+                arms={
+                    **_plan()["arms"],
+                    "watch": {
+                        **_plan()["arms"]["watch"],
+                        "server": {"args": ["--pid", "{server_pid}"]},
+                    },
+                }
+            ),
+            "placeholders with no value in arm watch's server arguments: server_pid",
+        ),
+    ],
+)
+def test_a_placeholder_with_no_value_where_it_is_used_is_refused(
+    tmp_path: Path, document: dict[str, Any], message: str
+) -> None:
+    _refused(tmp_path, document, message)
+
+
+def test_a_prelude_launched_server_is_filled_as_a_prelude_is(tmp_path: Path) -> None:
+    document = _with_prelude(["warm", "{server_pid}"], server_arm="watch")
+    plan_from_document(document)
+    document["arms"]["watch"]["server"] = {"args": ["--tag", "{position}"]}
+    message = "placeholders with no value in block prelude warm's server: position"
+    _refused(tmp_path, document, message)
+    # A run fills it, so an arm no prelude launches may use it.
+    del document["block_prelude"]
+    assert plan_from_document(document).arms["watch"].server_args == (
+        "--tag",
+        "{position}",
+    )
 
 
 def test_same_as_must_name_an_arm_with_its_own_steps() -> None:

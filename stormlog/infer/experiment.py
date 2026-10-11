@@ -1610,6 +1610,7 @@ def _prelude(
             )
         except OSError:
             return [f"{prelude.step.name}:launch_failed"]
+        values["server_pid"] = server.pid
     name = prelude.step.name
     failure = name
     try:

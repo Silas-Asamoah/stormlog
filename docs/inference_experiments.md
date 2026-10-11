@@ -67,7 +67,25 @@ Commands are templates. The runner fills, for each run:
 | `{python}` | The interpreter running the runner |
 | `{model}` | The model the server loads, as resolved for this launch |
 
-A placeholder the runner does not know is refused when the plan is loaded.
+A block prelude, and the server it launches, are filled from its block:
+`{run_dir}` is the prelude's own directory, and it has no run's ID, label,
+arm, position or attempt. A prelude's step also gets `{server_pid}`, that of
+the server it launches. A server's command and arguments are filled before
+it starts, so they cannot use `{server_pid}`.
+
+Every placeholder is checked when the plan is loaded, before anything
+starts. A plan that uses one the runner does not know, or one with no value
+where it is used, is refused: `load_plan` raises `InferInputError`, and the
+example command line exits 5. The error reads `experiment plan <path>: `
+followed by one of these, with the placeholders named in sorted order:
+
+| Error | When |
+| --- | --- |
+| `unknown placeholders: <names>` | Any template in the plan uses a placeholder the runner never fills |
+| `placeholders with no value in the server's command: server_pid` | The server's command uses `{server_pid}` |
+| `placeholders with no value in arm <arm>'s server arguments: server_pid` | An arm's server arguments use `{server_pid}` |
+| `placeholders with no value in block prelude <name>: <names>` | A prelude's command or environment uses a run's own placeholder (`{run_id}`, `{label}`, `{arm}`, `{position}`, `{attempt}`), or `{server_pid}` without a `server_arm` |
+| `placeholders with no value in block prelude <name>'s server: <names>` | The server's command, or the arguments of the arm a prelude launches (`server_arm`), use a run's own placeholder |
 
 ### Order and seeds
 

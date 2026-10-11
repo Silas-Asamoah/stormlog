@@ -8,8 +8,11 @@ workload steps), how many blocks to run, and in which order. The runner
 Commands are templates. ``{name}`` placeholders are filled per run:
 ``{run_dir}``, ``{run_id}``, ``{label}``, ``{experiment_id}``, ``{arm}``,
 ``{block}``, ``{position}``, ``{attempt}``, ``{block_seed}``, ``{server_pid}``,
-``{base_url}``, ``{python}`` and ``{model}``. A placeholder the runner does
-not know is refused when the plan is loaded, not when a run reaches it.
+``{base_url}``, ``{python}`` and ``{model}``. A block prelude, and the server
+it launches, have only its block's (``PRELUDE_PLACEHOLDERS``), and a server's
+command has no ``{server_pid}``. A placeholder the runner does not know, or
+one with no value where it is used, is refused when the plan is loaded, not
+when a run reaches it.
 
 Every arm of a block shares one ``{block_seed}``, derived from the plan's
 seed, so matched arms send identical prompts at identical times.
@@ -22,7 +25,7 @@ import json
 import random
 import re
 import signal
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -47,6 +50,12 @@ PLACEHOLDERS = frozenset(
         "python",
         "model",
     }
+)
+# What a block prelude, and the server it launches, are filled from: its
+# block, with its own directory as ``run_dir``, and no run's. A prelude's
+# step also has its server's ``server_pid``, when it launches one.
+PRELUDE_PLACEHOLDERS = frozenset(
+    {"run_dir", "experiment_id", "block", "block_seed", "base_url", "python", "model"}
 )
 ORDER_KINDS = ("random", "williams", "explicit")
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
@@ -366,11 +375,39 @@ def _check_placeholders(plan: ExperimentPlan) -> None:
             templates += [treatment.ready_file] if treatment.ready_file else []
     for prelude in plan.preludes:
         templates += [*prelude.step.command, *prelude.step.env.values()]
-    unknown = {
-        name for text in templates for name in _PLACEHOLDER.findall(text)
-    } - PLACEHOLDERS
+    unknown = _names(templates) - PLACEHOLDERS
     if unknown:
         raise ValueError(f"unknown placeholders: {', '.join(sorted(unknown))}")
+    for where, used, known in _filled_from(plan):
+        missing = _names(used) - known
+        if missing:
+            raise ValueError(
+                f"placeholders with no value in {where}: {', '.join(sorted(missing))}"
+            )
+
+
+def _filled_from(
+    plan: ExperimentPlan,
+) -> Iterator[tuple[str, list[str], frozenset[str]]]:
+    """Where templates are filled, each with the placeholders known there."""
+    server = plan.server
+    # A server's command is filled before it starts, so it has no PID yet.
+    launch = PLACEHOLDERS - {"server_pid"}
+    yield "the server's command", list(server.command), launch
+    for arm in plan.arms.values():
+        yield f"arm {arm.name}'s server arguments", list(arm.server_args), launch
+    for prelude in plan.preludes:
+        where = f"block prelude {prelude.step.name}"
+        known = PRELUDE_PLACEHOLDERS
+        if prelude.server_arm is not None:
+            args = plan.arms[prelude.server_arm].server_args
+            yield f"{where}'s server", [*server.command, *args], known
+            known = known | {"server_pid"}
+        yield where, [*prelude.step.command, *prelude.step.env.values()], known
+
+
+def _names(templates: Sequence[str]) -> set[str]:
+    return {name for text in templates for name in _PLACEHOLDER.findall(text)}
 
 
 # ------------------------------------------------------------------- order

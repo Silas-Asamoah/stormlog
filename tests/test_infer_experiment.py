@@ -1329,6 +1329,24 @@ def test_what_a_step_leaves_behind_is_stopped_and_checked(
     assert "step_cleanup_unverified:c1" in record["reasons"]
 
 
+def test_a_server_backed_prelude_is_given_its_servers_pid(tmp_path: Path) -> None:
+    # Codex's c4241768868: a prelude's server was launched but its PID never
+    # reached the prelude's values, so a step using {server_pid}, which the
+    # plan accepted, raised KeyError and ended the whole experiment.
+    document = _plan(_port(), order=TWO_BLOCKS)
+    write = "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])"
+    command = ["{python}", "-c", write, "{run_dir}/pid", "{server_pid}"]
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": command}
+    ]
+    records = _run(tmp_path, document)
+    assert [r["state"] for r in records] == ["completed"] * 4
+    directory = tmp_path / "exp" / "preludes" / "b00-warm"
+    journal = [json.loads(line) for line in (directory / "launches.ndjson").open()]
+    server = next(e["pid"] for e in journal if e.get("name") == "server")
+    assert (directory / "pid").read_text() == str(server)
+
+
 def test_a_prelude_server_loads_the_verified_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
