@@ -203,7 +203,9 @@ the flaky benchmark memory gates
   (`stormlog.infer.experiment_plan` v1) with arms, workload steps (shared with
   `same_as:<arm>`), treatments, block preludes, a seeded `random`, `williams`
   or `explicit` order, one seed per block shared by every arm, and command
-  templates whose placeholders are checked when the plan loads. (#213)
+  templates, with the server's base URL filled once per block, whose
+  placeholders are checked when the plan loads against what fills them
+  where each is used. (#213)
 - Segments: `infer compare --segment NAME=START:END` (and
   `analyze_inference_events(segments=...)`) compare a slice of each case's
   measured phase as a case of its own, `<case>/<segment>`, with its own

@@ -8,8 +8,9 @@ workload steps), how many blocks to run, and in which order. The runner
 Commands are templates. ``{name}`` placeholders are filled per run:
 ``{run_dir}``, ``{run_id}``, ``{label}``, ``{experiment_id}``, ``{arm}``,
 ``{block}``, ``{position}``, ``{attempt}``, ``{block_seed}``, ``{server_pid}``,
-``{base_url}``, ``{python}`` and ``{model}``. A block prelude, and the server
-it launches, have only its block's (``PRELUDE_PLACEHOLDERS``), and a server's
+``{base_url}``, ``{python}`` and ``{model}``. The server's base URL has only
+its block's (``BLOCK_PLACEHOLDERS``); a block prelude, and the server it
+launches, have only those, ``{run_dir}`` and ``{base_url}``; and a server's
 command has no ``{server_pid}``. A placeholder the runner does not know, or
 one with no value where it is used, is refused when the plan is loaded, not
 when a run reaches it.
@@ -51,12 +52,15 @@ PLACEHOLDERS = frozenset(
         "model",
     }
 )
+# What the server's base URL is filled from: its block alone, once, so every
+# launch of a block checks, waits on, probes and hands out one URL.
+BLOCK_PLACEHOLDERS = frozenset(
+    {"experiment_id", "block", "block_seed", "python", "model"}
+)
 # What a block prelude, and the server it launches, are filled from: its
 # block, with its own directory as ``run_dir``, and no run's. A prelude's
 # step also has its server's ``server_pid``, when it launches one.
-PRELUDE_PLACEHOLDERS = frozenset(
-    {"run_dir", "experiment_id", "block", "block_seed", "base_url", "python", "model"}
-)
+PRELUDE_PLACEHOLDERS = BLOCK_PLACEHOLDERS | {"run_dir", "base_url"}
 ORDER_KINDS = ("random", "williams", "explicit")
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -393,6 +397,7 @@ def _filled_from(
     server = plan.server
     # A server's command is filled before it starts, so it has no PID yet.
     launch = PLACEHOLDERS - {"server_pid"}
+    yield "the server's base_url", [server.base_url], BLOCK_PLACEHOLDERS
     yield "the server's command", list(server.command), launch
     for arm in plan.arms.values():
         yield f"arm {arm.name}'s server arguments", list(arm.server_args), launch

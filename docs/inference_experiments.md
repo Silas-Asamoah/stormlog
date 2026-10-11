@@ -67,6 +67,11 @@ Commands are templates. The runner fills, for each run:
 | `{python}` | The interpreter running the runner |
 | `{model}` | The model the server loads, as resolved for this launch |
 
+The server's `base_url` is a template too, filled once for each block from
+`{experiment_id}`, `{block}`, `{block_seed}`, `{python}` and `{model}`. The
+runner checks that URL's port, waits on its `/health`, probes it, and hands
+it out as `{base_url}`.
+
 A block prelude, and the server it launches, are filled from its block:
 `{run_dir}` is the prelude's own directory, and it has no run's ID, label,
 arm, position or attempt. A prelude's step also gets `{server_pid}`, that of
@@ -82,6 +87,7 @@ followed by one of these, with the placeholders named in sorted order:
 | Error | When |
 | --- | --- |
 | `unknown placeholders: <names>` | Any template in the plan uses a placeholder the runner never fills |
+| `placeholders with no value in the server's base_url: <names>` | `server.base_url` uses anything but `{experiment_id}`, `{block}`, `{block_seed}`, `{python}` and `{model}` |
 | `placeholders with no value in the server's command: server_pid` | The server's command uses `{server_pid}` |
 | `placeholders with no value in arm <arm>'s server arguments: server_pid` | An arm's server arguments use `{server_pid}` |
 | `placeholders with no value in block prelude <name>: <names>` | A prelude's command or environment uses a run's own placeholder (`{run_id}`, `{label}`, `{arm}`, `{position}`, `{attempt}`), or `{server_pid}` without a `server_arm` |

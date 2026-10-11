@@ -1347,6 +1347,54 @@ def test_a_server_backed_prelude_is_given_its_servers_pid(tmp_path: Path) -> Non
     assert (directory / "pid").read_text() == str(server)
 
 
+def _ports_from_zero() -> int:
+    """A free port ending in 0 whose next port is free too."""
+    for _ in range(100):
+        port = _port() // 10 * 10
+        try:
+            for candidate in (port, port + 1):
+                with socket.socket() as probe:
+                    probe.bind(("127.0.0.1", candidate))
+        except OSError:
+            continue
+        return port
+    raise AssertionError("found no two free ports in a row")
+
+
+def test_a_base_url_is_filled_once_for_its_block_and_used_throughout(
+    tmp_path: Path,
+) -> None:
+    # Codex's c4241768869: the plan accepted placeholders in server.base_url,
+    # but the runner checked the port, waited for /health and probed with
+    # the template itself, so a port holding {block} raised ValueError
+    # mid-attempt, and {base_url} handed the template to the workload.
+    tens = str(_ports_from_zero() // 10)
+    document = _plan(0, order=TWO_BLOCKS)
+    document["server"]["command"][-1] = tens + "{block}"
+    document["server"]["base_url"] = "http://127.0.0.1:" + tens + "{block}/v1"
+    write = "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text(sys.argv[2])"
+    command = ["{python}", "-c", write, "{run_dir}/url", "{base_url}"]
+    document["block_prelude"] = [
+        {"name": "warm", "server_arm": "off", "command": command}
+    ]
+    records = _run(tmp_path, document)
+    assert [(r["block"], r["state"]) for r in records] == [
+        (0, "completed"),
+        (0, "completed"),
+        (1, "completed"),
+        (1, "completed"),
+    ]
+    exp = tmp_path / "exp"
+    for block in (0, 1):
+        url = f"http://127.0.0.1:{tens}{block}/v1"
+        prelude = exp / "preludes" / f"b{block:02d}-warm" / "url"
+        assert prelude.read_text() == url
+        runs = list(exp.glob(f"runs/*-b{block:02d}-*"))
+        assert len(runs) == 2
+        for run in runs:
+            assert f"--base-url {url} " in (run / "commands.sh").read_text()
+
+
 def test_a_prelude_server_loads_the_verified_model(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

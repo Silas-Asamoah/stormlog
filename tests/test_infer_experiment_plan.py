@@ -190,6 +190,32 @@ def test_a_prelude_launched_server_is_filled_as_a_prelude_is(tmp_path: Path) -> 
     )
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "run_dir",
+        "run_id",
+        "label",
+        "arm",
+        "position",
+        "attempt",
+        "server_pid",
+        "base_url",
+    ],
+)
+def test_a_base_url_may_use_only_its_blocks_placeholders(
+    tmp_path: Path, name: str
+) -> None:
+    # Codex's c4241768869: the base URL is filled once for its block, before
+    # any server starts, so a run's own placeholders have no value there.
+    url = "http://h:80{block}/{experiment_id}/{block_seed}/{model}/{python}"
+    server = {**_plan()["server"], "base_url": url}
+    assert plan_from_document(_plan(server=server)).server.base_url == url
+    server["base_url"] = "http://h:80{" + name + "}/v1"
+    message = f"placeholders with no value in the server's base_url: {name}"
+    _refused(tmp_path, _plan(server=server), message)
+
+
 def test_same_as_must_name_an_arm_with_its_own_steps() -> None:
     document = _plan()
     document["arms"]["watch"]["workload"] = "same_as:nowhere"

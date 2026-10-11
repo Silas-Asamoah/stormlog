@@ -1116,15 +1116,10 @@ class _Run:
             "run_dir": str(self.dir),
             "run_id": self.label,
             "label": self.label,
-            "experiment_id": plan.experiment_id,
             "arm": arm.name,
-            "block": block,
             "position": position,
             "attempt": attempt,
-            "block_seed": block_seed(plan, block),
-            "base_url": plan.server.base_url,
-            "python": env.python,
-            "model": _model_name(plan, env),
+            **_block_values(plan, block, env),
         }
         self.commands: list[str] = []
         self.server: Launched | None = None
@@ -1181,7 +1176,7 @@ class _Run:
 
     def _start_server(self) -> bool:
         server = self.plan.server
-        if _port_in_use(server.base_url):
+        if _port_in_use(self.values["base_url"]):
             # Another server, perhaps one a killed runner left: launching
             # would measure it.
             self.record.protocol("server_port_in_use", before_treatment=True)
@@ -1198,7 +1193,9 @@ class _Run:
         if self.server.affinity_applied is False:
             self.record.protocol("affinity_not_applied:server", before_treatment=True)
             return False
-        healthy = _wait_healthy(server.base_url, self.server, server.start_timeout_s)
+        healthy = _wait_healthy(
+            self.values["base_url"], self.server, server.start_timeout_s
+        )
         self.record.server_healthy = healthy
         if not healthy:
             # Decided once the block is done (_decide_unhealthy), and on
@@ -1217,7 +1214,7 @@ class _Run:
         environment collector running; the run stops here, and the plan
         runs it again on a fresh server.
         """
-        probe = probe_server(self.plan.server.base_url, mode=AUTO, phase=BEFORE)
+        probe = probe_server(self.values["base_url"], mode=AUTO, phase=BEFORE)
         (self.dir / "server-probe.json").write_text(
             json.dumps(probe.to_record(session_id=self.label), indent=2) + "\n"
         )
@@ -1584,18 +1581,10 @@ def _prelude(
     """Run a block prelude, with an arm's server if it asks for one."""
     directory = output / "preludes" / f"b{block:02d}-{prelude.step.name}"
     directory.mkdir(parents=True, exist_ok=True)
-    values = {
-        "run_dir": str(directory),
-        "experiment_id": plan.experiment_id,
-        "block": block,
-        "block_seed": block_seed(plan, block),
-        "base_url": plan.server.base_url,
-        "python": env.python,
-        "model": _model_name(plan, env),
-    }
+    values = {"run_dir": str(directory), **_block_values(plan, block, env)}
     server = None
     if prelude.server_arm is not None:
-        if _port_in_use(plan.server.base_url):
+        if _port_in_use(values["base_url"]):
             return [f"{prelude.step.name}:server_port_in_use"]
         arm = plan.arms[prelude.server_arm]
         command, server_env = _server_launch(plan, arm, values, env)
@@ -1650,7 +1639,7 @@ def _prelude_ran(
     """Whether the prelude's server came up and its step exited as expected,
     and whether the step left a process its cleanup could not clear."""
     if server is not None and not _wait_healthy(
-        plan.server.base_url, server, plan.server.start_timeout_s
+        values["base_url"], server, plan.server.start_timeout_s
     ):
         return False, False
     launched, timed_out = run_step(
@@ -1691,6 +1680,21 @@ def _stop_prelude_server(
     )
     end_journaled(server, cleanup)
     return cleanup.verified
+
+
+def _block_values(plan: ExperimentPlan, block: int, env: Environment) -> dict[str, Any]:
+    """What every launch in a block is filled from, its base URL included:
+    filled once, from the block alone, so the port checked, the health
+    waited for, the probe and ``{base_url}`` are one URL."""
+    values: dict[str, Any] = {
+        "experiment_id": plan.experiment_id,
+        "block": block,
+        "block_seed": block_seed(plan, block),
+        "python": env.python,
+        "model": _model_name(plan, env),
+    }
+    values["base_url"] = expand(plan.server.base_url, values)
+    return values
 
 
 def _model_name(plan: ExperimentPlan, env: Environment) -> str:
