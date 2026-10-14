@@ -4,7 +4,9 @@
 #
 #    pip-compile --output-file=requirements-ci-lint.txt requirements-ci-lint.in
 #
-black==24.3.0
+ast-serialize==0.13.0
+    # via mypy
+black==26.5.1
     # via -r requirements-ci-lint.in
 click==8.3.1
     # via black
@@ -12,13 +14,15 @@ flake8==7.3.0
     # via -r requirements-ci-lint.in
 isort==8.0.1
     # via -r requirements-ci-lint.in
+librt==0.16.0
+    # via mypy
 markdown-it-py==4.0.0
     # via rich
 mccabe==0.7.0
     # via flake8
 mdurl==0.1.2
     # via markdown-it-py
-mypy==1.8.0
+mypy==2.4.0
     # via -r requirements-ci-lint.in
 mypy-extensions==1.1.0
     # via
@@ -27,7 +31,9 @@ mypy-extensions==1.1.0
 packaging==26.0
     # via black
 pathspec==1.0.4
-    # via black
+    # via
+    #   black
+    #   mypy
 platformdirs==4.9.2
     # via black
 pycodestyle==2.14.0
@@ -36,6 +42,8 @@ pyflakes==3.4.0
     # via flake8
 pygments==2.20.0
     # via rich
+pytokens==0.4.1
+    # via black
 rich==15.0.0
     # via -r requirements-ci-lint.in
 tomli==2.4.0
