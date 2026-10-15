@@ -1,0 +1,52 @@
+{
+ "plan_id": "graph",
+ "seed": 118,
+ "trials": [
+  {
+   "trial_id": "graph-cupti-min-w200",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graph-nsys-w200",
+   "args": [
+    "--mode",
+    "nsys",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "eager-cupti-min-w200",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "eager-nsys-w200",
+   "args": [
+    "--mode",
+    "nsys",
+    "--window",
+    "200"
+   ],
+   "keep_traces": true,
+   "timeout": 2400
+  }
+ ]
+}

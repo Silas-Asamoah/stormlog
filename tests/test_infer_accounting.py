@@ -1,6 +1,7 @@
 """Shared execution accounting and incomplete evidence behavior."""
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -46,7 +47,7 @@ def _context(
     )
 
 
-def _shared_events():
+def _shared_events() -> tuple[list[Any], EntityRef, EntityRef, EntityRef, EntityRef]:
     engine = _context("engine-a")
     trace = _context("trace-a")
     request_a = EntityRef("client", "A")
@@ -212,7 +213,7 @@ def test_estimated_shares_require_an_explicit_model_and_remainder() -> None:
             iteration_ref=iteration_1,
             device_clock=key,
             shares=shares,
-            unattributed_ns=1_000_000.0,
+            unattributed_ns=1_000_000.0,  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="one estimation model"):
         validate_request_shares(

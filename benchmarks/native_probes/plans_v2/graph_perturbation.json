@@ -1,0 +1,115 @@
+{
+ "plan_id": "graph_perturbation",
+ "seed": 118,
+ "posthoc": true,
+ "trials": [
+  {
+   "trial_id": "graphperf-cupti-min-w200-r1",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-off-w200-r2",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-cupti-kernel-w200-r1",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-cupti-kernel-w200-r2",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-cupti-kernel-w200-r3",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-cupti-min-w200-r3",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-off-w200-r1",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-cupti-min-w200-r2",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "graphperf-off-w200-r3",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  }
+ ]
+}

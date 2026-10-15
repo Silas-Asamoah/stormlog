@@ -1,0 +1,1940 @@
+{
+  "artifact_kind": "native_probe_capability_matrix",
+  "candidates": [
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "vLLM /start_profile and /stop_profile started and stopped capture on a running server in every Kineto trial. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "linux": {
+          "detail": "vLLM torch profiler trials ran on Linux x86_64. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "Validated on an L4 only. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "PyTorch profiler",
+          "url": "https://docs.pytorch.org/docs/stable/profiler.html",
+          "version_or_date": "PyTorch 2.14 documentation"
+        }
+      ],
+      "id": "pytorch-kineto",
+      "name": "PyTorch/Kineto",
+      "unverified_assumptions": [
+        "Kineto trace completeness against Nsight and its cost in CUDA-graph mode remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "vLLM stack-free Kineto added 1.7, 7.3, 29.3 and 74.5 GiB RSS at 50, 200, 800 and 2200 request windows; stop/export took 33, 138, 551 s and timed out at 600 s, blocking serving.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md",
+          "benchmarks/native_probes/results_v2/window_scaling.md"
+        ],
+        "status": "MEASURED_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Profiling vLLM",
+          "url": "https://docs.vllm.ai/en/latest/contributing/profiling/",
+          "version_or_date": "latest documentation, accessed 2026-09-23"
+        }
+      ],
+      "id": "vllm-proton",
+      "name": "vLLM Triton Proton",
+      "unverified_assumptions": [
+        "Full-window Proton attribution, completeness, and overhead remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "Not measured in protocol v2. v1 bounded smokes are in git history at commit dcb58a4 and qualify no field.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "Measured gaps: output-limit drops were reported (1,277,656 records), but the helper has no buffer cap, so a slow consumer grew the backlog (72 MiB, 224 s flush) instead of dropping visibly, and under Nsight the helper captured 0-1 records while reporting a clean finalize. Timestamp loss is now counted by the helper. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNSUPPORTED"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "100% of kernels correlated to a runtime or driver launch in vLLM eager and graph runs and W1-W3, matching Nsight Systems. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "device_execution_timing": {
+          "detail": "0 kernels without device timestamps across vLLM eager, vLLM CUDA graph and W1-W4 runs with CUPTI 13.0. With CUPTI 12.6 under the same CUDA 13 runtime, about 39% of kernels had none while 0 drops were reported. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "engine_coupling": {
+          "detail": "No vLLM code or configuration change was needed; capture is process-level. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "graph_replay": {
+          "detail": "W3 graph replay matched Nsight exactly (3000 graph-node kernels); in vLLM CUDA-graph mode 93.5% of kernels carried graph IDs in both CUPTI and Nsight. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "host_api_timing": {
+          "detail": "Runtime and driver API records carry CPU start and end timestamps; kernels launched by cuBLASLt and Triton correlate only through driver records, so the driver activity kind is required. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "Exact per-name kernel counts matched Nsight on W1 (3000), W2 (32000 each) and W3 (3000); vLLM kernel name sets matched in eager and graph mode. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/fidelity.json",
+              "role": "analysis",
+              "sha256": "9788273c1ced3c97491caa0787edc8a2443902a19c7bf6f2b0be17d4755ac1ed"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "All v2 trials ran on Linux x86_64. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "Validated on an L4 (compute capability 8.9) only; other architectures are untested. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "With Nsight Systems on the same process, Nsight captured all 3000 W1 kernels and the helper captured 0-1 records per process with no error reported. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNSUPPORTED"
+        },
+        "runtime_coupling": {
+          "detail": "Measured: the helper must link the CUPTI matching the target process's CUDA runtime. CUPTI 12.6 under the torch cu130 runtime silently lost about 39% of kernel timestamps; CUPTI 13.0 lost none. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "VERSION_DEPENDENT"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "Runtime, driver and concurrent-kernel activity records were captured in every v2 trial, with deferred start and stop controls. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "startup_injection": {
+          "detail": "CUDA_INJECTION64_PATH injection reached the vLLM V1 EngineCore process in every CUPTI trial without engine changes. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "evidence_roles": [
+            {
+              "path": "benchmarks/native_probes/results_v2/environment.txt",
+              "role": "environment",
+              "sha256": "32e23d6ba1ce9805346ed9c2b5fb1ab253330dc15509bcf20cf650e783ae4e4d"
+            },
+            {
+              "path": "benchmarks/native_probes/protocol_v2.json",
+              "role": "command",
+              "sha256": "f33be2f5a609277ba3e5b0b2f3719beb40bd915b9fc57ea88c8a4b80b9c5c262"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/raw_manifest.txt",
+              "role": "raw_artifact",
+              "sha256": "5bc177c73ae1f8a32ae604ba81ec65c584dfb874bf6f42d9445854a031d8dc85"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/trials.jsonl",
+              "role": "trial",
+              "sha256": "b051bd520e3b9304452178b4d69b608ced4563a069b75d93117b74f1c0d59c1b"
+            },
+            {
+              "path": "benchmarks/native_probes/results_v2/window_scaling.md",
+              "role": "analysis",
+              "sha256": "72e676f35d4126b184075f787e117bd5bd9486f23892fd92f8d002790c0ffb1d"
+            }
+          ],
+          "status": "STORMLOG_VALIDATED"
+        },
+        "streams": {
+          "detail": "Stream IDs matched Nsight, but the W2 overlap workload produced no meaningful concurrent execution on the L4 in either tool, so overlap fidelity is untested. Scope: one NVIDIA L4, driver 580.126.20, Linux 6.8 container as root, vLLM 0.30.0 V1 with Qwen2.5-0.5B, torch 2.13.0+cu130, helper linked to CUPTI 13.0.85.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "CUPTI Activity API and correlation",
+          "url": "https://docs.nvidia.com/cupti/main/main.html",
+          "version_or_date": "CUDA/CUPTI 13.3+ current documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "CUPTI release notes",
+          "url": "https://docs.nvidia.com/cupti/release-notes/release-notes.html",
+          "version_or_date": "current through CUDA 13.3 documentation"
+        }
+      ],
+      "id": "direct-cupti",
+      "name": "Direct CUPTI Activity",
+      "unverified_assumptions": [
+        "Request and phase attribution, pinned host memory, stream overlap, and non-root or other container deployments remain unqualified."
+      ],
+      "validation_context": {
+        "detail": "Protocol v2 measured direct CUPTI against vLLM's Kineto profiler across 50-2200 request windows (3 repetitions each), plus Nsight fidelity, induced loss, coexistence and ablations. Fidelity matched Nsight; p95 perturbation was +25-27% in eager mode and memory grew with the window because the helper's consumer could not keep up. Decision: defer. Post-hoc, in CUDA-graph mode at W=200, p95 perturbation was +0.8%.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md",
+          "benchmarks/native_probes/protocol_v2.json"
+        ],
+        "status": "MEASURED_V2_DEFER"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Linux BPF ring buffer",
+          "url": "https://www.kernel.org/doc/html/next/bpf/ringbuf.html",
+          "version_or_date": "Linux kernel next documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "USDT concepts",
+          "url": "https://docs.ebpf.io/linux/concepts/usdt/",
+          "version_or_date": "updated 2025-04-06"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ProfInfer",
+          "url": "https://arxiv.org/abs/2601.20755",
+          "version_or_date": "arXiv v2, 2026-01-29"
+        }
+      ],
+      "id": "ebpf-semantic",
+      "name": "USDT/uprobe/eBPF semantic probes",
+      "unverified_assumptions": [
+        "Stormlog host probe fidelity, privileges, packaging, and overhead remain unmeasured."
+      ],
+      "validation_context": {
+        "detail": "Not measured in protocol v1 or v2.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "parcagpu source",
+          "url": "https://github.com/parca-dev/parcagpu",
+          "version_or_date": "commit 1e7e8da62513fd188c121716fc5028b4bd8ac47c"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Continuous NVIDIA CUDA Profiling in Production",
+          "url": "https://www.polarsignals.com/blog/posts/2025/10/22/gpu-profiling",
+          "version_or_date": "2025-10-22"
+        }
+      ],
+      "id": "cupti-ebpf-hybrid",
+      "name": "CUPTI to USDT/eBPF hybrid",
+      "unverified_assumptions": [
+        "Stormlog correlation, two-domain loss visibility, privileges, packaging, and overhead remain unmeasured."
+      ],
+      "validation_context": {
+        "detail": "Not measured in protocol v1 or v2.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: PAPER_RESULT_NOT_REPRODUCED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Neutrino OSDI 2025",
+          "url": "https://www.usenix.org/conference/osdi25/presentation/huang-songlin",
+          "version_or_date": "OSDI 2025"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Neutrino source",
+          "url": "https://github.com/open-neutrino/neutrino",
+          "version_or_date": "commit 4a82cd22f474c31ac2fecfa174d381a19bb3f469"
+        }
+      ],
+      "id": "neutrino",
+      "name": "Neutrino programmable GPU probes",
+      "unverified_assumptions": [
+        "No named Stormlog incident establishes a need for instruction-level evidence; workload behavior remains unmeasured."
+      ],
+      "validation_context": {
+        "detail": "Not measured in protocol v1 or v2.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: CONFIRMED_BY_PRIMARY_SOURCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNSUPPORTED.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ROCProfiler SDK documentation",
+          "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/",
+          "version_or_date": "1.3.5 latest documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "ROCProfiler quick reference",
+          "url": "https://rocm.docs.amd.com/projects/rocprofiler-sdk/en/latest/quick-reference/quick_guide.html",
+          "version_or_date": "1.3.5 latest documentation"
+        }
+      ],
+      "id": "rocprofiler",
+      "name": "ROCProfiler SDK and rocprofv3",
+      "unverified_assumptions": [
+        "No AMD hardware trial or Stormlog ROCProfiler qualification has been completed."
+      ],
+      "validation_context": {
+        "detail": "Not measured in protocol v1 or v2. Requires AMD hardware (issue #235).",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    },
+    {
+      "claims": {
+        "amd": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "buffer_loss_visibility": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "containers": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "cpu_gpu_correlation": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "device_execution_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "engine_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "graph_replay": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "host_api_timing": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "instruction_level_detail": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "kernel_identity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "late_attach": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "linux": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "macos": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "nvidia": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "packaging_complexity": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "privileges": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "profiler_coexistence": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "runtime_coupling": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "semantic_inference_phases": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "signal": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "startup_injection": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "streams": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: VERSION_DEPENDENT.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "support_burden": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: INFERENCE.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        },
+        "windows": {
+          "detail": "NO QUALIFYING STORMLOG RESULT FOR THIS FIELD. Not measured in protocol v2. Source-backed status: UNKNOWN.",
+          "evidence": [
+            "benchmarks/native_probes/decision_2026-10-05.md"
+          ],
+          "status": "UNKNOWN"
+        }
+      },
+      "evidence_sources": [
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Nsight Systems user guide",
+          "url": "https://docs.nvidia.com/nsight-systems/UserGuide/",
+          "version_or_date": "current documentation"
+        },
+        {
+          "accessed_on": "2026-09-23",
+          "title": "Profiling vLLM",
+          "url": "https://docs.vllm.ai/en/latest/contributing/profiling/",
+          "version_or_date": "latest documentation"
+        }
+      ],
+      "id": "no-native-collector",
+      "name": "No new native collector",
+      "unverified_assumptions": [
+        "No paired comparison establishes that existing telemetry and imported traces answer all attribution needs."
+      ],
+      "validation_context": {
+        "detail": "Protocol v2 ran profiler-off only as the baseline for the other modes. That does not show existing telemetry and imported traces answer the attribution question, so no field is qualified.",
+        "evidence": [
+          "benchmarks/native_probes/decision_2026-10-05.md"
+        ],
+        "status": "NOT_RUN_IN_V2"
+      }
+    }
+  ],
+  "matrix_kind": "stormlog_validated",
+  "qualification_rule": "UNKNOWN means no qualifying Stormlog result for that field; it does not mean unsupported. STORMLOG_VALIDATED cells link five tracked v2 evidence files by SHA-256 and hold only within the stated scope. UNSUPPORTED and VERSION_DEPENDENT cells from v2 state the measurement that produced them.",
+  "reviewed_on": "2026-10-05",
+  "schema_version": 1
+}

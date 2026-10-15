@@ -1,0 +1,72 @@
+{
+ "plan_id": "ablation",
+ "seed": 118,
+ "trials": [
+  {
+   "trial_id": "ablate-cupti-discard-w200-r1",
+   "args": [
+    "--mode",
+    "cupti-discard",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "ablate-cupti-discard-w200-r2",
+   "args": [
+    "--mode",
+    "cupti-discard",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "ablate-cupti-kernel-w200-r1",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "ablate-cupti-kernel-w200-r3",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "ablate-cupti-kernel-w200-r2",
+   "args": [
+    "--mode",
+    "cupti-kernel",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "ablate-cupti-discard-w200-r3",
+   "args": [
+    "--mode",
+    "cupti-discard",
+    "--window",
+    "200"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  }
+ ]
+}
