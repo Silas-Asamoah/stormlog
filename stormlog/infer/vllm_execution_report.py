@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .correlation_accounting import resolve_inference_events
+from .correlation_codec import expand_inference_records
 from .correlation_events import (
     ActivityReferenceEvent,
     CapabilityEvent,
@@ -140,6 +141,7 @@ class _Steps:
 
 def execution_report(records: list[dict[str, Any]]) -> dict[str, Any]:
     """The coverage block for an artifact's raw records."""
+    records = expand_inference_records(records)
     events, skipped = _correlation_events(records)
     imports = _imports(events)
     try:

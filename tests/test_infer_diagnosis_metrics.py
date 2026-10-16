@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from stormlog.infer.correlation_codec import read_inference_records
 from stormlog.infer.diagnosis_context import Context
 from stormlog.infer.diagnosis_inputs import read_input
 from stormlog.infer.diagnosis_join import join
@@ -52,9 +53,10 @@ def _with_scrapes(
 
 def _client_only(path: Path) -> None:
     kept = [
-        line
-        for line in path.read_text().splitlines()
-        if '"schema_version": 2' not in line or '"infer.artifact"' in line
+        json.dumps(record)
+        for record in read_inference_records(path)
+        if record.get("schema_version", 1) == 1
+        or record.get("event_type") == "infer.artifact"
     ]
     path.write_text("\n".join(kept) + "\n")
 

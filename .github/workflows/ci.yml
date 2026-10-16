@@ -86,6 +86,35 @@ jobs:
                   flags: unittests
                   name: codecov-umbrella
 
+    mlx-contracts:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        strategy:
+            matrix:
+                python-version: ["3.10", "3.11", "3.12"]
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+            - name: Install framework-independent test environment
+              run: |
+                  python3 -m pip install --upgrade pip
+                  pip install -e . pytest jsonschema packaging
+                  python3 - <<'PY'
+                  import importlib.util
+                  for name in ("mlx", "torch", "jax", "tensorflow"):
+                      assert importlib.util.find_spec(name) is None, name
+                  PY
+            - name: Run MLX fake-runtime and packaging contracts
+              run: |
+                  python3 -m pytest tests/ -o 'python_files=test_mlx*.py' -m 'not mlx_hardware' -q
+                  python3 -m pytest tests/test_packaging_contracts.py -q
+
     tui-pr-gate:
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')
         runs-on: ubuntu-latest

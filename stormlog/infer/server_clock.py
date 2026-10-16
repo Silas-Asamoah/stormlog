@@ -20,6 +20,7 @@ from .correlation_accounting import (
     covering_alignments,
     resolve_inference_events,
 )
+from .correlation_codec import expand_inference_records
 from .correlation_events import (
     ClockAlignmentEvent,
     CorrelationContext,
@@ -148,6 +149,7 @@ def _applied(
 def client_clock_domain(artifact: Mapping[str, Any]) -> str | None:
     """Return the client artifact's wall clock domain, naming the boot if known.
 
+    The input must be expanded by the artifact/sequence decoder first.
     Artifacts written before domains carried a boot ID record
     ``{host}/unix_epoch_ns`` and keep the boot ID in ``metadata``; both parts
     together name the same clock as a boot-qualified domain.
@@ -184,6 +186,7 @@ def artifact_alignments(
     be reported instead of stopping the analysis. ``build_server_clock`` never
     places samples with them.
     """
+    records = expand_inference_records(records)
     alignments = [
         event
         for event in (

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .correlation_codec import CorrelationRecordDecoder
 from .correlation_events import InferenceRecord, parse_inference_record
 
 INPUT_KIND = "inference_jsonl"
@@ -97,8 +98,9 @@ def read_input(path: str | Path) -> InputFile:
         chunks.pop()  # the newline ending the last line starts no line
     lines: list[Line] = []
     problems: list[str] = []
+    decoder = CorrelationRecordDecoder()
     for number, chunk in enumerate(chunks):
-        line, problem = _line(number, chunk)
+        line, problem = _line(number, chunk, decoder)
         lines.append(line)
         if problem is not None:
             problems.append(f"line {number}: {problem}")
@@ -134,7 +136,9 @@ def record_id(raw: dict[str, Any]) -> str | None:
     return "/".join([event_type, *(str(value) for value in values)])
 
 
-def _line(number: int, chunk: bytes) -> tuple[Line, str | None]:
+def _line(
+    number: int, chunk: bytes, decoder: CorrelationRecordDecoder
+) -> tuple[Line, str | None]:
     digest = line_digest(chunk)
     if not chunk.strip():
         return Line(number, digest, None, None, None), None
@@ -145,9 +149,12 @@ def _line(number: int, chunk: bytes) -> tuple[Line, str | None]:
     if not isinstance(raw, dict):
         return Line(number, digest, None, None, None), "not a JSON object"
     try:
-        record: InferenceRecord | None = parse_inference_record(raw)
+        expanded = decoder.decode(raw)
+        record: InferenceRecord | None = (
+            None if expanded is None else parse_inference_record(expanded)
+        )
         problem = None
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         record, problem = None, str(exc)
     return Line(number, digest, raw, record, record_id(raw)), problem
 

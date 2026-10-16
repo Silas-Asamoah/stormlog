@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stormlog MLX profile v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "profiles"
+  ],
+  "properties": {
+    "format": {
+      "const": "stormlog.mlx.profile"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/profile"
+      }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "session_summary": {
+          "$ref": "#/$defs/session"
+        },
+        "started_at_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ended_at_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "elapsed_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "completion_verified": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "incomplete",
+            "interrupted"
+          ]
+        },
+        "baseline": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "final": {
+          "$ref": "#/$defs/snapshot"
+        },
+        "sampled_peak_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "valid_sample_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "peak_mode": {
+          "enum": [
+            "sampled",
+            "reset"
+          ]
+        },
+        "metadata": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "session_summary",
+        "started_at_ns",
+        "ended_at_ns",
+        "elapsed_ns",
+        "completion_verified",
+        "status",
+        "baseline",
+        "final",
+        "sampled_peak_bytes",
+        "valid_sample_count",
+        "peak_mode",
+        "metadata"
+      ]
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timestamp_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "collection_duration_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "active_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "cache_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "runtime_peak_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "process_rss_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "unavailable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "timestamp_ns",
+        "collection_duration_ns",
+        "name",
+        "active_bytes",
+        "cache_bytes",
+        "runtime_peak_bytes",
+        "process_rss_bytes",
+        "metadata",
+        "unavailable"
+      ]
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": [
+            "running",
+            "completed",
+            "interrupted",
+            "incomplete"
+          ]
+        },
+        "started_at_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ended_at_ns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pid": {
+          "type": "integer"
+        },
+        "job_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rank": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "local_rank": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "world_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "session_id",
+        "status",
+        "started_at_ns",
+        "ended_at_ns",
+        "host",
+        "pid",
+        "job_id",
+        "rank",
+        "local_rank",
+        "world_size",
+        "source"
+      ]
+    }
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from examples.qualification.victim import (
     read_marker,
     run,
 )
+from stormlog.infer.correlation_events import ArtifactIdentityEvent, CorrelationContext
+from stormlog.infer.events import JsonlEventWriter
 
 
 def _arguments(engine: FakeEngine, output: Path) -> list[str]:
@@ -47,7 +50,8 @@ def test_the_victim_marks_its_phases_and_times_each_append(tmp_path: Path) -> No
         json.loads(line)
         for line in (probes / "append-times.jsonl").read_text().splitlines()
     ]
-    # Every line the run appended, in order, with its own event type.
+    # Every line flushed through the event writer, in order, with its own
+    # event type. Final summary/state rows are appended separately.
     assert [a["line"] for a in appends] == list(range(len(appends)))
     for append in appends:
         record = json.loads(lines[append["line"]])
@@ -114,3 +118,42 @@ def test_the_append_probe_passes_on_whatever_append_takes(tmp_path: Path) -> Non
         events.JsonlEventWriter.append = real  # type: ignore[method-assign]
     assert seen == [(({"extra": 1},), {"flag": True})]
     assert (tmp_path / "append-times.jsonl").read_text().count("\n") == 1
+
+
+def test_the_append_probe_tracks_new_and_reused_contexts(tmp_path: Path) -> None:
+    context = CorrelationContext(
+        run_id="run", session_id="session", producer_id="client", source="test",
+        clock_domain="host/wall", clock_kind="wall", collection_mode="active",
+        provenance="observed",
+    )  # fmt: skip
+    event = ArtifactIdentityEvent(
+        context=context,
+        event_id="first",
+        artifact_kind="inference_jsonl",
+        created_at_ns=1,
+    )
+    path = tmp_path / "artifact.jsonl"
+    timings = tmp_path / "append-times.jsonl"
+    probe = AppendProbe(timings)
+    probe.install()
+    try:
+        with JsonlEventWriter(path) as writer:
+            writer.append(event.to_record())
+            writer.append(replace(event, event_id="same-context").to_record())
+            writer.append(
+                replace(
+                    event,
+                    event_id="new-context",
+                    context=replace(context, run_id="other"),
+                ).to_record()
+            )
+            writer.append({"event_type": "legacy", "schema_version": 1})
+    finally:
+        probe.uninstall()
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    appends = [json.loads(line) for line in timings.read_text().splitlines()]
+    assert len(rows) == len(appends) == 6
+    assert [a["line"] for a in appends] == list(range(6))
+    assert [a["event_type"] for a in appends] == [r["event_type"] for r in rows]
+    assert appends[0]["appended_ns"] == appends[1]["appended_ns"]
+    assert appends[3]["appended_ns"] == appends[4]["appended_ns"]

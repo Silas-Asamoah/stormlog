@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stormlog.infer.correlation_codec import read_inference_records
 from stormlog.infer.diagnosis import DiagnoseOptions, diagnose_artifact
 from stormlog.infer.diagnosis_context import Assessment, Context
 from stormlog.infer.diagnosis_inputs import Line, read_input
@@ -536,9 +538,10 @@ def test_a_stall_holds_back_waits_it_overlaps_or_ended_just_before() -> None:
 def test_without_engine_records_the_queue_is_unsupported(tmp_path: Path) -> None:
     path = build_run(tmp_path, _requests(), Engine(max_num_seqs=4))
     client_only = [
-        line
-        for line in path.read_text().splitlines()
-        if '"schema_version": 2' not in line or '"infer.artifact"' in line
+        json.dumps(record)
+        for record in read_inference_records(path)
+        if record.get("schema_version", 1) == 1
+        or record.get("event_type") == "infer.artifact"
     ]
     path.write_text("\n".join(client_only) + "\n")
     view = join(read_input(path))

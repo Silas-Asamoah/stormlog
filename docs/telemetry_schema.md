@@ -494,3 +494,15 @@ print(selected.summary.session_id)
 print(selected.summary.status)
 print(len(events))
 ```
+
+## MLX process allocator mapping
+
+The Apple Silicon integration emits v4 directly with `metadata.framework="mlx"`,
+`metadata.backend="metal"`, `metadata.memory_scope="process_allocator"` and
+`metadata.memory_model="unified"`. Native active memory maps to allocated bytes;
+reserved/block-active/inactive and device used/free/total remain null. Cache,
+lifetime peak, read-only allocator limit and device working-set recommendation
+are in `metadata.mlx`. RSS and host memory remain separate; no utilization or
+fragmentation is inferred. The complete strict capability object is unchanged;
+MLX bounded sampling/timing capabilities live in namespaced metadata. See the
+[MLX guide](mlx_testing_guide.md) for semantics, failures and measurement policy.
