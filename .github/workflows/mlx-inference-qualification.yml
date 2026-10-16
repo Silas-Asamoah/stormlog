@@ -1,0 +1,38 @@
+name: MLX inference qualification
+
+on:
+    workflow_dispatch:
+        inputs:
+            configuration_path:
+                description: Absolute path to the prepared endpoint/model scenario configuration on the dedicated runner
+                required: true
+                type: string
+
+permissions: {}
+
+jobs:
+    qualify:
+        runs-on: [self-hosted, macOS, ARM64, mlx-inference]
+        permissions:
+            contents: read
+        timeout-minutes: 60
+        env:
+            STORMLOG_INFER_MLX_QUALIFICATION_CONFIG: ${{ inputs.configuration_path }}
+            PYTHONPATH: .
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - name: Require native runtime and explicit provisioned endpoints
+              run: |
+                  python3 - <<'PY'
+                  import os
+                  from pathlib import Path
+                  from stormlog.mlx.runtime import MLXRuntime
+                  MLXRuntime()
+                  configuration = os.environ.get("STORMLOG_INFER_MLX_QUALIFICATION_CONFIG")
+                  if not configuration or not Path(configuration).is_file():
+                      raise RuntimeError("Prepare the explicit endpoint/model configuration before requesting qualification")
+                  PY
+            - name: Run real inference matrix without starting or resetting services
+              run: python3 -m pytest tests/test_infer_mlx_qualification.py -m infer_mlx_qualification -q -ra

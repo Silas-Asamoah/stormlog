@@ -121,6 +121,14 @@ def main(argv: Sequence[str] | None = None, *, restore_signals: bool = True) -> 
 def _run_command(
     parser: argparse.ArgumentParser, args: argparse.Namespace, restore_signals: bool
 ) -> int:
+    if args.infer_command == "profile-audio":
+        from .audio_cli import cmd_profile_audio
+
+        return cmd_profile_audio(args)
+    if args.infer_command == "mlx-serve":
+        from .mlx_server_cli import cmd_mlx_serve
+
+        return cmd_mlx_serve(args)
     if args.infer_command == "watch":
         return cmd_watch(args, restore_signals=restore_signals)
     handler = _handlers().get(args.infer_command)
@@ -176,6 +184,29 @@ def build_parser() -> argparse.ArgumentParser:
     endpoint_group.add_argument(
         "--base-url",
         help="OpenAI-compatible /v1 base URL",
+    )
+    profile_parser.add_argument(
+        "--engine", choices=("generic", "vllm", "omlx", "mlx-lm"), default="generic"
+    )
+    profile_parser.add_argument(
+        "--task", choices=("chat", "completion"), default="chat"
+    )
+    profile_parser.add_argument(
+        "--server-version",
+        help="User-declared server version; not independently verified",
+    )
+    profile_parser.add_argument("--max-response-bytes", type=int, default=16 * 1024**2)
+    profile_parser.add_argument(
+        "--omlx-stats-url", help="Explicit read-only oMLX stats endpoint"
+    )
+    profile_parser.add_argument(
+        "--omlx-stats-api-key-env",
+        help="Separate admin credential environment variable",
+    )
+    profile_parser.add_argument("--omlx-stats-interval", type=float, default=1.0)
+    profile_parser.add_argument(
+        "--omlx-stats-cookie-env",
+        help="Environment variable containing a separate omlx_admin_session token",
     )
     profile_parser.add_argument("--model", required=True, help="Model name")
     profile_parser.add_argument(
@@ -393,11 +424,21 @@ def build_parser() -> argparse.ArgumentParser:
     add_export_arguments(profile_parser)
     add_trace_context_arguments(profile_parser)
 
+    from .mlx_server_cli import add_mlx_serve_parser
+
+    add_mlx_serve_parser(subparsers)
     analyze_parser = subparsers.add_parser(
         "analyze",
         help="Analyze an inference profiling JSONL artifact",
     )
     analyze_parser.add_argument("input_file", help="Input inference JSONL artifact")
+    analyze_parser.add_argument(
+        "--mlx-server-evidence",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Offline same-process MLX evidence directory; repeat for separate captures",
+    )
     analyze_parser.add_argument(
         "--output",
         default=None,
@@ -514,6 +555,9 @@ def build_parser() -> argparse.ArgumentParser:
     _add_compare_parser(subparsers)
     _add_import_trace_parser(subparsers)
     _add_import_execution_parser(subparsers)
+    from .audio_cli import add_audio_parser
+
+    add_audio_parser(subparsers, _add_arrival_arguments)
     add_watch_parser(subparsers)
     add_diagnose_parser(subparsers)
     return parser
@@ -1024,9 +1068,19 @@ def _manifest_inputs(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _profile_config(args: argparse.Namespace) -> ProfileConfig:
-    endpoint = resolve_endpoint(endpoint=args.endpoint, base_url=args.base_url)
+    endpoint = resolve_endpoint(
+        endpoint=args.endpoint, base_url=args.base_url, task=args.task
+    )
     slo, slo_source = _slo_policy(args)
     return ProfileConfig(
+        engine=args.engine,
+        task=args.task,
+        server_version=args.server_version,
+        max_response_bytes=args.max_response_bytes,
+        omlx_stats_url=args.omlx_stats_url,
+        omlx_stats_api_key=_admin_credential(args.omlx_stats_api_key_env),
+        omlx_stats_cookie=_admin_credential(args.omlx_stats_cookie_env),
+        omlx_stats_interval_seconds=args.omlx_stats_interval,
         endpoint=endpoint,
         model=args.model,
         concurrency=tuple(
@@ -1098,6 +1152,15 @@ def _profile_config(args: argparse.Namespace) -> ProfileConfig:
     )
 
 
+def _admin_credential(name: str | None) -> str | None:
+    if name is None:
+        return None
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"Admin credential environment variable {name} is unset")
+    return value
+
+
 def _extra_body(raw: str | None) -> dict[str, Any] | None:
     if raw is None:
         return None
@@ -1148,6 +1211,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         clock_offset_ns=args.clock_offset_ns,
         clock_uncertainty_ns=args.clock_uncertainty_ns,
         vllm_span_paths=args.vllm_spans,
+        mlx_server_evidence_paths=args.mlx_server_evidence,
         slo=slo,
         slo_source=slo_source,
     )

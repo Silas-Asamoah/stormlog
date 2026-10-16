@@ -244,12 +244,28 @@ def case_populations(
     arrival, falling back to the send time) or ``overlap`` (any request whose
     span meets the segment).
     """
+    return populations_from_records(
+        _measured(records, "infer.request"),
+        _measured(records, "infer.phase_window"),
+        _workload(records),
+        segments=segments,
+        membership=membership,
+        server_admitted_ids=server_admitted_ids,
+    )
+
+
+def populations_from_records(
+    requests: Sequence[Mapping[str, Any]],
+    phase_windows: Sequence[Mapping[str, Any]],
+    workload: Mapping[str, Any] | None,
+    *,
+    segments: Sequence[Segment] = (),
+    membership: Membership = "arrival",
+    server_admitted_ids: Collection[str] | None = None,
+) -> dict[str, CasePopulation]:
+    """Task-neutral cohort construction from explicitly selected records."""
     _require_unique_names(segments)
-    requests = _measured(records, "infer.request")
-    windows = {
-        str(w.get("case_id")): w for w in _measured(records, "infer.phase_window")
-    }
-    workload = _workload(records)
+    windows = {str(w.get("case_id")): w for w in phase_windows}
     by_case: dict[str, list[Mapping[str, Any]]] = {}
     for record in requests:
         by_case.setdefault(str(record.get("case_id", "unknown")), []).append(record)

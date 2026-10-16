@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, Awaitable, Callable, List, Optional
-
-# Suppress TensorFlow oneDNN warnings
-os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 
 logger = logging.getLogger(__name__)
 
@@ -32,25 +28,39 @@ from textual.widgets import (
     TabPane,
 )
 
+from stormlog.formatting import format_bytes
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_RUNNING,
     create_session_summary,
     select_default_loaded_session,
 )
+from stormlog.system_info import get_system_info as get_host_info
 from stormlog.telemetry import LoadedTelemetrySession, TelemetryEvent
-from stormlog.utils import format_bytes, get_gpu_info, get_system_info
 
-try:
-    from stormlog.tensorflow.utils import get_gpu_info as get_tf_gpu_info
-    from stormlog.tensorflow.utils import get_system_info as get_tf_system_info
-except ImportError:
 
-    def get_tf_gpu_info() -> dict[str, Any]:
-        return {}
+def get_system_info() -> dict[str, Any]:
+    from stormlog.utils import get_system_info as getter
 
-    def get_tf_system_info() -> dict[str, Any]:
-        return {}
+    return getter()
+
+
+def get_gpu_info() -> dict[str, Any]:
+    from stormlog.utils import get_gpu_info as getter
+
+    return getter()
+
+
+def get_tf_gpu_info() -> dict[str, Any]:
+    from stormlog.tensorflow.utils import get_gpu_info as getter
+
+    return getter()
+
+
+def get_tf_system_info() -> dict[str, Any]:
+    from stormlog.tensorflow.utils import get_system_info as getter
+
+    return getter()
 
 
 from . import builders as tui_builders
@@ -90,23 +100,42 @@ from .workloads import (
     run_tensorflow_sample_workload,
 )
 
-try:
-    import torch as _torch
+torch: Optional[Any] = None
+tf: Optional[Any] = None
+GPUMemoryProfiler: Optional[Any] = None
+CPUMemoryProfiler: Optional[Any] = None
+TFMemoryProfiler: Optional[Any] = None
 
-    torch: Optional[Any] = _torch
-except ImportError:
-    torch = None
 
-try:
-    import tensorflow as _tf
+def _ensure_pytorch_runtime() -> None:
+    global torch, GPUMemoryProfiler, CPUMemoryProfiler
+    try:
+        import torch as torch_module
 
-    # Suppress TensorFlow INFO and WARNING messages
-    _tf.get_logger().setLevel("ERROR")
-    # Also suppress oneDNN warnings via environment
-    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-    tf: Optional[Any] = _tf
-except ImportError:
-    tf = None
+        from stormlog import GPUMemoryProfiler as profiler
+        from stormlog.cpu_profiler import CPUMemoryProfiler as cpu_profiler
+
+        torch, GPUMemoryProfiler, CPUMemoryProfiler = (
+            torch_module,
+            profiler,
+            cpu_profiler,
+        )
+    except ImportError:
+        return
+
+
+def _ensure_tensorflow_runtime() -> None:
+    global tf, TFMemoryProfiler
+    try:
+        import tensorflow as tf_module
+
+        from stormlog.tensorflow.profiler import TFMemoryProfiler as profiler
+
+        tf_module.get_logger().setLevel("ERROR")
+        tf, TFMemoryProfiler = tf_module, profiler
+    except ImportError:
+        return
+
 
 try:
     from pyfiglet import Figlet as _Figlet
@@ -114,27 +143,6 @@ try:
     Figlet: Optional[Any] = _Figlet
 except ImportError:
     Figlet = None
-
-try:
-    from stormlog import GPUMemoryProfiler as _GPUMemoryProfiler
-
-    GPUMemoryProfiler: Optional[Any] = _GPUMemoryProfiler
-except ImportError:
-    GPUMemoryProfiler = None
-
-try:
-    from stormlog.cpu_profiler import CPUMemoryProfiler as _CPUMemoryProfiler
-
-    CPUMemoryProfiler: Optional[Any] = _CPUMemoryProfiler
-except ImportError:
-    CPUMemoryProfiler = None
-
-try:
-    from stormlog.tensorflow.profiler import TFMemoryProfiler as _TFMemoryProfiler
-
-    TFMemoryProfiler: Optional[Any] = _TFMemoryProfiler
-except ImportError:
-    TFMemoryProfiler = None
 
 
 WELCOME_MESSAGES = [
@@ -253,6 +261,27 @@ def _build_diagnostics_markdown() -> str:
     return tui_builders.build_diagnostics_markdown()
 
 
+def _memory_gib(values: list[Any]) -> list[float | None]:
+    return [None if value is None else value / 1024**3 for value in values]
+
+
+def _timeline_series_labels(timeline: dict[str, Any]) -> tuple[str, str, str]:
+    if timeline.get("framework") == "mlx":
+        return "Active allocator (GB)", "Reusable cache (GB)", "MLX Process Allocator"
+    return "Allocated (GB)", "Reserved (GB)", "GPU Memory Timeline"
+
+
+def _mlx_analysis_timeline(result: dict[str, Any]) -> dict[str, Any]:
+    samples = result["timeline"]
+    return {
+        "framework": "mlx",
+        "timestamps": [s["timestamp_ns"] / 1e9 for s in samples],
+        "allocated": [s["active_bytes"] for s in samples],
+        "cache": [s["cache_bytes"] for s in samples],
+        "rss": [s.get("process_rss_bytes") for s in samples],
+    }
+
+
 class GPUMemoryProfilerTUI(App):
     """Main Textual application."""
 
@@ -281,8 +310,106 @@ class GPUMemoryProfilerTUI(App):
         ("t", "log_tfmemprof_help", "tfmemprof info"),
     ]
 
+    def __init__(self, *args: Any, framework: str = "pytorch", **kwargs: Any) -> None:
+        if framework not in {"pytorch", "mlx"}:
+            raise ValueError("framework must be pytorch or mlx")
+        self.framework = framework
+        self._mlx_artifact_path: str | None = None
+        super().__init__(*args, **kwargs)
+
+    def _overview_markdown(self) -> str:
+        if self.framework == "mlx":
+            system = get_host_info()
+            return f"# System Overview\nPlatform: {system['platform']} / {system['architecture']}\nPython: {system['python_version']}\nMLX is initialized only by an explicit runtime action."
+        return _build_system_markdown()
+
+    async def refresh_mlx_info(self) -> None:
+        from stormlog.mlx.utils import get_device_info
+
+        status = self.query_one("#mlx-runtime-status", Markdown)
+        try:
+            info = await asyncio.to_thread(get_device_info)
+            status.update(
+                f"MLX {info['mlx_version']} / Metal, {info['memory_scope']} in this TUI process. Device: {info['raw_device_info']}"
+            )
+        except Exception as exc:
+            status.update(f"MLX unavailable: {exc}")
+
+    async def run_mlx_sample(self) -> None:
+        from .workloads import format_mlx_result, run_mlx_sample_workload
+
+        await self._execute_task(
+            "MLX Sample", run_mlx_sample_workload, format_mlx_result
+        )
+        await self.refresh_mlx_profiles()
+
+    async def refresh_mlx_profiles(self) -> None:
+        from .profiles import fetch_mlx_profiles
+
+        try:
+            rows = await asyncio.to_thread(
+                fetch_mlx_profiles, path=self._mlx_artifact_path
+            )
+            self.mlx_profile_table.update_rows(rows)
+        except Exception as exc:
+            self.log_message("MLX Profiles", str(exc))
+
+    async def clear_mlx_profiles(self) -> None:
+        from .profiles import clear_mlx_profiles
+
+        self._mlx_artifact_path = None
+        clear_mlx_profiles()
+        await self.refresh_mlx_profiles()
+
+    async def load_mlx_artifact(self) -> None:
+        from stormlog.mlx.analyzer import analyze
+
+        value = self.query_one("#mlx-artifact-path", Input).value.strip()
+        if not value:
+            self.log_message(
+                "MLX Artifact", "Enter a profile, telemetry or capture-bundle path."
+            )
+            return
+        try:
+            result = await asyncio.to_thread(analyze, value)
+            if "profiles" in result:
+                self._mlx_artifact_path = value
+                await self.refresh_mlx_profiles()
+            else:
+                timeline = _mlx_analysis_timeline(result)
+                self.mlx_timeline_canvas.render_timeline(timeline)
+                self._last_timeline = timeline
+            self.log_message(
+                "MLX Artifact",
+                f"Loaded {value}; process allocator scope. "
+                + " ".join(result.get("notes", [])),
+            )
+        except Exception as exc:
+            self.log_message("MLX Artifact", f"Cannot load artifact: {exc}")
+
+    async def select_mlx_tracking(self) -> None:
+        self.stop_live_tracking()
+        self.framework = "mlx"
+        self.tracker_session = None
+        self.monitor_auto_cleanup = False
+        self._last_monitor_stats = {}
+        self._last_timeline = {}
+        self.query_one("#monitor-thresholds").display = False
+        self.watchdog_button.disabled = True
+        for button_id in (
+            "btn-force-cleanup",
+            "btn-force-cleanup-aggressive",
+            "btn-apply-thresholds",
+        ):
+            self.query_one("#" + button_id, Button).disabled = True
+        self._update_monitor_status()
+        self.log_monitor_message(
+            "MLX",
+            "MLX selected for live tracking. Click Start Live Tracking; this TUI process owns the allocator.",
+        )
+
     def compose(self) -> ComposeResult:
-        self.overview_panel = MarkdownPanel(_build_system_markdown, id="overview")
+        self.overview_panel = MarkdownPanel(self._overview_markdown, id="overview")
         self.welcome_panel = AsciiWelcome(
             WELCOME_MESSAGES,
             figlet_cls=Figlet,
@@ -322,6 +449,10 @@ class GPUMemoryProfilerTUI(App):
         self.tensorflow_profile_table = ProfileResultsTable(
             id="tensorflow-profile-table"
         )
+        self.mlx_profile_table = ProfileResultsTable(
+            id="mlx-profile-table", framework="mlx"
+        )
+        self.mlx_timeline_canvas = TimelineCanvas(id="mlx-timeline-canvas")
         self.alert_history_table = AlertHistoryTable(id="monitor-alerts-table")
         self.warning_input = Input(value="80", placeholder="80", id="input-warning")
         self.critical_input = Input(value="95", placeholder="95", id="input-critical")
@@ -374,7 +505,12 @@ class GPUMemoryProfilerTUI(App):
                         ),
                         id="pytorch-profile-controls",
                     ),
-                    GPUStatsTable("pytorch", _pytorch_stats_provider),
+                    GPUStatsTable(
+                        "pytorch",
+                        lambda: (
+                            _pytorch_stats_provider() if self.framework != "mlx" else []
+                        ),
+                    ),
                     self.pytorch_profile_table,
                 )
 
@@ -394,8 +530,45 @@ class GPUMemoryProfilerTUI(App):
                         ),
                         id="tensorflow-profile-controls",
                     ),
-                    GPUStatsTable("tensorflow", _tensorflow_stats_provider),
+                    GPUStatsTable(
+                        "tensorflow",
+                        lambda: (
+                            _tensorflow_stats_provider()
+                            if self.framework != "mlx"
+                            else []
+                        ),
+                    ),
                     self.tensorflow_profile_table,
+                )
+
+            with TabPane("MLX", id="mlx-tab"):
+                yield VerticalScroll(
+                    Markdown(_build_framework_markdown("mlx"), id="mlx-docs"),
+                    Markdown(
+                        "MLX runtime is initialized only by Runtime Info, Sample or Start Tracking. Live counters belong to this TUI process.",
+                        id="mlx-runtime-status",
+                    ),
+                    Horizontal(
+                        Button("Runtime Info", id="btn-mlx-info"),
+                        Button("MLX Sample", id="btn-run-mlx"),
+                        Button("Use MLX for Tracking", id="btn-select-mlx"),
+                        classes="mlx-controls",
+                    ),
+                    Horizontal(
+                        Button("Refresh Profiles", id="btn-refresh-mlx-profiles"),
+                        Button("Clear Profiles", id="btn-clear-mlx-profiles"),
+                        classes="mlx-controls",
+                    ),
+                    Horizontal(
+                        Input(
+                            placeholder="MLX profile JSON or telemetry/bundle directory",
+                            id="mlx-artifact-path",
+                        ),
+                        Button("Load Artifact", id="btn-load-mlx-artifact"),
+                        classes="mlx-controls",
+                    ),
+                    self.mlx_profile_table,
+                    self.mlx_timeline_canvas,
                 )
 
             with TabPane("Monitoring"):
@@ -588,6 +761,11 @@ class GPUMemoryProfilerTUI(App):
                 )
         yield Footer()
 
+    def on_unmount(self) -> None:
+        session = getattr(self, "tracker_session", None)
+        if session is not None:
+            session.stop()
+
     async def action_quit(self) -> None:
         self.exit()
 
@@ -631,6 +809,12 @@ class GPUMemoryProfilerTUI(App):
             return
 
         async_handlers: dict[str, Callable[[], Awaitable[None]]] = {
+            "btn-mlx-info": self.refresh_mlx_info,
+            "btn-select-mlx": self.select_mlx_tracking,
+            "btn-run-mlx": self.run_mlx_sample,
+            "btn-refresh-mlx-profiles": self.refresh_mlx_profiles,
+            "btn-clear-mlx-profiles": self.clear_mlx_profiles,
+            "btn-load-mlx-artifact": self.load_mlx_artifact,
             "btn-log-system": partial(self.run_cli_command, "gpumemprof info"),
             "btn-log-pytorch": partial(
                 self.run_cli_command, "gpumemprof monitor --duration 30 --interval 0.5"
@@ -694,6 +878,7 @@ class GPUMemoryProfilerTUI(App):
         self.log_diagnostics_message("Diagnostics", f"Focused timeline on rank {rank}.")
 
     async def run_pytorch_sample(self) -> None:
+        _ensure_pytorch_runtime()
         if GPUMemoryProfiler is None or torch is None:
             self.log_message(
                 "PyTorch Sample", "PyTorch profiler is unavailable in this environment."
@@ -719,6 +904,7 @@ class GPUMemoryProfilerTUI(App):
         await self.refresh_pytorch_profiles()
 
     async def run_tensorflow_sample(self) -> None:
+        _ensure_tensorflow_runtime()
         if TFMemoryProfiler is None or tf is None:
             self.log_message(
                 "TensorFlow Sample",
@@ -965,6 +1151,10 @@ class GPUMemoryProfilerTUI(App):
     ) -> None:
         table = self.monitor_stats_table
         table.clear()
+        if stats.get("framework") == "mlx":
+            for label, value in tui_builders.build_mlx_stats_rows(stats):
+                table.add_row(label, value)
+            return
         status_label, device_label = self._monitor_session_labels()
 
         if not stats:
@@ -1068,9 +1258,14 @@ class GPUMemoryProfilerTUI(App):
             timestamp = datetime.fromtimestamp(event.timestamp).strftime("%H:%M:%S")
             color = self._event_color(event.event_type)
             summary = event.message or "No context provided."
+            counters = (
+                f"Active allocator: {event.allocated} | Δ: {event.change}"
+                if self.framework == "mlx"
+                else f"Allocated: {event.allocated} | Reserved: {event.reserved} | Δ: {event.change}"
+            )
             self.monitor_log.write(
                 f"[{timestamp}] [{color}]{event.event_type.upper()}[/{color}] {summary}\n"
-                f"Allocated: {event.allocated} | Reserved: {event.reserved} | Δ: {event.change}\n"
+                f"{counters}\n"
             )
         self._capture_alerts(events)
         self.alert_history_table.update_rows(self.recent_alerts)
@@ -1103,7 +1298,7 @@ class GPUMemoryProfilerTUI(App):
         if self.tracker_session is None:
             try:
                 self.tracker_session = TrackerSession(
-                    auto_cleanup=self.monitor_auto_cleanup
+                    auto_cleanup=self.monitor_auto_cleanup, framework=self.framework
                 )
             except TrackerUnavailableError as exc:
                 self.log_monitor_message("Tracker", str(exc))
@@ -1121,6 +1316,16 @@ class GPUMemoryProfilerTUI(App):
         retry_at = stats.get("collector_next_retry_epoch_s")
         collector_error = stats.get("collector_last_error")
 
+        if self.framework == "mlx":
+            self.monitor_status.update(
+                "MLX Metal allocator in this TUI process. Sampling is passive; cache and RSS are separate. "
+                + (
+                    "Tracking active."
+                    if session and session.is_active
+                    else "Click Start Live Tracking to initialize MLX."
+                )
+            )
+            return
         if session and session.is_active:
             device_label = session.get_device_label() or "current CUDA device"
             message = self._active_monitor_message(
@@ -1679,29 +1884,12 @@ class GPUMemoryProfilerTUI(App):
     def _update_timeline_stats_table(self, timeline: dict) -> None:
         table = self.timeline_stats_table
         table.clear()
-        timestamps = timeline.get("timestamps") or []
-        allocated = timeline.get("allocated") or []
-        reserved = timeline.get("reserved") or []
-
-        sample_count = len(allocated)
-        if not sample_count or not timestamps:
-            self._clear_timeline_stats_table()
+        if timeline.get("framework") == "mlx":
+            for label, value in tui_builders.build_mlx_timeline_rows(timeline):
+                table.add_row(label, value)
             return
-
-        duration = (
-            max(0.0, timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0.0
-        )
-        alloc_max = max(allocated)
-        reserv_max = max(reserved) if reserved else 0
-        alloc_latest = allocated[-1]
-        reserv_latest = reserved[-1] if reserved else 0
-
-        table.add_row("Samples", str(sample_count))
-        table.add_row("Duration (s)", f"{duration:.1f}")
-        table.add_row("Allocated Max", format_bytes(int(alloc_max)))
-        table.add_row("Reserved Max", format_bytes(int(reserv_max)))
-        table.add_row("Allocated Latest", format_bytes(int(alloc_latest)))
-        table.add_row("Reserved Latest", format_bytes(int(reserv_latest)))
+        for label, value in tui_builders.build_legacy_timeline_rows(timeline):
+            table.add_row(label, value)
 
     def _clear_timeline_stats_table(self) -> None:
         table = self.timeline_stats_table
@@ -1715,6 +1903,7 @@ class GPUMemoryProfilerTUI(App):
 
     def _save_timeline_plot(self, timeline: dict, format: str) -> str:
         rel_times, allocated_gb, reserved_gb = self._timeline_plot_data(timeline)
+        primary_label, secondary_label, title = _timeline_series_labels(timeline)
         single_sample = len(rel_times) == 1
         line_marker = "o" if single_sample else None
         line_mode = "lines+markers" if single_sample else "lines"
@@ -1733,7 +1922,7 @@ class GPUMemoryProfilerTUI(App):
             ax.plot(
                 rel_times,
                 allocated_gb,
-                label="Allocated (GB)",
+                label=primary_label,
                 color="tab:blue",
                 marker=line_marker,
             )
@@ -1741,11 +1930,11 @@ class GPUMemoryProfilerTUI(App):
                 ax.plot(
                     rel_times,
                     reserved_gb,
-                    label="Reserved (GB)",
+                    label=secondary_label,
                     color="tab:red",
                     marker=line_marker,
                 )
-            ax.set_title("GPU Memory Timeline")
+            ax.set_title(title)
             ax.set_xlabel("Time (s)")
             ax.set_ylabel("Memory (GB)")
             ax.grid(True, alpha=0.3)
@@ -1770,7 +1959,7 @@ class GPUMemoryProfilerTUI(App):
                     x=rel_times,
                     y=allocated_gb,
                     mode=line_mode,
-                    name="Allocated (GB)",
+                    name=primary_label,
                 )
             )
             if reserved_gb:
@@ -1779,12 +1968,12 @@ class GPUMemoryProfilerTUI(App):
                         x=rel_times,
                         y=reserved_gb,
                         mode=line_mode,
-                        name="Reserved (GB)",
+                        name=secondary_label,
                     )
                 )
 
             plotly_fig.update_layout(
-                title="GPU Memory Timeline",
+                title=title,
                 xaxis_title="Time (s)",
                 yaxis_title="Memory (GB)",
                 hovermode="x unified",
@@ -1816,18 +2005,21 @@ class GPUMemoryProfilerTUI(App):
     @staticmethod
     def _timeline_plot_data(
         timeline: dict,
-    ) -> tuple[list[float], list[float], list[float]]:
+    ) -> tuple[list[float], list[float | None], list[float | None]]:
         timestamps = timeline.get("timestamps") or []
         allocated = timeline.get("allocated") or []
-        reserved = timeline.get("reserved") or []
+        reserved = (
+            timeline.get("cache" if timeline.get("framework") == "mlx" else "reserved")
+            or []
+        )
 
         if not timestamps or not allocated:
             raise ValueError("Timeline data is empty.")
 
         start = timestamps[0]
         rel_times = [t - start for t in timestamps]
-        allocated_gb = [val / (1024**3) for val in allocated]
-        reserved_gb = [val / (1024**3) for val in reserved] if reserved else []
+        allocated_gb = _memory_gib(allocated)
+        reserved_gb = _memory_gib(reserved)
         return rel_times, allocated_gb, reserved_gb
 
     def _set_loader(self, visible: bool) -> None:
@@ -1899,6 +2091,9 @@ class GPUMemoryProfilerTUI(App):
         self.timeline_canvas.render_placeholder(
             "No timeline data yet. Start live tracking and refresh."
         )
+        self.mlx_timeline_canvas.render_placeholder(
+            "Load an MLX telemetry artifact to display active/cache/RSS timelines."
+        )
         self._clear_timeline_stats_table()
         self._clear_diagnostics_views()
 
@@ -1913,13 +2108,24 @@ class GPUMemoryProfilerTUI(App):
             "Diagnostics",
             "Use Load Live or Load Artifacts, then Refresh to build rank-level diagnostics.",
         )
-        await self.refresh_pytorch_profiles()
-        await self.refresh_tensorflow_profiles()
+        if self.framework != "mlx":
+            await self.refresh_pytorch_profiles()
+            await self.refresh_tensorflow_profiles()
+        else:
+            self.watchdog_button.disabled = True
+            self.query_one("#monitor-thresholds").display = False
+            for button_id in (
+                "btn-force-cleanup",
+                "btn-force-cleanup-aggressive",
+                "btn-apply-thresholds",
+            ):
+                self.query_one("#" + button_id, Button).disabled = True
+            self.query_one(TabbedContent).active = "mlx-tab"
 
 
-def run_app() -> None:
+def run_app(framework: str = "pytorch") -> None:
     """Entry-point to launch the Textual application."""
-    GPUMemoryProfilerTUI().run()
+    GPUMemoryProfilerTUI(framework=framework).run()
 
 
 __all__ = ["run_app", "GPUMemoryProfilerTUI"]

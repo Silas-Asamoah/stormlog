@@ -1006,5 +1006,14 @@ Metal runtime stats could follow without changing the core
 The versioned request, iteration, stage, membership, and GPU activity contract
 is described in [Inference execution correlation](inference_correlation.md).
 It preserves v1 client observations while allowing optional server evidence
-to be appended to the same JSONL stream. New profiles also include a v2
-artifact identity record that names their run and capture session.
+to be appended to the same JSONL stream. New profiles include an artifact
+identity record naming their run and capture session. Correlation records use
+wire v4 context definitions/references on disk; loading restores complete
+embedded v2/v3 values.
+
+## MLX text and audio endpoints
+
+See [MLX inference profiling](mlx_inference.md) for oMLX/MLX-LM raw completions,
+MLX-Audio fixture manifests, audio duration metrics and qualification status.
+Endpoint profiles measure client HTTP observations. Server execution hooks
+and allocator ownership require separate evidence.

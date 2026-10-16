@@ -7,12 +7,13 @@ shared work to individual requests merely because they participated in it.
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Mapping, cast
 
 CORRELATION_SCHEMA_VERSION = 2
+# Artifact transport only; standalone model records remain embedded v2/v3.
+CONTEXT_REFERENCE_SCHEMA_VERSION = 4
 # An activity reference whose metadata lists busy intervals: the device is busy
 # inside them, not from start_ns to end_ns, so a v2-only reader must refuse it.
 ACTIVITY_INTERVALS_SCHEMA_VERSION = 3
@@ -445,6 +446,13 @@ _SCHEMA_VERSIONS: dict[str, tuple[int, ...]] = {
         ACTIVITY_INTERVALS_SCHEMA_VERSION,
     ),
 }
+
+
+def is_correlation_event_type(event_type: object) -> bool:
+    """Whether ``event_type`` names a correlation event that carries a context."""
+    return isinstance(event_type, str) and event_type in _EVENT_TYPES
+
+
 _REF_FIELDS = (
     "request_ref",
     "attempt_ref",
@@ -468,10 +476,12 @@ def _optional_ref(value: object, name: str) -> None:
 
 
 def parse_inference_record(record: Mapping[str, Any]) -> InferenceRecord:
-    """Parse one v1 or v2 JSONL record without fabricating missing evidence."""
+    """Parse one embedded v1/v2/v3 JSONL record without fabricating missing evidence."""
     version = record.get("schema_version", 1)
     if not isinstance(version, int) or isinstance(version, bool):
         raise ValueError("schema_version must be an integer")
+    if version == CONTEXT_REFERENCE_SCHEMA_VERSION:
+        raise ValueError("v4 requires load_inference_artifact or a sequence decoder")
     event_type = record.get("event_type")
     if not isinstance(event_type, str) or not event_type.startswith("infer."):
         raise ValueError("event_type must name an inference event")
@@ -530,24 +540,21 @@ def _parse_ref_fields(values: dict[str, Any]) -> None:
 
 def load_inference_artifact(path: str | Path) -> list[InferenceRecord]:
     """Read mixed legacy and correlation records in their original order."""
+    from .correlation_codec import iter_inference_records
+
     events: list[InferenceRecord] = []
-    with Path(path).open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-                if not isinstance(record, dict):
-                    raise ValueError("record must be an object")
-                events.append(parse_inference_record(record))
-            except (ValueError, TypeError) as exc:
-                raise ValueError(f"line {line_number}: {exc}") from exc
+    for line_number, record in iter_inference_records(path):
+        try:
+            events.append(parse_inference_record(record))
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"line {line_number}: {exc}") from exc
     return events
 
 
 __all__ = [
     "ACTIVITY_INTERVALS_SCHEMA_VERSION",
     "CORRELATION_SCHEMA_VERSION",
+    "CONTEXT_REFERENCE_SCHEMA_VERSION",
     "ActivityReferenceEvent",
     "ArtifactIdentityEvent",
     "CapabilityEvent",
@@ -562,6 +569,7 @@ __all__ = [
     "RequestEvent",
     "StageEvent",
     "activity_busy_intervals",
+    "is_correlation_event_type",
     "load_inference_artifact",
     "parse_inference_record",
 ]

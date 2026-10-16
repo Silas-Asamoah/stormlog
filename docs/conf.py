@@ -33,6 +33,7 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 autosummary_generate = True
 autodoc_typehints = "description"
+autodoc_type_aliases = {"bytes": "builtins.bytes"}
 autodoc_member_order = "bysource"
 autodoc_default_options = {
     "members": True,
@@ -74,3 +75,20 @@ html_title = "Stormlog Docs"
 html_baseurl = os.environ.get(
     "READTHEDOCS_CANONICAL_URL", "https://stormlog.readthedocs.io/en/latest/"
 )
+
+
+def _qualify_builtin_bytes(_app, doctree) -> None:
+    """Dataclass field signatures bypass autodoc's type-alias rendering."""
+    from sphinx import addnodes
+
+    for reference in doctree.findall(addnodes.pending_xref):
+        if (
+            reference.get("refdomain") == "py"
+            and reference.get("reftype") == "class"
+            and reference.get("reftarget") == "bytes"
+        ):
+            reference["reftarget"] = "builtins.bytes"
+
+
+def setup(app) -> None:
+    app.connect("doctree-read", _qualify_builtin_bytes)

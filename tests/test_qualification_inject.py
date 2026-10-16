@@ -21,6 +21,7 @@ from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.inject import _harness_clock
 from examples.qualification.run_dir import new_label, verify
+from stormlog.infer.correlation_codec import read_inference_records
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
 from tests.qualification_fake_engine_helpers import post, wait_until
 
@@ -185,20 +186,13 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
             "start",
             "end",
         ]
-    (artifact,) = [
-        json.loads(line)
-        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
-        if '"infer.artifact"' in line
-    ]
+    victim_records = read_inference_records(run / "run" / "victim.jsonl")
+    (artifact,) = [r for r in victim_records if r.get("event_type") == "infer.artifact"]
     assert artifact["context"]["run_id"] == record.run_id
     assert artifact["context"]["clock_domain"] == record.clock_domain
     # The victim ended its measured window when the run was done, drained
     # and completed: the diagnoser gets a whole artifact, not an
     # interrupted one.
-    victim_records = [
-        json.loads(line)
-        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
-    ]
     (measured,) = [
         r
         for r in victim_records

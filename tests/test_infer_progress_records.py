@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, cast
 from unittest import mock
 
+import pytest
+
+from stormlog.infer.completions_client import OpenAICompletionsClient
 from stormlog.infer.config import ProfileConfig
 from stormlog.infer.events import JsonlEventWriter
 from stormlog.infer.open_loop import Arrival
@@ -27,9 +30,15 @@ STREAM = b"".join(
 ANSWER = json.dumps(
     {"choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}]}
 ).encode("utf-8")
+COMPLETION_STREAM = b"".join(
+    f"data: {json.dumps({'choices': [{'text': piece}]})}\n\n".encode("utf-8")
+    for piece in ("", "hello", " world")
+)
 
 
-def _complete(body: bytes, *, stream: bool) -> tuple[Any, list[Any]]:
+def _complete(
+    body: bytes, *, stream: bool, task: str = "chat"
+) -> tuple[Any, list[Any]]:
     """Run one completion against ``body``; return it and the calls seen,
     in order: the callbacks' and the request's opening."""
     calls: list[Any] = []
@@ -38,7 +47,10 @@ def _complete(body: bytes, *, stream: bool) -> tuple[Any, list[Any]]:
         calls.append("open")
         return io.BytesIO(body)
 
-    client = OpenAIChatCompletionsClient(
+    client_class = (
+        OpenAIChatCompletionsClient if task == "chat" else OpenAICompletionsClient
+    )
+    client = client_class(
         endpoint="http://localhost/v1/chat/completions", model="m", timeout_seconds=1
     )
     with mock.patch.object(client, "_opener", mock.Mock(open=urlopen)):
@@ -53,10 +65,12 @@ def _complete(body: bytes, *, stream: bool) -> tuple[Any, list[Any]]:
     return result, calls
 
 
-def test_the_send_is_reported_before_it_goes_out_and_first_content_at_its_ttft() -> (
-    None
-):
-    result, calls = _complete(STREAM + b"data: [DONE]\n\n", stream=True)
+@pytest.mark.parametrize("task", ["chat", "completion"])
+def test_the_send_is_reported_before_it_goes_out_and_first_content_at_its_ttft(
+    task: str,
+) -> None:
+    body = STREAM if task == "chat" else COMPLETION_STREAM
+    result, calls = _complete(body + b"data: [DONE]\n\n", stream=True, task=task)
 
     assert calls[:2] == [("sent", result.started_at_ns), "open"]
     # Once, for the first of two content pieces, on the send's clock.

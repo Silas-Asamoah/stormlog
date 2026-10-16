@@ -43,6 +43,8 @@ def _infer_without_fcntl(*argv: str) -> subprocess.CompletedProcess[str]:
         (),
         ("--help",),
         ("profile", "--help"),
+        ("profile-audio", "--help"),
+        ("mlx-serve", "--help"),
         ("analyze", "--help"),
         ("collect-server", "--help"),
         ("import-trace", "--help"),

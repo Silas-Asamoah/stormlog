@@ -1204,9 +1204,9 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
 ) -> None:
     circular: list[Any] = []
     circular.append(circular)
-    deep: list[Any] = []
-    for _ in range(100_000):
-        deep = [deep]
+    # Python 3.14 JSON can encode deep lists iteratively. Invalid mapping
+    # keys are a deterministic serialization failure on every supported version.
+    invalid_keys = {("not", "a JSON key"): 1}
 
     class Changing(dict[str, Any]):
         """A value another thread changes while json reads it."""
@@ -1215,7 +1215,7 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
             raise RuntimeError("dictionary changed size during iteration")
 
     writer = EpochWriter(tmp_path, "engine")
-    for value in (object(), circular, deep, Changing(a=1)):
+    for value in (object(), circular, invalid_keys, Changing(a=1)):
         writer.emit("alias", {"internal": value})  # never raises
     writer.emit("alias", {"internal": "x"})
     writer.close()

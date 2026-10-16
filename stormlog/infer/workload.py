@@ -41,6 +41,8 @@ def workload_record(
         "event_type": "infer.workload",
         "session_id": session_id,
         "workload_digest": _digest(traffic),
+        "engine": config.engine,
+        "task": config.task,
         "spec_digest": _digest(_without_seed(traffic)),
         **spec,
         "chat_template": chat_template_identity(counter),
@@ -51,6 +53,7 @@ def workload_spec(
     config: ProfileConfig, *, counter: TokenCounter, prompt_spec: PromptSpec
 ) -> dict[str, Any]:
     return {
+        "task": config.task,
         "seed": config.seed,
         "generator": {"name": "stormlog.synthetic", "version": GENERATOR_VERSION},
         "cases": [
@@ -137,7 +140,7 @@ def _traffic(spec: dict[str, Any], *, open_loop: bool) -> dict[str, Any]:
     shaping = ["request_count", "duration_seconds"]
     if open_loop:
         shaping += ["max_in_flight", "overflow"]
-    return {
+    traffic = {
         "seed": spec["seed"],
         "generator": spec["generator"],
         "cases": [_case_traffic(case) for case in spec["cases"]],
@@ -148,6 +151,9 @@ def _traffic(spec: dict[str, Any], *, open_loop: bool) -> dict[str, Any]:
         "tokenizer": spec["tokenizer"],
         "cache_requested": spec["cache"]["requested"],
     }
+    if spec.get("task", "chat") != "chat":
+        traffic = {"text_task_version": 1, "task": spec["task"], **traffic}
+    return traffic
 
 
 def _case_traffic(case: dict[str, Any]) -> dict[str, Any]:

@@ -1,0 +1,1132 @@
+{
+  "$defs": {
+    "manifest": {
+      "additionalProperties": false,
+      "properties": {
+        "capture": {
+          "additionalProperties": false,
+          "properties": {
+            "ended_at_ns": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "interval_seconds": {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            "memory_scope": {
+              "const": "process_allocator"
+            },
+            "sampling": {
+              "const": "passive"
+            },
+            "started_at_ns": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "stats_sampling": {
+              "type": "boolean"
+            },
+            "status": {
+              "enum": [
+                "complete",
+                "interrupted",
+                "incomplete"
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "started_at_ns",
+            "ended_at_ns",
+            "interval_seconds",
+            "sampling",
+            "memory_scope",
+            "exit_code",
+            "stats_sampling"
+          ],
+          "type": "object"
+        },
+        "clock": {
+          "additionalProperties": false,
+          "properties": {
+            "boot_qualified": {
+              "type": "boolean"
+            },
+            "domain": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "wall"
+            }
+          },
+          "required": [
+            "domain",
+            "kind",
+            "boot_qualified"
+          ],
+          "type": "object"
+        },
+        "endpoint": {
+          "additionalProperties": false,
+          "properties": {
+            "declared_by": {
+              "enum": [
+                "launch_arguments",
+                "operator",
+                "unknown"
+              ]
+            },
+            "host": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "port": {
+              "maximum": 65535,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "routing_proof": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "address": {
+                      "enum": [
+                        "127.0.0.1",
+                        "::1"
+                      ]
+                    },
+                    "method": {
+                      "const": "psutil_process_listening_socket"
+                    },
+                    "observed_at_ns": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "pid": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "port": {
+                      "maximum": 65535,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "start_time_ns": {
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "method",
+                    "pid",
+                    "start_time_ns",
+                    "address",
+                    "port",
+                    "observed_at_ns"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "host",
+            "port",
+            "declared_by",
+            "routing_proof"
+          ],
+          "type": "object"
+        },
+        "engine": {
+          "additionalProperties": false,
+          "properties": {
+            "entrypoint": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "enum": [
+                "omlx",
+                "mlx-lm",
+                "mlx-audio"
+              ]
+            },
+            "source_revision": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "version_provenance": {
+              "enum": [
+                "installed_distribution_metadata",
+                "user_declared",
+                "unknown"
+              ]
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "version_provenance",
+            "entrypoint",
+            "source_revision"
+          ],
+          "type": "object"
+        },
+        "files": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "bytes": {
+                "maximum": 268435456,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "path": {
+                "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\)[^\\u0000]+$",
+                "type": "string"
+              },
+              "role": {
+                "enum": [
+                  "native_telemetry",
+                  "omlx_stats"
+                ]
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "role",
+              "path",
+              "bytes",
+              "sha256"
+            ],
+            "type": "object"
+          },
+          "maxItems": 512,
+          "type": "array"
+        },
+        "format": {
+          "const": "stormlog.infer.mlx_evidence"
+        },
+        "limitations": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "process": {
+          "additionalProperties": false,
+          "properties": {
+            "boot_id": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "host": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "pid": {
+              "minimum": 1,
+              "type": "integer"
+            },
+            "session_id": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "start_time_ns": {
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "start_time_source": {
+              "minLength": 1,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "host",
+            "boot_id",
+            "pid",
+            "start_time_ns",
+            "start_time_source",
+            "session_id"
+          ],
+          "type": "object"
+        },
+        "producer": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "mlx-serve",
+                "embedded"
+              ]
+            },
+            "name": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "version",
+            "mode"
+          ],
+          "type": "object"
+        },
+        "run_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "server": {
+          "additionalProperties": false,
+          "properties": {
+            "argv": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "config": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "argv",
+            "config"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "format",
+        "schema_version",
+        "run_id",
+        "producer",
+        "engine",
+        "process",
+        "clock",
+        "capture",
+        "server",
+        "endpoint",
+        "files",
+        "limitations"
+      ],
+      "type": "object"
+    },
+    "stats": {
+      "additionalProperties": false,
+      "properties": {
+        "case_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "clock_provenance": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "clock_uncertainty_ns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "counter_scope": {
+          "enum": [
+            "session",
+            "alltime"
+          ]
+        },
+        "decreased_fields": {
+          "items": {
+            "enum": [
+              "total_tokens_served",
+              "total_cached_tokens",
+              "total_prompt_tokens",
+              "total_completion_tokens",
+              "total_requests",
+              "cache_efficiency",
+              "avg_prefill_tps",
+              "avg_generation_tps",
+              "uptime_seconds",
+              "active_models.total_active_requests",
+              "active_models.total_waiting_requests"
+            ]
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "engine": {
+          "const": "omlx"
+        },
+        "epoch_change": {
+          "enum": [
+            null,
+            "restart_or_uptime_reset",
+            "counter_reset_or_restart"
+          ]
+        },
+        "error_type": {
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event_type": {
+          "const": "infer.mlx.stats"
+        },
+        "http_status": {
+          "minimum": 100,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "marker": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "metrics": {
+          "items": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "enum": [
+                      "session",
+                      "alltime",
+                      null
+                    ]
+                  },
+                  "kind": {
+                    "const": "counter"
+                  },
+                  "name": {
+                    "const": "total_tokens_served"
+                  },
+                  "raw_path": {
+                    "const": "total_tokens_served"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "enum": [
+                      "session",
+                      "alltime",
+                      null
+                    ]
+                  },
+                  "kind": {
+                    "const": "counter"
+                  },
+                  "name": {
+                    "const": "total_cached_tokens"
+                  },
+                  "raw_path": {
+                    "const": "total_cached_tokens"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "enum": [
+                      "session",
+                      "alltime",
+                      null
+                    ]
+                  },
+                  "kind": {
+                    "const": "counter"
+                  },
+                  "name": {
+                    "const": "total_prompt_tokens"
+                  },
+                  "raw_path": {
+                    "const": "total_prompt_tokens"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "enum": [
+                      "session",
+                      "alltime",
+                      null
+                    ]
+                  },
+                  "kind": {
+                    "const": "counter"
+                  },
+                  "name": {
+                    "const": "total_completion_tokens"
+                  },
+                  "raw_path": {
+                    "const": "total_completion_tokens"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "enum": [
+                      "session",
+                      "alltime",
+                      null
+                    ]
+                  },
+                  "kind": {
+                    "const": "counter"
+                  },
+                  "name": {
+                    "const": "total_requests"
+                  },
+                  "raw_path": {
+                    "const": "total_requests"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "requests"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "cache_efficiency"
+                  },
+                  "raw_path": {
+                    "const": "cache_efficiency"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "percent"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "avg_prefill_tps"
+                  },
+                  "raw_path": {
+                    "const": "avg_prefill_tps"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens_per_second"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "avg_generation_tps"
+                  },
+                  "raw_path": {
+                    "const": "avg_generation_tps"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "tokens_per_second"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "uptime_seconds"
+                  },
+                  "raw_path": {
+                    "const": "uptime_seconds"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "seconds"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "active_models_total_active_requests"
+                  },
+                  "raw_path": {
+                    "const": "active_models.total_active_requests"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "requests"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "counter_scope": {
+                    "type": "null"
+                  },
+                  "kind": {
+                    "const": "gauge"
+                  },
+                  "name": {
+                    "const": "active_models_total_waiting_requests"
+                  },
+                  "raw_path": {
+                    "const": "active_models.total_waiting_requests"
+                  },
+                  "scope": {
+                    "enum": [
+                      "server",
+                      "model"
+                    ]
+                  },
+                  "unit": {
+                    "const": "requests"
+                  },
+                  "validity": {
+                    "enum": [
+                      "valid",
+                      "missing_or_invalid"
+                    ]
+                  },
+                  "value": {
+                    "minimum": 0,
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "raw_path",
+                  "name",
+                  "unit",
+                  "kind",
+                  "value",
+                  "validity",
+                  "counter_scope",
+                  "scope"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "maxItems": 11,
+          "type": "array"
+        },
+        "model_scope": {
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observation_scope": {
+          "const": "engine_admin_aggregate"
+        },
+        "observed_at_ns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "other_client_contamination": {
+          "const": "possible"
+        },
+        "phase": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "preceded_by_outage": {
+          "type": "boolean"
+        },
+        "run_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "scrape_elapsed_ns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scrape_ended_at_ns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scrape_started_at_ns": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "server_version": {
+          "minLength": 1,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_revision": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "error",
+            "abandoned"
+          ]
+        },
+        "version_provenance": {
+          "enum": [
+            "user_declared",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "case_id",
+        "event_type",
+        "clock_provenance",
+        "schema_version",
+        "other_client_contamination",
+        "observed_at_ns",
+        "status",
+        "engine",
+        "scrape_ended_at_ns",
+        "metrics",
+        "scrape_elapsed_ns",
+        "clock_uncertainty_ns",
+        "observation_scope",
+        "session_id",
+        "run_id",
+        "marker",
+        "phase",
+        "server_version",
+        "model_scope",
+        "source_revision",
+        "version_provenance",
+        "scrape_started_at_ns",
+        "counter_scope"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "stormlog.inference_mlx_evidence_v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Native framework telemetry v4 is stored separately. The loader additionally verifies digests, paths, process/clock identity, sample bounds and finalized capture windows.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/manifest"
+    },
+    {
+      "$ref": "#/$defs/stats"
+    }
+  ],
+  "title": "Stormlog process-scoped MLX server evidence and oMLX statistics v1"
+}

@@ -13,14 +13,27 @@ class StormlogEntrypointTests(unittest.TestCase):
             exit_code = entrypoint.main([])
 
         self.assertEqual(exit_code, 0)
-        run_app.assert_called_once_with()
+        run_app.assert_called_once_with([])
 
     def test_tui_command_launches_tui(self) -> None:
         with mock.patch("stormlog.tui.run_app") as run_app:
             exit_code = entrypoint.main(["tui"])
 
         self.assertEqual(exit_code, 0)
-        run_app.assert_called_once_with()
+        run_app.assert_called_once_with([])
+
+    def test_tui_dispatch_does_not_reparse_process_arguments(self) -> None:
+        for argv in (None, [], ["tui"]):
+            with self.subTest(argv=argv):
+                with mock.patch.object(entrypoint.sys, "argv", ["stormlog", "tui"]):
+                    with mock.patch("stormlog.tui._launch_tui") as launch:
+                        self.assertEqual(entrypoint.main(argv), 0)
+                launch.assert_called_once_with("pytorch")
+
+    def test_mlx_tui_selection_reaches_app_launcher(self) -> None:
+        with mock.patch("stormlog.tui.run_app") as run_app:
+            self.assertEqual(entrypoint.main(["tui", "--framework", "mlx"]), 0)
+        run_app.assert_called_once_with(["--framework", "mlx"])
 
     def test_tui_help_does_not_launch_tui(self) -> None:
         output = io.StringIO()

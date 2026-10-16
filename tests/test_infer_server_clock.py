@@ -240,3 +240,19 @@ def test_equal_names_without_boot_ids_join_only_with_explicit_flags() -> None:
     )
     placed, _record = _place(clock, 100)
     assert (placed.value_ns, placed.uncertainty_ns) == (120, 5)
+
+
+def test_compact_alignments_expand_generator_before_filtering():
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+    from stormlog.infer.server_clock import artifact_alignments
+
+    own, foreign = _alignment("own"), _alignment("foreign", run_id="other")
+    encoder = CorrelationRecordEncoder()
+    rows = [
+        row
+        for event in (own, own, foreign)
+        for row in encoder.encode(event.to_record())
+    ]
+    assert artifact_alignments(iter(rows), "run-1") == (own, foreign)
+    with pytest.raises(ValueError, match="unknown context_id"):
+        artifact_alignments(iter(rows[1:]), "run-1")

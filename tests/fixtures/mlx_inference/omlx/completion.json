@@ -1,0 +1,13 @@
+{
+  "id": "server-generated",
+  "system_fingerprint": "build",
+  "choices": [
+    {
+      "text": "answer",
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "completion_tokens": 1
+  }
+}

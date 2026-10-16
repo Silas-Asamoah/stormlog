@@ -15,7 +15,7 @@
 </p>
 
 Stormlog is a memory-profiling and inference-profiling toolkit for day-to-day
-PyTorch, TensorFlow, JAX, and OpenAI-compatible serving work. It combines
+PyTorch, TensorFlow, JAX, MLX, and OpenAI-compatible serving work. It combines
 Python APIs, CLI commands, and a Textual TUI so you can move from "what is
 using memory?" or "what is my endpoint doing under load?" to saved artifacts
 and shareable diagnostics without switching tools.
@@ -51,27 +51,33 @@ pip install "stormlog[tui,torch]"
 pip install "stormlog[torch]"
 pip install "stormlog[tf]"
 pip install "stormlog[jax]"
+pip install "stormlog[mlx]"  # native Apple Silicon macOS
 pip install "stormlog[infer-tokenizers]"
 pip install "stormlog[all]"
 ```
 
 `stormlog[all]` installs every runtime extra: visualization, TUI, PyTorch,
-TensorFlow, JAX, W&B, and inference tokenizer dependencies.
+TensorFlow, JAX, platform-gated MLX, W&B, and inference tokenizer dependencies.
 
 ### Package and import names
 
 `stormlog` is the distribution name on PyPI and the primary Python import root.
 TensorFlow-specific APIs live under `stormlog.tensorflow`; JAX-specific APIs
-live under `stormlog.jax`.
+live under `stormlog.jax`. MLX Python APIs live under `stormlog.mlx`; see the
+[MLX guide](https://github.com/Silas-Asamoah/stormlog/blob/main/docs/mlx_testing_guide.md) for process allocator scope and lazy
+evaluation. Use `mlxmemprof run -- script.py` for in-process capture and
+`stormlog tui --framework mlx` for MLX tracking or saved-artifact browsing.
 
 | Task | Use |
 | --- | --- |
 | Install the package | `pip install stormlog` |
 | Launch the TUI | `stormlog` or `stormlog tui` |
 | Profile OpenAI-compatible inference | `stormlog infer profile` |
+| Profile MLX audio and serving evidence | `stormlog infer profile-audio`, `stormlog infer mlx-serve`; [guide](https://github.com/Silas-Asamoah/stormlog/blob/release/dev/docs/mlx_inference.md) |
 | Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
 | Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
 | Import JAX APIs | `from stormlog.jax import JAXMemoryProfiler` |
+| Import MLX APIs | `from stormlog.mlx import MLXMemoryProfiler, MemoryTracker` |
 | Query local artifacts | `stormlog query` |
 | Run framework memory CLI automation | `gpumemprof`, `tfmemprof`, or `jaxmemprof` |
 
@@ -211,13 +217,17 @@ pip install "stormlog[tui,torch]"
 stormlog
 ```
 
-The current TUI startup path imports PyTorch immediately, so `stormlog[tui]` alone is not enough yet.
+For MLX on native Apple Silicon, install `stormlog[mlx,tui]` and launch
+`stormlog tui --framework mlx`. Live tracking observes the TUI process; use
+`mlxmemprof run -- script.py` to capture a separate workload and load its saved
+bundle in the MLX tab. Offline MLX artifact browsing needs only `stormlog[tui]`.
 
 The current TUI tabs are:
 
 - `Overview`
 - `PyTorch`
 - `TensorFlow`
+- `MLX`
 - `Monitoring`
 - `Visualizations`
 - `Diagnostics`

@@ -1148,7 +1148,7 @@ class OtlpSpanReceiver:
         with memoryview(body) as view:
             received = 0
             while received < length:
-                count = handler.rfile.readinto(view[received:])  # type: ignore[attr-defined]
+                count = handler.rfile.readinto(view[received:])  # type: ignore[attr-defined, unused-ignore]
                 if not count:
                     break  # a short body fails to decode and is answered 400
                 received += count

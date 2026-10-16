@@ -36,7 +36,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from .openai_client import (
+from .http_transport import (
     ConnectError,
     NoResponseError,
     _NoRedirect,

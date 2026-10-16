@@ -50,6 +50,29 @@ def test_the_digest_names_the_traffic_not_the_target(tmp_path: Path) -> None:
     }
 
 
+def test_task_digests_recompute_without_equating_chat_and_completion(
+    tmp_path: Path,
+) -> None:
+    from stormlog.infer.workload import workload_digests
+
+    chat = _workload(tmp_path / "chat", request_count=1)
+    completion = _workload(
+        tmp_path / "completion", request_count=1, engine="mlx-lm", task="completion"
+    )
+    other_engine = _workload(
+        tmp_path / "omlx", request_count=1, engine="omlx", task="completion"
+    )
+    assert workload_digests(completion) == {
+        "spec_digest": completion["spec_digest"],
+        "realization_digest": completion["workload_digest"],
+    }
+    for key in ("spec_digest", "workload_digest"):
+        assert chat[key] != completion[key]
+        assert completion[key] == other_engine[key]
+    old_chat = {key: value for key, value in chat.items() if key != "task"}
+    assert workload_digests(old_chat) == workload_digests(chat)
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -216,8 +239,11 @@ class _Response:
     def __init__(self, body: dict[str, Any]) -> None:
         self.body = json.dumps(body).encode("utf-8")
 
-    def read(self) -> bytes:
-        return self.body
+    def read(self, size: int = -1) -> bytes:
+        data, self.body = self.body[:size] if size >= 0 else self.body, (
+            self.body[size:] if size >= 0 else b""
+        )
+        return data
 
     def __enter__(self) -> "_Response":
         return self

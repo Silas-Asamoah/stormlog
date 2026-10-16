@@ -9,7 +9,7 @@ Use the smallest install that matches your workflow, then validate the console s
 ## Install name vs import names
 
 Install the distribution as `stormlog`, then import the Python APIs from
-`stormlog`, `stormlog.tensorflow`, or `stormlog.jax`:
+`stormlog`, `stormlog.tensorflow`, `stormlog.jax`, or `stormlog.mlx`:
 
 | Task | Use |
 | --- | --- |
@@ -19,7 +19,8 @@ Install the distribution as `stormlog`, then import the Python APIs from
 | Import PyTorch APIs | `from stormlog import GPUMemoryProfiler, MemoryTracker` |
 | Import TensorFlow APIs | `from stormlog.tensorflow import TFMemoryProfiler` |
 | Import JAX APIs | `from stormlog.jax import JAXMemoryProfiler` |
-| Run framework memory CLI automation | `gpumemprof`, `tfmemprof`, or `jaxmemprof` |
+| Import MLX APIs | `from stormlog.mlx import MLXMemoryProfiler` |
+| Run framework memory CLI automation | `gpumemprof`, `tfmemprof`, `jaxmemprof`, or `mlxmemprof` |
 
 ### Core package
 
@@ -32,6 +33,7 @@ Includes:
 - `stormlog`
 - `stormlog.tensorflow`
 - `stormlog.jax`
+- `stormlog.mlx` (lazy APIs; native runtime is optional)
 - core telemetry and analysis utilities
 - CPU-compatible monitoring and tracking
 
@@ -53,7 +55,10 @@ Adds the dependencies used by:
 pip install "stormlog[tui,torch]"
 ```
 
-Installs the Textual stack plus the current PyTorch runtime dependency required by TUI startup. The `stormlog` console script is declared by the package; these extras make the app runnable.
+Installs Textual and PyTorch for the default framework. For MLX, use
+`pip install "stormlog[mlx,tui]"` and `stormlog tui --framework mlx`.
+Offline MLX artifact browsing requires only `stormlog[tui]`; startup and saved
+artifact loading do not initialize MLX, PyTorch, TensorFlow or JAX.
 
 The `stormlog` command remains TUI-first: running it with no arguments launches
 the TUI. Use `stormlog query ...` for local artifact queries and
@@ -76,11 +81,14 @@ metadata.
 pip install "stormlog[torch]"
 pip install "stormlog[tf]"
 pip install "stormlog[jax]"
+pip install "stormlog[mlx]"
 pip install "stormlog[all]"
 ```
 
 `stormlog[all]` installs every runtime extra: `viz`, `tui`, `torch`, `tf`,
-`jax`, `infer-tokenizers`, and W&B.
+`jax`, platform-gated `mlx`, `infer-tokenizers`, and W&B.
+The MLX extra requests MLX >=0.32.3 only on Darwin arm64. Other platforms can
+read artifacts without a native MLX wheel; runtime actions explain unavailability.
 
 ## Source checkout
 
@@ -130,6 +138,17 @@ If you installed the JAX extra:
 jaxmemprof --help
 jaxmemprof info
 ```
+
+### MLX verification
+
+On qualified Apple Silicon:
+
+```bash
+mlxmemprof --help
+mlxmemprof info --json
+```
+
+See the [MLX guide](mlx_testing_guide.md) for in-process script capture.
 
 ### TUI verification
 

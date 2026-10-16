@@ -1,0 +1,558 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "stormlog.inference_audio_v1",
+  "title": "Stormlog audio inference events and manifest fixtures v1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "phase": {
+          "enum": [
+            "warmup",
+            "measured"
+          ]
+        },
+        "task": {
+          "enum": [
+            "tts",
+            "stt"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixture_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fixture_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request_index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "started_at_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ended_at_ns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "error",
+            "timeout",
+            "cancelled",
+            "dropped",
+            "unreachable",
+            "delivery_unknown",
+            "rejected"
+          ]
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "arrival_mode": {
+          "type": "string"
+        },
+        "intended_at_ns": {
+          "type": "integer"
+        },
+        "response_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "engine": {
+          "const": "mlx-audio"
+        },
+        "x_request_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "concurrency": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_in_flight": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dispatch_lag_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "held_for_slot": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "in_flight_at_dispatch": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "e2e_latency_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Client monotonic HTTP timing in milliseconds"
+        },
+        "first_response_byte_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Client monotonic HTTP timing in milliseconds"
+        },
+        "first_audio_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Client monotonic HTTP timing in milliseconds"
+        },
+        "first_transcript_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Client monotonic HTTP timing in milliseconds"
+        },
+        "input_audio_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Validated PCM frames divided by sample rate, in seconds"
+        },
+        "output_audio_seconds": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Validated PCM frames divided by sample rate, in seconds"
+        },
+        "rtf": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Elapsed seconds / validated audio seconds"
+        },
+        "response_digest": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "audio_segments": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retained_media": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "event_type": {
+          "const": "infer.audio.request"
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_type",
+        "session_id",
+        "request_id",
+        "case_id",
+        "phase",
+        "task",
+        "model",
+        "fixture_id",
+        "fixture_digest",
+        "request_index",
+        "started_at_ns",
+        "ended_at_ns",
+        "status",
+        "endpoint",
+        "stream",
+        "arrival_mode",
+        "intended_at_ns"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "event_type": {
+          "const": "infer.audio.workload"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "engine": {
+          "const": "mlx-audio"
+        },
+        "task": {
+          "enum": [
+            "tts",
+            "stt"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "workload_digest": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "selection": {
+          "const": "cycle_index_plus_seed_v1"
+        },
+        "fixtures": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object"
+          }
+        },
+        "response_format": {
+          "enum": [
+            "wav",
+            "json",
+            "ndjson"
+          ]
+        },
+        "stream": {
+          "type": "boolean"
+        },
+        "warmup": {
+          "type": "object"
+        },
+        "measurement": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_type",
+        "session_id",
+        "engine",
+        "task",
+        "model",
+        "workload_digest",
+        "fixtures",
+        "cases",
+        "measurement"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "event_type": {
+          "const": "infer.audio.summary"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "engine": {
+          "const": "mlx-audio"
+        },
+        "task": {
+          "enum": [
+            "tts",
+            "stt"
+          ]
+        },
+        "summary": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_type",
+        "session_id",
+        "engine",
+        "task",
+        "summary"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "task": {
+          "const": "tts"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "voice": {
+              "type": "string"
+            },
+            "instruct": {
+              "type": "string"
+            },
+            "speed": {
+              "type": "number"
+            },
+            "gender": {
+              "type": "string"
+            },
+            "pitch": {
+              "type": "number"
+            },
+            "lang_code": {
+              "type": "string"
+            },
+            "temperature": {
+              "type": "number"
+            },
+            "top_p": {
+              "type": "number"
+            },
+            "top_k": {
+              "type": "integer"
+            },
+            "repetition_penalty": {
+              "type": "number"
+            },
+            "streaming_interval": {
+              "type": "number"
+            },
+            "max_tokens": {
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "task",
+        "text"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "task": {
+          "const": "stt"
+        },
+        "audio": {
+          "type": "string",
+          "minLength": 1
+        },
+        "settings": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "language": {
+              "type": "string"
+            },
+            "max_tokens": {
+              "type": "integer"
+            },
+            "chunk_duration": {
+              "type": "number"
+            },
+            "frame_threshold": {
+              "type": "integer"
+            },
+            "context": {
+              "type": "string"
+            },
+            "prefill_step_size": {
+              "type": "integer"
+            },
+            "text": {
+              "type": "string"
+            },
+            "word_timestamps": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "required": [
+        "schema_version",
+        "id",
+        "task",
+        "audio"
+      ]
+    }
+  ]
+}

@@ -24,6 +24,15 @@ HELP = "Watch a vLLM server and record its incidents"
 
 def add_watch_parser(subparsers: Any) -> None:
     parser = subparsers.add_parser("watch", help=HELP, description=HELP)
+    parser.add_argument(
+        "--engine",
+        choices=["vllm"],
+        default="vllm",
+        help="Watch currently supports vLLM text inference",
+    )
+    parser.add_argument(
+        "--task", choices=["chat"], default="chat", help="Audio watch is not supported"
+    )
     parser.add_argument("--root", required=True, help="Watch root directory")
     parser.add_argument(
         "--config", default=None, help="stormlog.infer.watch_config JSON file"

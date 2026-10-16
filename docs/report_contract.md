@@ -273,3 +273,20 @@ against the same fixtures so they cannot drift.
 - [Benchmark Harness](benchmark_harness.md)
 - [TelemetryEvent v4 Schema](telemetry_schema.md)
 - [Run Envelopes](run_envelopes.md)
+
+## MLX captures
+
+`mlxmemprof run`, `track`, `monitor` and `diagnose` write the shared report
+envelope alongside the environment, diagnostic summary, session manifest and
+rotating telemetry. Interrupted MLX captures finalize a partial bundle with
+exit 130 and session status `interrupted`, when disk writes are possible.
+Unlike the older diagnose commands described above, MLX attempts to retain
+both `manifest.json` and `report.json` after interruption.
+
+The runner reports the workload's `SystemExit` value separately from the
+Stormlog exit code. None/zero passes; nonzero integers or text map to 1,
+unexpected user errors to 1, known allocator OOM to 3, and SIGINT to 130.
+Missing scripts/input artifacts map to 5, unavailable runtimes/invalid options
+to 2. Artifact failures cannot turn a failed workload into a passing report.
+MLX analysis writes `analysis.json` and a report with evidence pointers to its
+findings, without discovering the native runtime.

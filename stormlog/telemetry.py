@@ -12,6 +12,7 @@ from .session import (
     SessionSummary,
     infer_session_summary_from_events,
     select_default_loaded_session,
+    session_summary_from_dict,
     sort_session_summaries,
     stable_legacy_session_id,
 )
@@ -1279,7 +1280,7 @@ def _load_json_records(
     payload_path: Path,
     *,
     events_key: Optional[str],
-) -> list[Mapping[str, Any]]:
+) -> tuple[list[Mapping[str, Any]], list[SessionSummary] | None]:
     with payload_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
 
@@ -1295,6 +1296,8 @@ def _load_json_records(
                 )
         elif isinstance(payload.get("events"), list):
             records = payload["events"]
+        elif isinstance(payload.get("telemetry_events"), list):
+            records = payload["telemetry_events"]
         elif _looks_like_event_record(payload):
             records = [payload]
         else:
@@ -1307,7 +1310,25 @@ def _load_json_records(
         if not isinstance(record, Mapping):
             raise ValueError(f"Event at index {index} must be an object")
         normalized.append(record)
-    return normalized
+    return normalized, _json_tracking_summaries(payload, records)
+
+
+def _json_tracking_summaries(
+    payload: Any, records: list[Mapping[str, Any]]
+) -> list[SessionSummary] | None:
+    if not isinstance(payload, Mapping) or records is not payload.get(
+        "telemetry_events"
+    ):
+        return None
+    raw_summary = payload.get("session_summary")
+    if not isinstance(raw_summary, Mapping):
+        return None
+    summary = session_summary_from_dict(raw_summary)
+    if any(record.get("session_id") != summary.session_id for record in records):
+        raise ValueError(
+            "Tracker session summary does not match telemetry event identity"
+        )
+    return [summary]
 
 
 def load_telemetry_sessions(
@@ -1340,7 +1361,7 @@ def load_telemetry_sessions(
             default_source_path=default_source_path,
         )
 
-    records = _load_json_records(payload_path, events_key=events_key)
+    records, summaries = _load_json_records(payload_path, events_key=events_key)
     default_session_id = stable_legacy_session_id(
         default_source_path, events_key or "json"
     )
@@ -1358,7 +1379,7 @@ def load_telemetry_sessions(
     }
     return _assemble_loaded_sessions(
         grouped_events=grouped_events,
-        manifest_summaries=None,
+        manifest_summaries=summaries,
         sources_by_session=sources_by_session,
         default_source=default_source,
         default_source_path=default_source_path,

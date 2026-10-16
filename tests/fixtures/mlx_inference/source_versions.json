@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "provenance": "authored wire examples based on pinned primary source",
+  "omlx": "013bc3f3a48fa9a4b7dffbfeb6cdc7c1face1c5d",
+  "mlx-lm": "ba8a08fd2ed72bbc53de84f89933f91fe4743e4a",
+  "mlx-audio": "e66ad2ff4eb96ce1149000187b30370cbcd707aa"
+}

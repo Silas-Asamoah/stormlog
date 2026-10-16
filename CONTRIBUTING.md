@@ -236,6 +236,25 @@ GPU, ROCm, MPS, TensorFlow, and TUI checks may require platform-specific
 hardware or optional dependencies. If you cannot run a relevant check locally,
 state that in the PR.
 
+## MLX qualification
+
+For native Apple Silicon, install `pip install -e '.[mlx,tui]'`. Linux contract
+CI installs only the TUI extra and verifies all four frameworks are absent.
+
+```bash
+python3 -m pytest tests/ -o 'python_files=test_mlx*.py' -m 'not mlx_hardware' -q
+python3 -m examples.scenarios.mlx_memory_scenario --output /tmp/mlx-contracts
+python3 -m pytest tests/test_mlx_hardware.py -m mlx_hardware -v
+python3 -m examples.scenarios.mlx_memory_scenario --hardware --repetitions 200 --output artifacts/mlx-metal
+```
+
+The last two gates require actual usable Metal and fail when unavailable.
+Publish environment/version/source identity, raw timing windows and bounded
+artifact round-trip counts with a native qualification. Fake counters and a
+successful import are not hardware evidence. Keep MPS and MLX targets distinct;
+see [MLX qualification](docs/benchmarks/mlx-qualification.md). CHANGELOG.md is
+retired; maintain README and docs alongside implementation commits.
+
 ## Documentation
 
 - Update `README.md` for top-level install, quickstart, or feature-positioning

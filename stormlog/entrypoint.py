@@ -13,21 +13,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not resolved_argv:
         from .tui import run_app
 
-        run_app()
+        run_app([])
         return 0
 
     command = resolved_argv[0]
     if command == "tui":
-        if len(resolved_argv) > 1:
-            tui_parser = argparse.ArgumentParser(
-                prog="stormlog tui",
-                description="Launch the Stormlog Textual TUI.",
-            )
-            tui_parser.parse_args(resolved_argv[1:])
-        from .tui import run_app
-
-        run_app()
-        return 0
+        return _run_tui(resolved_argv[1:])
     if command == "infer":
         from .infer.cli import main as infer_main
 
@@ -44,6 +35,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser = _build_parser()
     parser.error(f"unknown command: {command}")
+
+
+def _run_tui(argv: list[str]) -> int:
+    from .tui import run_app
+
+    if argv:
+        parser = argparse.ArgumentParser(
+            prog="stormlog tui", description="Launch the Stormlog Textual TUI."
+        )
+        parser.add_argument(
+            "--framework", choices=("pytorch", "mlx"), default="pytorch"
+        )
+        parser.parse_args(argv)
+        run_app(argv)
+    else:
+        run_app([])
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:

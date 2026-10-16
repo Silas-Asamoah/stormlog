@@ -53,6 +53,29 @@ TUI_APP_CSS = """
         opacity: 0.9;
     }
 
+    .mlx-controls {
+        height: 6;
+    }
+
+    #mlx-artifact-path {
+        width: 1fr;
+        height: 5;
+    }
+
+    #mlx-docs, #mlx-runtime-status {
+        height: auto;
+    }
+
+    #mlx-profile-table {
+        height: 10;
+        border: solid gray;
+    }
+
+    #mlx-timeline-canvas {
+        height: auto;
+        min-height: 4;
+    }
+
     #table-pytorch,
     #table-tensorflow {
         height: 12;

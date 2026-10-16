@@ -21,6 +21,7 @@ from examples.qualification.reference import (
     request_spans,
     scrape_metrics,
 )
+from stormlog.infer.correlation_codec import read_inference_records
 from tests.qualification_fake_engine_helpers import (
     chat,
     chats_in_background,
@@ -466,15 +467,31 @@ def test_a_segment_rewritten_shorter_is_read_again(tmp_path: Path) -> None:
     )
 
 
-def test_the_victims_chunk_gaps_are_read_incrementally(tmp_path: Path) -> None:
+@pytest.mark.parametrize("compact", [False, True])
+def test_the_victims_chunk_gaps_are_read_incrementally(
+    tmp_path: Path, compact: bool
+) -> None:
     # The signals are read every quarter second during recovery, on the GPU
     # host: each read takes only the lines appended since the last, so lines
     # already read are never parsed again.
     output = tmp_path / "victim.jsonl"
     with FakeEngine(FakeEngineConfig(step_seconds=0.001)) as engine:
         run_profile(engine, output, run_id="victim", request_count=4)
+    if not compact:
+        output.write_text(
+            "".join(
+                json.dumps(record) + "\n" for record in read_inference_records(output)
+            )
+        )
     lines = output.read_bytes().splitlines(keepends=True)
-    first, rest = b"".join(lines[: len(lines) // 2]), b"".join(lines[len(lines) // 2 :])
+    # Split after a completed request, regardless of how many metadata and
+    # context-definition lines precede it, so both polls see chunk gaps.
+    split = next(
+        index + 1
+        for index, line in enumerate(lines)
+        if json.loads(line).get("event_type") == "infer.request"
+    )
+    first, rest = b"".join(lines[:split]), b"".join(lines[split:])
     artifact = tmp_path / "growing.jsonl"
     artifact.write_bytes(first + rest[:5])  # a line still being written
     channel = ReferenceChannel(

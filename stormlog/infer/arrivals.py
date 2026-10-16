@@ -250,7 +250,7 @@ def _offset_ms(record: dict[str, Any]) -> float:
 def _artifact_arrivals(records: list[dict[str, Any]]) -> dict[str, list[int]]:
     arrivals: dict[str, list[int]] = {}
     for record in records:
-        if record.get("event_type") != "infer.request":
+        if record.get("event_type") not in {"infer.request", "infer.audio.request"}:
             continue
         if record.get("phase") != "measured" or record.get("status") == "dropped":
             continue

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from stormlog.utils import format_bytes
+from stormlog.formatting import format_bytes
 
 
 def run_pytorch_sample_workload(profiler_cls: Any, torch_module: Any) -> dict[str, Any]:
@@ -82,3 +82,24 @@ def format_cpu_summary(summary: dict[str, Any]) -> str:
         f"Δ from baseline: {delta_sign}{format_bytes(abs(delta))}",
     ]
     return "\n".join(lines)
+
+
+def run_mlx_sample_workload() -> dict[str, Any]:
+    import mlx.core as mx
+
+    from stormlog.mlx.context_profiler import get_global_profiler
+
+    x = mx.ones((128, 128))
+    mx.eval(x)
+    profiler = get_global_profiler()
+    result = profiler.profile_function(lambda: x @ x.T, name="mlx_sample")
+    del result
+    return profiler.get_results()[-1].to_dict()
+
+
+def format_mlx_result(result: dict[str, Any]) -> str:
+    peak = result["sampled_peak_bytes"]
+    return (
+        f"MLX Metal allocator in this process\nSampled peak: {format_bytes(peak) if peak is not None else 'N/A'}\n"
+        f"Host elapsed: {result['elapsed_ns'] / 1e6:.2f} ms\nCompletion verified: {result['completion_verified']}"
+    )
