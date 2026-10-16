@@ -17,8 +17,8 @@ the [Production Cookbook](cookbook/index.md), especially
 [TensorFlow Production Recipes](cookbook/tensorflow.md).
 
 Install the distribution as `stormlog`, then import the Python APIs from
-`stormlog`, `stormlog.tensorflow`, or `stormlog.jax`. The framework memory CLI
-automation commands are `gpumemprof`, `tfmemprof`, and `jaxmemprof`; local
+`stormlog`, `stormlog.tensorflow`, `stormlog.jax`, or `stormlog.mlx`. The framework memory CLI
+automation commands are `gpumemprof`, `tfmemprof`, `jaxmemprof`, and `mlxmemprof`; local
 artifact queries live under `stormlog query`, and endpoint inference profiling
 lives under `stormlog infer`.
 
@@ -203,6 +203,25 @@ print(f"Snapshots captured: {len(results.snapshots)}")
 
 For CPU-only TensorFlow or when the GPU backend is unavailable, initialize the
 profiler with `TFMemoryProfiler(device="/CPU:0")`.
+
+## MLX profiling and script capture
+
+`stormlog.mlx.MLXMemoryProfiler` evaluates returned roots or explicit context
+roots and records synchronized host elapsed time and sampled allocator peaks.
+`stormlog.mlx.MemoryTracker` observes passive, process-local active/cache counters
+with bounded history and shared telemetry sinks. Native support requires Apple
+Silicon Metal and MLX >=0.32.3. Unknown device metrics remain null.
+
+```bash
+mlxmemprof run --output artifacts/mlx-run -- workload.py --application-flag value
+mlxmemprof analyze artifacts/mlx-run --output artifacts/mlx-analysis --json
+stormlog tui --framework mlx
+```
+
+The workload runs in the command's interpreter. Separate workers/servers require
+their own instrumentation. Analysis and saved-artifact TUI browsing work without
+native MLX. See the [MLX guide](mlx_testing_guide.md) and runnable
+[training/generation cookbook](cookbook/mlx.md) for state and stream boundaries.
 
 ## JAX profiling
 
@@ -435,6 +454,9 @@ visualizer.plot_memory_timeline(interactive=False, save_path="timeline.png")
 Install `stormlog[viz]` before relying on PNG or HTML exports.
 
 ## When to switch to the TUI
+
+Launch the default TUI with either `stormlog` or `stormlog tui`; neither needs
+options. Use `stormlog tui --framework mlx` to select MLX explicitly.
 
 Use the TUI when you want:
 

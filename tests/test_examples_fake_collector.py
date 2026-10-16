@@ -11,7 +11,11 @@ import pytest
 from examples.observability import fake_collector
 from stormlog._export.delivery import RetryPolicy
 from stormlog._export.otlp_encoding import ProtobufEncoding
-from stormlog._export.otlp_http import Destination, OtlpHttpTransport
+from stormlog._export.otlp_http import (
+    DEFAULT_ATTEMPT_SECONDS,
+    Destination,
+    OtlpHttpTransport,
+)
 from stormlog._export.span_export import HttpSink, SpanExporter
 from stormlog._export.spans import KIND_INTERNAL, Scope, Span
 
@@ -29,11 +33,13 @@ def _span(index: int) -> Span:
     )
 
 
-def _exporter(url: str) -> SpanExporter[int]:
+def _exporter(
+    url: str, *, attempt_seconds: float = DEFAULT_ATTEMPT_SECONDS
+) -> SpanExporter[int]:
     transport = OtlpHttpTransport(
         Destination.parse(url),
         media_type="application/x-protobuf",
-        attempt_seconds=0.3,
+        attempt_seconds=attempt_seconds,
     )
     return SpanExporter(
         HttpSink(transport),
@@ -53,7 +59,9 @@ def test_x3_a_slow_collector_leaves_spans_unknown_within_the_bounds(
     collector = fake_collector.FakeCollector("127.0.0.1:0", store, delay_seconds=1.0)
     collector.start()
     try:
-        exporter = _exporter(f"http://{collector.address}/v1/traces")
+        exporter = _exporter(
+            f"http://{collector.address}/v1/traces", attempt_seconds=0.3
+        )
         exporter.start()
         for index in range(4):
             exporter.offer(index, 64)
@@ -156,23 +164,34 @@ def test_it_answers_as_a_collector_does(tmp_path: Path) -> None:
     assert collector.counts()["raw_spans"] == 2
 
 
-def test_it_can_reject_part_of_each_export(tmp_path: Path) -> None:
+@pytest.mark.parametrize("delay_seconds", [0.0, 0.5])
+def test_it_can_reject_part_of_each_export(
+    tmp_path: Path, delay_seconds: float
+) -> None:
     store = tmp_path / "spans.jsonl"
-    collector = fake_collector.FakeCollector("127.0.0.1:0", store, partial_rejected=1)
+    collector = fake_collector.FakeCollector(
+        "127.0.0.1:0", store, partial_rejected=1, delay_seconds=delay_seconds
+    )
     collector.start()
     try:
         exporter = _exporter(f"http://{collector.address}/v1/traces")
         for index in range(3):
             exporter.offer(index, 64)
         exporter.start()
-        exporter.close(3.0)
+        # This checks a confirmed partial response, not a timeout. Allow a
+        # full normal attempt to finish even on a busy CI runner.
+        exporter.close(2 * DEFAULT_ATTEMPT_SECONDS)
         status, _, answer = _post(
             collector, "/v1/traces", _json_export(2), "application/json"
         )
     finally:
         collector.stop()
     accounting = exporter.accounting()
-    assert (accounting["exported"], accounting["rejected"]) == (2, 1)
+    assert (accounting["exported"], accounting["rejected"]) == (
+        2,
+        1,
+    ), exporter.summary()
+    assert status == 200
     assert json.loads(answer)["partialSuccess"]["rejectedSpans"] == "1"
     assert fake_collector.count_store(store)["unique_spans"] == 3  # 2 + 1
 

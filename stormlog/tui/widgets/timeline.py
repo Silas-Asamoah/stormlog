@@ -18,6 +18,17 @@ class TimelineCanvas(Static):
         self.canvas_height = height
 
     def render_timeline(self, timeline: dict[str, Any]) -> None:
+        if timeline.get("framework") == "mlx":
+            lines = ["MLX process allocator; gaps marked ?"]
+            for label, key in (
+                ("Active allocator", "allocated"),
+                ("Reusable cache", "cache"),
+                ("Process RSS", "rss"),
+            ):
+                if key in timeline:
+                    lines.extend(self._build_chart_lines(label, timeline[key]))
+            self.update("\n".join(lines))
+            return
         allocated, reserved, values = self._timeline_usage_series(timeline)
         if not values:
             self.render_placeholder(
@@ -51,7 +62,8 @@ class TimelineCanvas(Static):
     def _reserved_chart_lines(self, reserved: Any) -> list[str]:
         return (
             self._build_chart_lines(
-                "Reserved", [float(value) for value in reserved if value is not None]
+                "Reserved",
+                [None if value is None else float(value) for value in reserved],
             )
             if reserved and any(value is not None for value in reserved)
             else []
@@ -60,22 +72,25 @@ class TimelineCanvas(Static):
     def render_placeholder(self, message: str) -> None:
         self.update(message)
 
-    def _build_chart_lines(self, label: str, values: Sequence[float]) -> list[str]:
+    def _build_chart_lines(
+        self, label: str, values: Sequence[float | None]
+    ) -> list[str]:
         samples = self._resample(values)
-        samples_mb = [v / (1024**2) for v in samples]
+        samples_mb = [None if v is None else v / (1024**2) for v in samples]
         if not samples_mb:
             return [f"{label}: no samples"]
 
         sparkline = self._generate_sparkline(samples_mb)
-        max_val = max(samples_mb) if samples_mb else 0.0
-        latest = samples_mb[-1] if samples_mb else 0.0
+        known = [v for v in samples_mb if v is not None]
+        maximum = f"{max(known):.2f}" if known else "N/A"
+        latest = f"{samples_mb[-1]:.2f}" if samples_mb[-1] is not None else "N/A"
 
         return [
-            f"{label} (max {max_val:.2f} MB, latest {latest:.2f} MB)",
+            f"{label} (max {maximum} MB, latest {latest} MB)",
             f"[{sparkline}]",
         ]
 
-    def _resample(self, values: Sequence[float]) -> list[float]:
+    def _resample(self, values: Sequence[float | None]) -> list[float | None]:
         if not values:
             return []
         if len(values) <= self.canvas_width:
@@ -85,17 +100,25 @@ class TimelineCanvas(Static):
         sampled = []
         for i in range(self.canvas_width):
             idx = min(int(round(i * step)), len(values) - 1)
-            sampled.append(values[idx])
+            start = int(i * step)
+            end = min(len(values), int((i + 1) * step) + 1)
+            sampled.append(
+                None if any(v is None for v in values[start:end]) else values[idx]
+            )
         return sampled
 
-    def _generate_sparkline(self, values: Sequence[float]) -> str:
+    def _generate_sparkline(self, values: Sequence[float | None]) -> str:
         if not values:
             return ""
-        max_val = max(values) or 1.0
+        known = [v for v in values if v is not None]
+        max_val = max(known, default=0) or 1.0
         palette = " .:-=+*#%@"
         last_index = len(palette) - 1
         chars = []
         for value in values:
+            if value is None:
+                chars.append("?")
+                continue
             ratio = min(value / max_val, 1.0)
             idx = int(ratio * last_index)
             chars.append(palette[idx])

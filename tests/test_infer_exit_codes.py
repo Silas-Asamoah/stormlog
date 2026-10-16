@@ -86,7 +86,7 @@ _FAILED_REQUEST: dict[str, object] = {
     [
         (None, "not found"),
         ("{not json\n", "Expecting property name"),
-        ("[1]\n", "Line 1 is not a JSON object"),
+        ("[1]\n", "line 1: record must be an object"),
         (b"\xff\xfe\n", "can't decode byte"),
         # Readable, but nothing in it came from a profile.
         ("", "not an inference artifact"),

@@ -165,6 +165,7 @@ def test_tab_rendering_and_key_bindings_r_f_g_t(
                 "Overview",
                 "PyTorch",
                 "TensorFlow",
+                "MLX",
                 "Monitoring",
                 "Visualizations",
                 "Diagnostics",

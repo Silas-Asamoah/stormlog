@@ -31,6 +31,7 @@ Difficulty: intermediate.
 | keep long-running artifacts bounded | [Always-on Tracking](always_on.md) |
 | respond to a PyTorch incident quickly | [PyTorch Production Recipes](pytorch.md) |
 | respond to a TensorFlow incident quickly | [TensorFlow Production Recipes](tensorflow.md) |
+| profile MLX training or local generation | [MLX Recipes](mlx.md) |
 | compare ranks or rebuild distributed timelines | [Distributed Diagnostics Recipes](distributed.md) |
 | triage OOM or hidden-memory-gap findings | [Incident Playbooks](incidents.md) |
 | qualify operational behavior in CI or before release | [CI and Release Qualification](ci_release.md) |

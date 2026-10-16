@@ -1,0 +1,242 @@
+{
+  "capture": {
+    "completed_requests": 32,
+    "cuda": "13.0",
+    "cuda_toolkit_root": "/usr/local/lib/python3.12/site-packages/nvidia/cu13",
+    "engine_args": {
+      "dtype": "bfloat16",
+      "enable_prefix_caching": false,
+      "gpu_memory_utilization": 0.5,
+      "max_model_len": 1024,
+      "max_num_batched_tokens": 1024,
+      "max_num_seqs": 16,
+      "model": "Qwen/Qwen3-0.6B",
+      "profiler_config": {
+        "profiler": "torch",
+        "torch_profiler_dir": "traces",
+        "torch_profiler_record_shapes": false,
+        "torch_profiler_use_gzip": true,
+        "torch_profiler_with_flops": false,
+        "torch_profiler_with_memory": false,
+        "torch_profiler_with_stack": false
+      },
+      "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "seed": 259,
+      "tensor_parallel_size": 1,
+      "tokenizer_revision": "c1899de289a04d12100db370d81485cdf75e47ca"
+    },
+    "finished_at_utc": "2026-10-10T18:45:19.513558+00:00",
+    "generated_tokens": 2048,
+    "gpu_csv": "0, GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4, NVIDIA L4, 580.95.05, 23034 MiB",
+    "model": "Qwen/Qwen3-0.6B",
+    "model_revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "nvcc": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2025 NVIDIA Corporation\nBuilt on Wed_Aug_20_01:58:59_PM_PDT_2025\nCuda compilation tools, release 13.0, V13.0.88\nBuild cuda_13.0.r13.0/compiler.36424714_0\n",
+    "profiled_batches": 2,
+    "profiled_wall_seconds": 14.829128437999998,
+    "python": "3.12.10",
+    "requests_per_batch": 16,
+    "started_at_utc": "2026-10-10T18:40:39.236224+00:00",
+    "torch": "2.13.0+cu130",
+    "traces": [
+      {
+        "bytes": 2571040,
+        "path": "traces/rank0.1791657897067102020.pt.trace.json.gz",
+        "sha256": "fb0230d22d498cb179567481cb2272893c26234b483a8e0dc4531a0df47268e7"
+      }
+    ],
+    "vllm": "0.30.0",
+    "warmup_batches": 1
+  },
+  "cross_detail_busy_and_summed_time_equal": true,
+  "local_provenance": {
+    "capture_script_sha256": "4f07a5fb6d201aa8bad6e43698a1e4c2b4a8794eea8cacc0b9488fa14d451ed0",
+    "revision": "7c94fb01c90e6dd9c48257aea8f3fdc53f91bcd6",
+    "working_tree_dirty": true
+  },
+  "paired_comparisons": {
+    "kernel": {
+      "activity_count": 51496,
+      "capture_summary": {
+        "already_imported": [],
+        "traces": [
+          {
+            "activity_records": 51496,
+            "cupti_version": "130001",
+            "detail": "kernel",
+            "devices": {
+              "0": {
+                "busy_ns": 990239929,
+                "device_uuid": "GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4",
+                "device_uuid_source": "option",
+                "launch_span_ns": 990239929,
+                "name": "NVIDIA L4",
+                "summed_ns": 990479635
+              }
+            },
+            "engine_version": "0.30.0",
+            "event_loss": null,
+            "event_loss_note": "the trace does not report dropped CUPTI records",
+            "format": "kineto",
+            "gpu_events": 51496,
+            "graph_gpu_events": 46060,
+            "host": "modal",
+            "linked_gpu_events": 0,
+            "not_imported": {},
+            "notes": [],
+            "path": "traces/rank0.1791657897067102020.pt.trace.json.gz",
+            "processes": [
+              88
+            ],
+            "rank": 0,
+            "trace_id": "EFDCB9B3CE004BF7B10FD998D7DBA2CD",
+            "unresolved_gpu_events": {
+              "launch_outside_iteration_range": 51496
+            }
+          }
+        ]
+      },
+      "compact": {
+        "bytes": 62761632,
+        "physical_lines": 51502
+      },
+      "comparison": "paired encodings of the same production import",
+      "context_definitions": 3,
+      "detail": "kernel",
+      "device_clock_totals": [
+        {
+          "activity_count": 51496,
+          "busy_ns": 990239929,
+          "clock_domain": "kineto:modal:kineto:rank0.1791657897067102020.pt.trace.json.gz:9b0a03e873b8",
+          "clock_kind": "device",
+          "device_uuid": "GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4",
+          "summed_activity_ns": 990479635
+        }
+      ],
+      "device_uuid_overrides": [
+        "0=GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4"
+      ],
+      "embedded": {
+        "bytes": 88251421,
+        "physical_lines": 51499
+      },
+      "event_types": {
+        "infer.activity_ref": 51496,
+        "infer.artifact": 1,
+        "infer.capabilities": 2
+      },
+      "invariants": {
+        "accounting_equal": true,
+        "events_equal": true,
+        "graphs_equal": true
+      },
+      "linked": 0,
+      "python": "3.14.7",
+      "reproduction_command": "python -m examples.scenarios.context_compaction_scenario --trace traces/rank0.1791657897067102020.pt.trace.json.gz --detail kernel --device-uuid 0=GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4 --output-dir kernel",
+      "revision": "7c94fb01c90e6dd9c48257aea8f3fdc53f91bcd6",
+      "saved_bytes": 25489789,
+      "saved_percent": 28.883148521767144,
+      "semantic_events": 51499,
+      "trace": "traces/rank0.1791657897067102020.pt.trace.json.gz",
+      "trace_bytes": 2571040,
+      "trace_sha256": "fb0230d22d498cb179567481cb2272893c26234b483a8e0dc4531a0df47268e7",
+      "unmeasured": 0,
+      "unresolved": 51496,
+      "working_tree_dirty": true
+    },
+    "launch": {
+      "activity_count": 5562,
+      "capture_summary": {
+        "already_imported": [],
+        "traces": [
+          {
+            "activity_records": 5562,
+            "cupti_version": "130001",
+            "detail": "launch",
+            "devices": {
+              "0": {
+                "busy_ns": 990239929,
+                "device_uuid": "GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4",
+                "device_uuid_source": "option",
+                "launch_span_ns": 993423839,
+                "name": "NVIDIA L4",
+                "summed_ns": 990479635
+              }
+            },
+            "engine_version": "0.30.0",
+            "event_loss": null,
+            "event_loss_note": "the trace does not report dropped CUPTI records",
+            "format": "kineto",
+            "gpu_events": 51496,
+            "graph_gpu_events": 46060,
+            "host": "modal",
+            "linked_gpu_events": 0,
+            "not_imported": {},
+            "notes": [],
+            "path": "traces/rank0.1791657897067102020.pt.trace.json.gz",
+            "processes": [
+              88
+            ],
+            "rank": 0,
+            "trace_id": "EFDCB9B3CE004BF7B10FD998D7DBA2CD",
+            "unresolved_gpu_events": {
+              "launch_outside_iteration_range": 51496
+            }
+          }
+        ]
+      },
+      "compact": {
+        "bytes": 6846215,
+        "physical_lines": 5568
+      },
+      "comparison": "paired encodings of the same production import",
+      "context_definitions": 3,
+      "detail": "launch",
+      "device_clock_totals": [
+        {
+          "activity_count": 5562,
+          "busy_ns": 990239929,
+          "clock_domain": "kineto:modal:kineto:rank0.1791657897067102020.pt.trace.json.gz:9b0a03e873b8",
+          "clock_kind": "device",
+          "device_uuid": "GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4",
+          "summed_activity_ns": 990479635
+        }
+      ],
+      "device_uuid_overrides": [
+        "0=GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4"
+      ],
+      "embedded": {
+        "bytes": 9598674,
+        "physical_lines": 5565
+      },
+      "event_types": {
+        "infer.activity_ref": 5562,
+        "infer.artifact": 1,
+        "infer.capabilities": 2
+      },
+      "invariants": {
+        "accounting_equal": true,
+        "events_equal": true,
+        "graphs_equal": true
+      },
+      "linked": 0,
+      "python": "3.14.7",
+      "reproduction_command": "python -m examples.scenarios.context_compaction_scenario --trace traces/rank0.1791657897067102020.pt.trace.json.gz --detail launch --device-uuid 0=GPU-4518df78-7fac-78ae-8e7d-c45614f29ec4 --output-dir launch",
+      "revision": "7c94fb01c90e6dd9c48257aea8f3fdc53f91bcd6",
+      "saved_bytes": 2752459,
+      "saved_percent": 28.67540870749439,
+      "semantic_events": 5565,
+      "trace": "traces/rank0.1791657897067102020.pt.trace.json.gz",
+      "trace_bytes": 2571040,
+      "trace_sha256": "fb0230d22d498cb179567481cb2272893c26234b483a8e0dc4531a0df47268e7",
+      "unmeasured": 0,
+      "unresolved": 5562,
+      "working_tree_dirty": true
+    }
+  },
+  "publication_note": "Account-specific storage identifiers and absolute workspace paths are omitted or normalized for portable reproduction. Numeric measurements, trace checksum, GPU identity, and accounting dimensions are unchanged; original capture provenance is retained with the evidence bundle.",
+  "raw_gpu_categories": {
+    "gpu_memcpy": 574,
+    "gpu_memset": 280,
+    "kernel": 50642
+  }
+}

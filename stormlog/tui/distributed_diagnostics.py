@@ -35,6 +35,7 @@ except ImportError:  # pragma: no cover - phase package may land in another slic
         return None
 
 
+from stormlog.formatting import format_bytes
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_INCOMPLETE,
@@ -56,7 +57,6 @@ from stormlog.telemetry import (
 )
 from stormlog.telemetry_sink import resolve_telemetry_sink_segment_paths
 from stormlog.timeline_markers import TimelineMarker, derive_timeline_markers
-from stormlog.utils import format_bytes
 
 logger = logging.getLogger(__name__)
 

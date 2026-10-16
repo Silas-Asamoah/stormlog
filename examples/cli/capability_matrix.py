@@ -21,7 +21,14 @@ from examples.common.capability_matrix_utils import (
     timed_result,
     write_report,
 )
-from stormlog.utils import get_system_info
+from stormlog.system_info import get_system_info as get_host_info
+
+
+def get_system_info() -> dict[str, Any]:
+    from stormlog.utils import get_system_info as getter
+
+    return getter()
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_ARTIFACTS_ROOT = REPO_ROOT / "artifacts" / "examples" / "capability_matrix"
@@ -32,6 +39,8 @@ def _timestamp_slug() -> str:
 
 
 def _target_flags(target: str, backend: str) -> tuple[bool, bool]:
+    if target == "mlx":
+        return False, False
     if target == "cpu":
         return True, False
     if target == "mps":
@@ -220,6 +229,34 @@ def _run_full_extra_examples(check_dir: Path) -> List[CheckResult]:
     return results
 
 
+def _run_mlx_matrix(*, mode: str, artifacts_root: Path) -> Dict[str, object]:
+    from examples.scenarios.mlx_memory_scenario import run_scenario
+    from stormlog.mlx.runtime import MLXRuntimeError
+
+    run_dir = artifacts_root.resolve() / _timestamp_slug()
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    def check() -> dict[str, Any]:
+        try:
+            return run_scenario(output_dir=run_dir / "mlx", hardware=True)
+        except MLXRuntimeError as exc:
+            return {"status": "SKIP", "reason": str(exc)}
+
+    results = [timed_result("scenario:mlx_metal", check)]
+    report: Dict[str, object] = {
+        "mode": mode,
+        "target": "mlx",
+        "detected_backend": "mlx",
+        "run_dir": str(run_dir),
+        "system": get_host_info(),
+        "checks": [result_to_dict(r) for r in results],
+        "summary": summarize_results(results),
+    }
+    write_report(run_dir / "report.json", report)
+    report["report_path"] = str(run_dir / "report.json")
+    return report
+
+
 def run_matrix(
     *,
     mode: str,
@@ -228,6 +265,8 @@ def run_matrix(
     artifacts_root: Path,
     skip_tui: bool,
 ) -> Dict[str, object]:
+    if target == "mlx":
+        return _run_mlx_matrix(mode=mode, artifacts_root=artifacts_root)
     system_info = get_system_info()
     backend = str(system_info.get("detected_backend", "cpu"))
     include_cpu, include_mps = _target_flags(target, backend)
@@ -362,7 +401,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     parser.add_argument(
-        "--target", choices=["auto", "cpu", "mps", "both"], default="auto"
+        "--target", choices=["auto", "cpu", "mps", "both", "mlx"], default="auto"
     )
     parser.add_argument(
         "--oom-mode", choices=["simulated", "stress"], default="simulated"

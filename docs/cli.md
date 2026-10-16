@@ -668,3 +668,14 @@ jaxmemprof diagnose --duration 0 --output ./jax_diag
 ---
 
 [← Back to main docs](index.md)
+
+
+## MLX allocator commands
+
+`mlxmemprof` supplies `info`, `monitor`, `track`, `run`, `analyze` and `diagnose`.
+Use `mlxmemprof run --output artifacts/mlx-run -- script.py [args...]` to sample
+the workload in the same interpreter. Monitor/track/diagnose observe their own
+process. Analyze reads saved artifacts offline without any framework import.
+See the [MLX command guide](mlx_testing_guide.md) for options,
+[report contract](report_contract.md) for exit statuses, and
+[MLX cookbook](cookbook/mlx.md) for runnable workflows.

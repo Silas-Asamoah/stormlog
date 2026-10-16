@@ -1,4 +1,6 @@
+import importlib.util
 import logging
+import sys
 import types
 from pathlib import Path
 
@@ -58,6 +60,38 @@ class BrokenGPUTracker:
 def _stub_torch(cuda_available: bool) -> object:
     cuda = types.SimpleNamespace(is_available=lambda: cuda_available)
     return types.SimpleNamespace(cuda=cuda)
+
+
+@pytest.mark.parametrize("gpu_available", [True, False])
+def test_tracker_session_loads_backends_on_first_use(
+    monkeypatch: pytest.MonkeyPatch, gpu_available: bool
+) -> None:
+    """Exercise fresh module state without replacing its lazy tracker globals."""
+    cpu = types.ModuleType("stormlog.cpu_profiler")
+    cpu.CPUMemoryTracker = DummyCPUTracker
+    gpu = types.ModuleType("stormlog.tracker")
+    gpu.MemoryTracker = DummyCPUTracker
+    gpu.MemoryWatchdog = None
+    gpu.TrackingEvent = object
+    monkeypatch.setitem(sys.modules, "stormlog.cpu_profiler", cpu)
+    monkeypatch.setitem(sys.modules, "stormlog.tracker", gpu)
+    monkeypatch.setitem(
+        sys.modules, "torch", _stub_torch(True) if gpu_available else None
+    )
+    name = "stormlog.tui._monitor_lazy_test"
+    spec = importlib.util.spec_from_file_location(name, monitor.__file__)
+    assert spec is not None and spec.loader is not None
+    fresh_monitor = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, fresh_monitor)
+    spec.loader.exec_module(fresh_monitor)
+
+    session = fresh_monitor.TrackerSession()
+    session.start()
+    assert session.backend == ("gpu" if gpu_available else "cpu")
+    assert isinstance(session._tracker, DummyCPUTracker)
+    assert session.is_active
+    session.stop()
+    assert not session.is_active
 
 
 def test_tracker_session_falls_back_to_cpu(monkeypatch: pytest.MonkeyPatch) -> None:

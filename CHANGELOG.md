@@ -12,6 +12,11 @@ Release dates are the GitHub release publication dates.
 
 ## [Unreleased]
 
+- Store inference correlation contexts once per artifact using wire schema v4
+  ([#259](https://github.com/Silas-Asamoah/stormlog/issues/259)). The loader
+  restores complete events and continues reading legacy and mixed artifacts.
+  Compact artifacts require a reader supporting v4; accounting is unchanged.
+
 Inference workload control for
 [#212](https://github.com/Silas-Asamoah/stormlog/issues/212)
 ([#248](https://github.com/Silas-Asamoah/stormlog/pull/248)), the exit-code

@@ -134,6 +134,16 @@ gpumemprof track --duration 10 --interval 0.5 --output track.json --format json 
   --mlflow --mlflow-experiment stormlog-smoke --mlflow-tracking-uri sqlite:///mlflow.db
 ```
 
+## Fake OTLP collector
+
+`tests/test_examples_fake_collector.py` checks the source-checkout collector
+against the span exporter. Confirmed partial-rejection cases cover immediate
+and delayed replies using the normal five-second attempt budget and a
+ten-second drain budget. The outage case explicitly uses a 300 ms attempt
+against a one-second reply delay to test timeout accounting. If an answer is
+lost before a retry confirms partial rejection, the earlier rejected spans
+remain unknown: the earlier attempt may have stored them.
+
 ## Fake vLLM engine
 
 > **Source checkout only.** `examples.qualification.fake_engine` is not
