@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from examples.qualification.fake_engine import FakeEngine
 from stormlog.infer.config import ProfileConfig
+from stormlog.infer.correlation_codec import read_inference_records
 from stormlog.infer.profile import InferenceProfiler
 
 
@@ -144,11 +145,8 @@ def run_profile(engine: FakeEngine, output: Path, **changes: Any) -> dict[str, A
 
 
 def records(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    """Read semantic inference records, expanding artifact-local contexts."""
+    return read_inference_records(path)
 
 
 def of_type(items: list[dict[str, Any]], event_type: str) -> list[dict[str, Any]]:

@@ -558,3 +558,12 @@ A trigger on a histogram vLLM records when a request completes (e2e, TPOT,
 the `request_*` families) has its masked window widened by the completion
 horizon. Requests delayed by a capture's pause finish up to one request
 lifetime later.
+
+## Reading compact correlation records
+
+New inference artifacts use [wire v4 context definitions and references](inference_correlation.md#compact-artifact-storage-wire-v4).
+Use `load_inference_artifact` for complete typed events, or
+`read_inference_records` from `stormlog.infer.correlation_codec` for expanded
+dictionaries. Definitions are storage metadata and are excluded from loaded
+event counts. Legacy v1 records keep their existing fields and interpretation.
+Older readers must be upgraded to consume new compact artifacts.

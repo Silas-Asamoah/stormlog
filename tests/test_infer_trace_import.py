@@ -222,10 +222,18 @@ def test_cli_exits_invalid_input_for_a_truncated_gzip_trace(tmp_path: Path) -> N
     )
 
 
+@pytest.mark.parametrize("compact_seed", [False, True])
 def test_importing_the_same_trace_twice_skips_it(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], compact_seed
 ) -> None:
     artifact = _artifact(tmp_path / "infer.jsonl")
+    if compact_seed:
+        from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+
+        encoder = CorrelationRecordEncoder()
+        rows = [json.loads(line) for line in artifact.read_text().splitlines()]
+        compact = [row for record in rows for row in encoder.encode(record)]
+        artifact.write_text("".join(json.dumps(row) + "\n" for row in compact))
     trace = _trace(tmp_path / "rank0.pt.trace.json", "T0")
     assert main(["import-trace", str(artifact), str(trace)]) == int(ExitCode.OK)
     lines = artifact.read_text(encoding="utf-8").count("\n")
