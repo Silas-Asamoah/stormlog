@@ -550,7 +550,7 @@ def test_metric_metadata_describes_only_samples_in_the_window(tmp_path: Path) ->
 def test_non_object_profile_line_raises_value_error(tmp_path: Path) -> None:
     path = tmp_path / "bad.jsonl"
     path.write_text("[1, 2]\n")
-    with pytest.raises(ValueError, match="not a JSON object"):
+    with pytest.raises(ValueError, match="line 1: record must be an object"):
         analyze_inference_events(path)
 
 
@@ -1011,3 +1011,38 @@ def test_bootless_same_hostname_joins_with_explicit_clock_flags(
         clock_uncertainty_ns=5,
     )
     assert grouped["telemetry"]["server_join"]["status"] == "joined"
+
+
+def test_compact_public_analysis_retains_clock_join_and_rejects_missing_id(tmp_path):
+    from stormlog.infer.correlation_codec import CorrelationRecordEncoder
+    from stormlog.infer.errors import InferInputError
+
+    path = _profile(
+        tmp_path, extra_records=[_alignment_record("probe", uncertainty_ns=5)]
+    )
+    server = _telemetry(tmp_path, "server", _server_sample())
+    baseline = analyze_inference_events(path, server_telemetry_paths=[server])
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    encoder = CorrelationRecordEncoder()
+    # The historical artifact fixture deliberately has a partial embedded context;
+    # retain it while compacting the fully validated alignment record.
+    compact = [
+        row
+        for record in records
+        for row in (
+            encoder.encode(record)
+            if record.get("event_type") == "infer.clock_alignment"
+            else [record]
+        )
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in compact))
+    assert analyze_inference_events(path, server_telemetry_paths=[server]) == baseline
+    path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in compact
+            if row.get("event_type") != "infer.context"
+        )
+    )
+    with pytest.raises(InferInputError, match="unknown context_id"):
+        analyze_inference_events(path, server_telemetry_paths=[server])

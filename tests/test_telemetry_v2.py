@@ -762,10 +762,14 @@ def test_v2_record_keeps_metadata_identity_keys_opaque() -> None:
     )
 
 
-def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None:
+@pytest.mark.parametrize("key", ["events", "telemetry_events"])
+@pytest.mark.parametrize("explicit_key", [True, False])
+def test_load_telemetry_events_reads_dict_events_payload(
+    tmp_path: Path, key: str, explicit_key: bool
+) -> None:
     payload = {
         "peak_memory": 123.4,
-        "events": [
+        key: [
             {
                 "timestamp": 1700000003.0,
                 "type": "sample",
@@ -777,10 +781,21 @@ def test_load_telemetry_events_reads_dict_events_payload(tmp_path: Path) -> None
     path = tmp_path / "tf_track.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
-    events = load_telemetry_events(path, events_key="events")
+    events = load_telemetry_events(path, events_key=key if explicit_key else None)
 
     assert len(events) == 1
     assert events[0].schema_version == SCHEMA_VERSION_V4
+
+
+def test_json_loader_prefers_events_and_respects_explicit_key(tmp_path: Path) -> None:
+    record = telemetry_event_to_dict(_make_valid_event())
+    path = tmp_path / "events.json"
+    path.write_text(
+        json.dumps({"events": [record], "telemetry_events": [None]}), encoding="utf-8"
+    )
+    assert len(load_telemetry_events(path)) == 1
+    with pytest.raises(ValueError, match="Event at index 0 must be an object"):
+        load_telemetry_events(path, events_key="telemetry_events")
 
 
 def test_load_telemetry_events_reads_append_only_sink_directory(tmp_path: Path) -> None:

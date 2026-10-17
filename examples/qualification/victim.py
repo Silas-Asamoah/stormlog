@@ -69,7 +69,7 @@ class AppendProbe:
 
     def __init__(self, out: Path) -> None:
         self.out = out
-        self._lines: dict[Path, int] = {}
+        self._positions: dict[Path, tuple[int, int]] = {}
         self._original: Callable[..., None] | None = None
         self._handle = out.open("a", encoding="utf-8")
 
@@ -86,22 +86,26 @@ class AppendProbe:
         ) -> None:
             # Whatever else append takes (#220 adds an argument) passes on.
             original(self, record, *args, **kwargs)
-            probe.note(self.path, record)
+            probe.note(self.path)
 
         events.JsonlEventWriter.append = append  # type: ignore[method-assign]
 
-    def note(self, path: Path, record: dict[str, Any]) -> None:
+    def note(self, path: Path) -> None:
         flushed = time.time_ns()
-        index = self._lines.get(path)
-        if index is None:
-            index = len(path.read_bytes().splitlines()) - 1
-        self._lines[path] = index + 1
-        line = {
-            "line": index,
-            "appended_ns": flushed,
-            "event_type": record.get("event_type"),
-        }
-        self._handle.write(json.dumps(line, sort_keys=True) + "\n")
+        index, offset = self._positions.get(path, (0, 0))
+        # A semantic append can flush a context definition before its event.
+        # Read only the bytes just written, and note every physical line.
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            rows = handle.readlines()
+            self._positions[path] = (index + len(rows), handle.tell())
+        for number, row in enumerate(rows, index):
+            line = {
+                "line": number,
+                "appended_ns": flushed,
+                "event_type": json.loads(row).get("event_type"),
+            }
+            self._handle.write(json.dumps(line, sort_keys=True) + "\n")
         self._handle.flush()
 
     def uninstall(self) -> None:

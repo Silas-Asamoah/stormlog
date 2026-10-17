@@ -8,16 +8,23 @@ from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-try:
-    from ..context_profiler import clear_results as _clear_pt_results
-    from ..context_profiler import get_profile_results as _get_pt_results
+get_pt_results: Optional[Callable[..., List[Any]]] = None
+clear_pt_results: Optional[Callable[[], None]] = None
+_pt_profiles_import_attempted = False
 
-    get_pt_results: Optional[Callable[..., List[Any]]] = _get_pt_results
-    clear_pt_results: Optional[Callable[[], None]] = _clear_pt_results
-except ImportError as exc:
-    logger.debug("PyTorch context profiler unavailable: %s", exc)
-    get_pt_results = None
-    clear_pt_results = None
+
+def _ensure_pytorch_profile_helpers() -> None:
+    global get_pt_results, clear_pt_results, _pt_profiles_import_attempted
+    if _pt_profiles_import_attempted:
+        return
+    _pt_profiles_import_attempted = True
+    try:
+        from stormlog.context_profiler import clear_results, get_profile_results
+
+        get_pt_results, clear_pt_results = get_profile_results, clear_results
+    except ImportError:
+        return
+
 
 get_tf_summaries: Optional[Callable[..., List[Dict[str, Any]]]] = None
 clear_tf_profiles: Optional[Callable[[], None]] = None
@@ -56,15 +63,17 @@ class ProfileRow:
     """Lightweight view model used by the TUI tables."""
 
     name: str
-    peak_mb: float
-    delta_mb: float
+    peak_mb: float | None
+    delta_mb: float | None
     duration_ms: float
     call_count: int
     recorded_at: float
+    completion_verified: bool | None = None
 
 
 def fetch_pytorch_profiles(limit: int = 15) -> List[ProfileRow]:
     """Return recent PyTorch profile rows."""
+    _ensure_pytorch_profile_helpers()
     if get_pt_results is None:
         return []
 
@@ -99,6 +108,7 @@ def fetch_pytorch_profiles(limit: int = 15) -> List[ProfileRow]:
 
 def clear_pytorch_profiles() -> bool:
     """Clear global PyTorch profile results."""
+    _ensure_pytorch_profile_helpers()
     if clear_pt_results is None:
         return False
 
@@ -159,3 +169,41 @@ def clear_tensorflow_profiles() -> bool:
     except Exception as exc:
         logger.debug("clear_tensorflow_profiles failed: %s", exc)
         return False
+
+
+def fetch_mlx_profiles(limit: int = 15, *, path: str | None = None) -> List[ProfileRow]:
+    from stormlog.mlx.context_profiler import get_profile_summaries
+    from stormlog.mlx.profile_artifact import load_profiles
+
+    results = load_profiles(path)["profiles"] if path else get_profile_summaries(limit)
+    rows = []
+    for result in results:
+        before, after = (
+            result["baseline"]["active_bytes"],
+            result["final"]["active_bytes"],
+        )
+        peak = result["sampled_peak_bytes"]
+        rows.append(
+            ProfileRow(
+                name=result["name"],
+                peak_mb=None if peak is None else peak / 1024**2,
+                delta_mb=(
+                    None
+                    if before is None or after is None
+                    else (after - before) / 1024**2
+                ),
+                duration_ms=result["elapsed_ns"] / 1e6,
+                call_count=1,
+                recorded_at=result["ended_at_ns"] / 1e9,
+                completion_verified=result["completion_verified"],
+            )
+        )
+    rows.sort(key=lambda row: row.recorded_at, reverse=True)
+    return rows[:limit] if limit else rows
+
+
+def clear_mlx_profiles() -> bool:
+    from stormlog.mlx.context_profiler import clear_profiles
+
+    clear_profiles()
+    return True

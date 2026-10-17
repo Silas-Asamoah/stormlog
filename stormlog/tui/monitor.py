@@ -17,38 +17,43 @@ from stormlog.telemetry import (
 )
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
-from ..utils import format_bytes
+from ..formatting import format_bytes
 
 logger = logging.getLogger(__name__)
 
-try:
-    from stormlog.tracker import MemoryTracker as _MemoryTracker
-    from stormlog.tracker import MemoryWatchdog as _MemoryWatchdog
-    from stormlog.tracker import TrackingEvent as _TrackingEvent
+_UNLOADED = object()
+MemoryTracker: Any = None
+MemoryWatchdog: Any = None
+TrackingEvent: Any = None
+CPUMemoryTracker: Any = _UNLOADED
+torch: Any = None
 
-    MemoryTracker: Any = _MemoryTracker
-    MemoryWatchdog: Any = _MemoryWatchdog
-    TrackingEvent: Any = _TrackingEvent
-except ImportError as exc:
-    logger.debug("GPU tracker imports unavailable: %s", exc)
-    MemoryTracker = None
-    MemoryWatchdog = None
-    TrackingEvent = None
 
-try:
-    from stormlog.cpu_profiler import CPUMemoryTracker as _CPUMemoryTracker
+def _ensure_legacy_trackers() -> None:
+    global MemoryTracker, MemoryWatchdog, TrackingEvent, CPUMemoryTracker, torch
+    if CPUMemoryTracker is _UNLOADED and MemoryTracker is None:
+        try:
+            import torch as torch_module
 
-    CPUMemoryTracker: Any = _CPUMemoryTracker
-except ImportError as exc:
-    logger.debug("CPU tracker imports unavailable: %s", exc)
-    CPUMemoryTracker = None
+            from stormlog.tracker import MemoryTracker as tracker
+            from stormlog.tracker import MemoryWatchdog as watchdog
+            from stormlog.tracker import TrackingEvent as event
 
-try:
-    import torch as _torch
+            torch, MemoryTracker, MemoryWatchdog, TrackingEvent = (
+                torch_module,
+                tracker,
+                watchdog,
+                event,
+            )
+        except ImportError:
+            MemoryTracker = None
+    if CPUMemoryTracker is _UNLOADED:
+        try:
+            from stormlog.cpu_profiler import CPUMemoryTracker as cpu_tracker
 
-    torch: Any = _torch
-except ImportError:
-    torch = None
+            CPUMemoryTracker = cpu_tracker
+        except ImportError:
+            CPUMemoryTracker = None
 
 
 class TrackerUnavailableError(RuntimeError):
@@ -74,19 +79,21 @@ class TrackerSession:
         self,
         *,
         sampling_interval: float = 0.5,
+        framework: str = "pytorch",
         auto_cleanup: bool = False,
         max_events_per_poll: int = 50,
         max_events: int = 10_000,
         telemetry_sink_config: Optional[TelemetrySinkConfig] = None,
     ) -> None:
-        # Defensive check: ensure at least one tracker is available
-        # (In normal operation, imports are required and will raise ImportError if missing.
-        # This check handles edge cases like testing scenarios where trackers are monkeypatched.)
-        if MemoryTracker is None and CPUMemoryTracker is None:
-            raise TrackerUnavailableError(
-                "Memory trackers are unavailable. Install torch with CUDA for GPU mode "
-                "or ensure the CPU tracker dependencies are installed."
-            )
+        if framework not in {"pytorch", "mlx"}:
+            raise ValueError("framework must be pytorch or mlx")
+        self.framework = framework
+        if framework == "pytorch":
+            _ensure_legacy_trackers()
+            if MemoryTracker is None and CPUMemoryTracker is None:
+                raise TrackerUnavailableError(
+                    "Memory trackers are unavailable. Install stormlog[torch] or CPU tracker dependencies."
+                )
         self.sampling_interval = sampling_interval
         self.auto_cleanup = auto_cleanup
         self.max_events_per_poll = max_events_per_poll
@@ -108,6 +115,10 @@ class TrackerSession:
     def start(self, **tracker_kwargs: Any) -> None:
         """Start the underlying MemoryTracker."""
         if self.is_active:
+            return
+
+        if self.framework == "mlx":
+            self._start_mlx(tracker_kwargs)
             return
 
         tracker_kwargs.setdefault("sampling_interval", self.sampling_interval)
@@ -141,6 +152,24 @@ class TrackerSession:
             self._watchdog = MemoryWatchdog(tracker, auto_cleanup=self.auto_cleanup)
         else:
             self._watchdog = None
+
+    def _start_mlx(self, kwargs: dict[str, Any]) -> None:
+        from .mlx_adapter import MLXTrackerAdapter
+
+        try:
+            tracker = MLXTrackerAdapter(
+                sampling_interval=self.sampling_interval,
+                max_events=self.max_events,
+                telemetry_sink_config=self.telemetry_sink_config,
+                **kwargs,
+            )
+            tracker.start_tracking()
+        except Exception as exc:
+            raise TrackerUnavailableError(str(exc)) from exc
+        self._tracker = tracker
+        self._watchdog = None
+        self._last_seen_ts = None
+        self.backend = "mlx"
 
     @staticmethod
     def _try_gpu_tracker(tracker_kwargs: dict[str, Any]) -> Optional[Any]:

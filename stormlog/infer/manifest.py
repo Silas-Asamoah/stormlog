@@ -36,6 +36,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from .correlation_codec import expand_inference_records
 from .describe_server import load_description
 from .errors import InferInputError
 from .host_clock import is_boot_qualified
@@ -664,9 +665,11 @@ def _read_records(path: Path) -> list[dict[str, Any]]:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         records = [json.loads(line) for line in lines if line.strip()]
+        return expand_inference_records(
+            record for record in records if isinstance(record, dict)
+        )
     except (OSError, ValueError) as exc:
         raise InferInputError(f"{path}: {exc}") from exc
-    return [record for record in records if isinstance(record, dict)]
 
 
 __all__ = [

@@ -200,7 +200,19 @@ def test_max_iterations_stops_when_the_next_step_starts(tmp_path: Path) -> None:
     assert fifth.start_wall_ns <= closed_start <= closed_end <= fifth.exec_start_ns
 
 
-def test_a_delayed_or_foreign_trace_appears_on_its_own(tmp_path: Path) -> None:
+@pytest.mark.parametrize("table_delay", [0.0, 0.25])
+def test_a_delayed_or_foreign_trace_appears_on_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, table_delay: float
+) -> None:
+    from examples.qualification.fake_engine.profiler import FakeProfiler
+
+    original = FakeProfiler._write_table
+
+    def write_table(self, steps):
+        time.sleep(table_delay)
+        return original(self, steps)
+
+    monkeypatch.setattr(FakeProfiler, "_write_table", write_table)
     with _engine(tmp_path, trace_write_delay_seconds=0.2) as engine:
         post(f"{engine.base_url}/start_profile")
         chat(engine, words(4, "a"), max_tokens=2)
@@ -211,7 +223,7 @@ def test_a_delayed_or_foreign_trace_appears_on_its_own(tmp_path: Path) -> None:
         ((_stop_start, stop_end),) = profiler.stops
         ((_path, written_ns),) = profiler.written
         profiler.drop_foreign_trace()
-    # The write came the delay after the stop returned, on the engine's clock.
+    # The write came the delay after the stop marker, on the engine's clock.
     assert written_ns - stop_end >= 190_000_000
     assert len(_traces(tmp_path)) == 2
 

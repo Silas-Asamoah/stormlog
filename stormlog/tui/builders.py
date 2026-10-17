@@ -142,6 +142,19 @@ def build_tensorflow_stats_rows(gpu_info: dict[str, Any]) -> list[dict[str, Any]
 
 
 def build_framework_markdown(framework: str) -> str:
+    if framework == "mlx":
+        return dedent(
+            """            # MLX Metal allocator
+            Install `stormlog[mlx,tui]` on native Apple Silicon macOS.
+            Minimum MLX: 0.32.3. Runtime availability is checked only on request.
+            Active allocations, reusable cache, native lifetime peak and process RSS
+            have different scopes. Device free/total and fragmentation are unavailable.
+            Live tracking observes this TUI process; load saved artifacts for other processes.
+            Profiles evaluate explicit roots and report synchronized host time.
+            CLI: `mlxmemprof run --output artifacts/mlx-run -- script.py`
+            Offline: `mlxmemprof analyze artifacts/mlx-run`
+            """
+        ).strip()
     if framework == "pytorch":
         return dedent(
             """
@@ -254,3 +267,71 @@ def build_diagnostics_markdown() -> str:
         - Review **earliest** and **most severe** first-cause indicators in the anomaly summary.
         """
     ).strip()
+
+
+def build_mlx_stats_rows(stats: dict[str, Any]) -> list[tuple[str, str]]:
+    from stormlog.formatting import format_bytes
+
+    rows = [
+        ("Scope", "MLX allocator in this TUI process"),
+        ("MLX version", str(stats.get("mlx_version", "N/A"))),
+        ("Collector health", str(stats.get("collector_health_status", "N/A"))),
+    ]
+    for label, key in (
+        ("Active allocator", "current_memory_bytes"),
+        ("Reusable cache", "cache_bytes"),
+        ("Process RSS (overlaps unified pages)", "process_rss_bytes"),
+        ("Sampled peak", "max_memory_bytes"),
+        ("Native lifetime peak", "runtime_lifetime_peak_bytes"),
+    ):
+        value = stats.get(key)
+        rows.append((label, "N/A" if value is None else format_bytes(value)))
+    for key in ("total_samples", "retained_samples", "dropped_samples", "total_alerts"):
+        rows.append((key.replace("_", " ").title(), str(stats.get(key, 0))))
+    return rows
+
+
+def build_mlx_timeline_rows(timeline: dict[str, Any]) -> list[tuple[str, str]]:
+    from stormlog.formatting import format_bytes
+
+    rows = [
+        ("Scope", "Saved/live MLX process allocator"),
+        ("Samples", str(len(timeline.get("timestamps", [])))),
+    ]
+    for label, key in (
+        ("Active allocator", "allocated"),
+        ("Reusable cache", "cache"),
+        ("Process RSS", "rss"),
+    ):
+        values = timeline.get(key, [])
+        known = [v for v in values if v is not None]
+        latest = values[-1] if values else None
+        rows.append(
+            (label + " latest", "N/A" if latest is None else format_bytes(latest))
+        )
+        rows.append(
+            (label + " sampled max", format_bytes(max(known)) if known else "N/A")
+        )
+    return rows
+
+
+def build_legacy_timeline_rows(timeline: dict[str, Any]) -> list[tuple[str, str]]:
+    timestamps = timeline.get("timestamps") or []
+    allocated = timeline.get("allocated") or []
+    reserved = timeline.get("reserved") or []
+    duration = max(0.0, timestamps[-1] - timestamps[0]) if len(timestamps) > 1 else 0.0
+    rows = [("Samples", str(len(allocated))), ("Duration (s)", f"{duration:.1f}")]
+    for label, values in (("Allocated", allocated), ("Reserved", reserved)):
+        rows.extend(_legacy_series_rows(label, values))
+    return rows
+
+
+def _legacy_series_rows(label: str, values: list[Any]) -> list[tuple[str, str]]:
+    from stormlog.formatting import format_bytes
+
+    known = [v for v in values if v is not None]
+    latest = values[-1] if values else None
+    return [
+        (label + " Max", format_bytes(max(known)) if known else "-"),
+        (label + " Latest", format_bytes(latest) if latest is not None else "-"),
+    ]

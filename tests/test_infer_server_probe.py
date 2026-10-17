@@ -267,6 +267,20 @@ def test_an_answer_nested_too_deeply_is_invalid_json() -> None:
     assert probe.answers[VERSION].status == "invalid_json"
 
 
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-16"])
+@pytest.mark.parametrize("extra_depth", [0, 1])
+def test_json_depth_limit_is_explicit_and_preserves_strings(
+    encoding: str, extra_depth: int
+) -> None:
+    body: object = 'literal [ { ] } and "quotes" \\'
+    for _ in range(server_probe.MAX_JSON_DEPTH + extra_depth):
+        body = [body]
+    routes = {**_dev_routes(), VERSION: json.dumps(body).encode(encoding)}
+    with _server(routes) as endpoint:
+        probe = probe_server(endpoint, mode="basic")
+    assert probe.answers[VERSION].status == ("invalid_json" if extra_depth else "ok")
+
+
 def test_an_oversized_answer_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server_probe, "RESPONSE_CAP_BYTES", 1024)
     routes = {**_dev_routes(), MODELS: b"x" * 4096}

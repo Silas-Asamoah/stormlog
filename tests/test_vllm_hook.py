@@ -1204,7 +1204,10 @@ def test_a_record_json_cannot_serialize_is_an_error_and_takes_no_number(
 ) -> None:
     circular: list[Any] = []
     circular.append(circular)
-    deep: list[Any] = []
+    # A deeply nested empty list is valid JSON and can encode successfully
+    # when the C stack is large enough. Keep an unsupported leaf so this
+    # case fails whether the encoder reaches it or runs out of stack first.
+    deep: list[Any] = [object()]
     for _ in range(100_000):
         deep = [deep]
 

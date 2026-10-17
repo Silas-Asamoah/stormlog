@@ -21,6 +21,7 @@ from examples.qualification.__main__ import main
 from examples.qualification.fake_engine.process import FakeEngineProcess, _environment
 from examples.qualification.inject import _harness_clock
 from examples.qualification.run_dir import new_label, verify
+from stormlog.infer.correlation_codec import read_inference_records
 from stormlog.infer.qualify.ground_truth import load_injections, load_run
 from tests.qualification_fake_engine_helpers import post, wait_until
 
@@ -185,20 +186,13 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
             "start",
             "end",
         ]
-    (artifact,) = [
-        json.loads(line)
-        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
-        if '"infer.artifact"' in line
-    ]
+    victim_records = read_inference_records(run / "run" / "victim.jsonl")
+    (artifact,) = [r for r in victim_records if r.get("event_type") == "infer.artifact"]
     assert artifact["context"]["run_id"] == record.run_id
     assert artifact["context"]["clock_domain"] == record.clock_domain
     # The victim ended its measured window when the run was done, drained
     # and completed: the diagnoser gets a whole artifact, not an
     # interrupted one.
-    victim_records = [
-        json.loads(line)
-        for line in (run / "run" / "victim.jsonl").read_text().splitlines()
-    ]
     (measured,) = [
         r
         for r in victim_records
@@ -2302,11 +2296,12 @@ def test_a_signal_at_the_last_check_before_the_runs_except_still_publishes(
 
 # Instructions that run no Python code and don't check for pending signals
 # (POP_TOP drops the caught exception, which the handler still holds;
-# NOT_TAKEN, from 3.14, only marks a branch not taken, for sys.monitoring).
+# NOT_TAKEN, from 3.14, only marks a branch not taken, for sys.monitoring;
+# LOAD_COMMON_CONSTANT, from 3.15, only loads an interpreter constant).
 _NO_HANDLER_RUNS = {
     "PUSH_EXC_INFO", "LOAD_GLOBAL", "CHECK_EXC_MATCH", "POP_JUMP_IF_FALSE",
     "POP_JUMP_FORWARD_IF_FALSE", "POP_TOP", "STORE_FAST", "LOAD_CONST",
-    "LOAD_FAST", "STORE_ATTR", "NOP", "CACHE", "NOT_TAKEN",
+    "LOAD_FAST", "STORE_ATTR", "NOP", "CACHE", "NOT_TAKEN", "LOAD_COMMON_CONSTANT",
 }  # fmt: skip
 
 
@@ -2345,31 +2340,35 @@ def test_no_signal_handler_can_run_between_the_runs_except_and_holding() -> None
 
 
 def _fail_with_signals_pending(*signums: int) -> None:
-    """Raise TypeError from one C call that has just set ``signums``
-    pending, with no Python code run and no check made in between: ctypes
-    calls PyErr_SetInterruptEx for the first, each errcheck (a C partial of
-    the next such call) sets the next, and the last errcheck, the C builtin
-    pow, raises. CPython runs their handlers at its next checks, which on
-    3.10 include the entry to an except block."""
+    """Unblock queued signals and raise TypeError from one C call.
+
+    Queue on the main thread while blocked, then restore its mask through
+    PyDLL (which keeps the GIL) with the C builtin pow as errcheck. No
+    nested ctypes call can handle the first signal before queuing the
+    second. CPython runs their handlers at its next checks, which on 3.10
+    include the entry to an except block.
+    """
     import ctypes
-    import functools
+    import threading
 
-    pointer: Any = type(ctypes.pythonapi.PyErr_SetInterruptEx)
-
-    def setter(extra: int) -> Any:
-        function = pointer(("PyErr_SetInterruptEx", ctypes.pythonapi))
-        function.argtypes = [ctypes.c_int] + [ctypes.py_object] * extra
-        function.restype = ctypes.c_int
-        return function
-
-    errcheck: Any = pow
-    for signum in reversed(signums[1:]):
-        chained = setter(3)  # called as errcheck: (signum, result, func, args)
-        chained.errcheck = errcheck
-        errcheck = functools.partial(chained, signum)
-    first = setter(0)
-    first.errcheck = errcheck
-    first(signums[0])
+    libc = ctypes.PyDLL(None)
+    # Opaque, aligned storage: sigset_t is 128 bytes on Linux and 4 on macOS.
+    saved_mask = (ctypes.c_uint64 * 16)()
+    change_mask = libc.pthread_sigmask
+    change_mask.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+    change_mask.restype = ctypes.c_int
+    assert change_mask(signal.SIG_SETMASK, None, saved_mask) == 0
+    change_mask.errcheck = pow
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, signums)
+    try:
+        for signum in signums:
+            signal.pthread_kill(threading.get_ident(), signum)
+    except BaseException:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        raise
+    # This C call restores the mask before pow raises. A Python finally
+    # here would itself provide a signal checkpoint before execute's except.
+    change_mask(signal.SIG_SETMASK, saved_mask, None)
 
 
 @pytest.mark.parametrize(

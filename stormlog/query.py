@@ -26,6 +26,7 @@ from .correlation import (
     CorrelationResult,
     ExternalAttachment,
 )
+from .formatting import format_bytes
 from .gap_analysis import analyze_hidden_memory_gaps
 from .issues import (
     ISSUE_STATE_OPEN,
@@ -109,7 +110,6 @@ from .timeline_markers import (
     derive_session_timeline_markers,
     timeline_marker_to_dict,
 )
-from .utils import format_bytes
 
 SourceKind = Literal[
     "sink",

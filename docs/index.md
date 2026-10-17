@@ -51,6 +51,7 @@ cookbook/always_on
 cookbook/pytorch
 cookbook/tensorflow
 cookbook/jax
+cookbook/mlx
 cookbook/distributed
 cookbook/incidents
 cookbook/ci_release
@@ -69,6 +70,8 @@ correlation
 pytorch_testing_guide
 tensorflow_testing_guide
 jax_testing_guide
+mlx_testing_guide
+benchmarks/mlx-qualification
 article
 architecture
 api
@@ -113,6 +116,7 @@ examples/test_guides/README
 - [PyTorch guide](pytorch_testing_guide.md)
 - [TensorFlow guide](tensorflow_testing_guide.md)
 - [JAX guide](jax_testing_guide.md)
+- [MLX instrumentation guide](mlx_testing_guide.md)
 - [Production Cookbook](cookbook/index.md)
 
 ## Notes

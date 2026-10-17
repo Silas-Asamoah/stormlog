@@ -80,15 +80,19 @@ class AlertHistoryTable(DataTable):
 class ProfileResultsTable(DataTable):
     """Reusable table for displaying profile summaries."""
 
+    def __init__(self, *args: Any, framework: str = "pytorch", **kwargs: Any) -> None:
+        self.framework = framework
+        super().__init__(*args, **kwargs)
+
     def on_mount(self) -> None:
         if not self.columns:
             self.add_columns(
                 "Name",
-                "Peak (MB)",
-                "Δ Avg (MB)",
-                "Duration (ms)",
+                "Sampled Peak (MiB)" if self.framework == "mlx" else "Peak (MB)",
+                "Active Δ (MiB)" if self.framework == "mlx" else "Δ Avg (MB)",
+                "Host Time (ms)" if self.framework == "mlx" else "Duration (ms)",
                 "Calls",
-                "Recorded",
+                "Completion" if self.framework == "mlx" else "Recorded",
             )
 
     def update_rows(self, rows: List[ProfileRow]) -> None:
@@ -105,11 +109,15 @@ class ProfileResultsTable(DataTable):
             )
             self.add_row(
                 row.name,
-                f"{row.peak_mb:.2f}",
-                f"{row.delta_mb:.2f}",
+                "N/A" if row.peak_mb is None else f"{row.peak_mb:.2f}",
+                "N/A" if row.delta_mb is None else f"{row.delta_mb:.2f}",
                 f"{row.duration_ms:.2f}",
                 str(row.call_count),
-                timestamp,
+                (
+                    ("Verified" if row.completion_verified else "Unverified")
+                    if self.framework == "mlx"
+                    else timestamp
+                ),
             )
 
 

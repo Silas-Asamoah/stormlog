@@ -136,6 +136,18 @@ def test_v2_records_round_trip_through_existing_jsonl_writer(tmp_path: Path) -> 
     for event in records:
         validator.validate(event.to_record())
 
+    physical = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(physical) == len(records) + 1
+    assert physical[0]["event_type"] == "infer.context"
+    compact_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "docs/schemas/inference_correlation_v4.schema.json"
+        ).read_text()
+    )
+    for row in physical:
+        Draft202012Validator(compact_schema).validate(row)
+        assert row["schema_version"] == 4
     assert load_inference_artifact(path) == records
     assert all(event.to_record()["schema_version"] == 2 for event in records)
     assert records[0].elapsed_ns == 200

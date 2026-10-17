@@ -32,7 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -59,6 +59,7 @@ SERVER_INFO = "/server_info?config_format=json"
 BASIC_DEADLINE_SECONDS = 60.0
 SERVER_INFO_DEADLINE_SECONDS = 120.0
 RESPONSE_CAP_BYTES = 4 * 1024 * 1024
+MAX_JSON_DEPTH = 100
 _CHUNK = 64 * 1024
 _PRIVATE_NETWORKS = tuple(
     ipaddress.ip_network(network)
@@ -266,6 +267,7 @@ def _ask(
         return _failure(route, exc, started)
     try:
         body = json.loads(raw)
+        _validate_json_depth(body)
     except (ValueError, RecursionError):
         answer = _answer(
             route, INVALID_JSON, started, http_status=status, size=len(raw)
@@ -273,6 +275,20 @@ def _ask(
         return replace(answer, date=date)
     answer = _answer(route, OK, started, http_status=status, size=len(raw), body=body)
     return replace(answer, date=date)
+
+
+def _validate_json_depth(body: Any) -> None:
+    """Bound traversal independently of the interpreter's JSON parser."""
+    end = object()
+    stack: list[Iterator[Any]] = [iter((body,))]
+    while stack:
+        value = next(stack[-1], end)
+        if value is end:
+            stack.pop()
+        elif isinstance(value, (dict, list)):
+            if len(stack) > MAX_JSON_DEPTH:
+                raise ValueError("server probe JSON exceeds the nesting limit")
+            stack.append(iter(value.values() if isinstance(value, dict) else value))
 
 
 def _exchange(

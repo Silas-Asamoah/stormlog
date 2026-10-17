@@ -102,8 +102,9 @@ class FakeProfiler(EngineObserver):
         # A stop with nothing running also answers 200.
         started = time.time_ns()
         if self.active:
-            self._close_window()
-        self.stops.append((started, time.time_ns()))
+            self._close_window(stop_started=started)
+        else:
+            self.stops.append((started, time.time_ns()))
         return 200
 
     def shutdown(self) -> None:
@@ -138,15 +139,24 @@ class FakeProfiler(EngineObserver):
         if self.active:
             self._steps.append(step)
 
-    def _close_window(self) -> None:
+    def _close_window(self, *, stop_started: int | None = None) -> None:
         started = time.time_ns()
         self.active = False
         steps, self._steps = self._steps, []
         time.sleep(self.controls.stop_pause_seconds)
-        self._write_or_schedule(steps)
+        delayed = self.controls.trace_write_delay_seconds > 0
+        if not delayed:
+            self._write_or_schedule(steps)
         if self.config.torch_profiler_dump_cuda_time_total:
             self._write_table(steps)
-        self.closes.append((started, time.time_ns()))
+        ended = time.time_ns()
+        self.closes.append((started, ended))
+        if stop_started is not None:
+            self.stops.append((stop_started, ended))
+        # Start the delayed-write clock only after synchronous stop work and
+        # its timing markers. A slow table write must not consume the delay.
+        if delayed:
+            self._write_or_schedule(steps)
 
     def _write_or_schedule(self, steps: list[Step]) -> None:
         if not self.controls.stop_writes_trace:

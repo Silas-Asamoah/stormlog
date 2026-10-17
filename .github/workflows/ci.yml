@@ -12,8 +12,10 @@ permissions: {}
 
 jobs:
     test:
+        name: test (${{ matrix.python-version }}, ${{ matrix.framework }})
         if: github.event_name != 'schedule'
         runs-on: ubuntu-latest
+        timeout-minutes: 60
         permissions:
             contents: read
         strategy:
@@ -24,6 +26,48 @@ jobs:
                 exclude:
                     - python-version: "3.12"
                       framework: tensorflow
+                include:
+                    - framework: pytorch
+                      framework-version: "2.2.2"
+                      numpy-requirement: "numpy<2.0.0"
+                    - framework: tensorflow
+                      framework-version: "2.15.0"
+                      numpy-requirement: "numpy<2.0.0"
+                    - framework: jax
+                      framework-version: "0.4.20"
+                      numpy-requirement: "numpy<2.0.0"
+                    - python-version: "3.13"
+                      framework: pytorch
+                      framework-version: "2.14.1"
+                      numpy-requirement: "numpy>=2.0.0"
+                    - python-version: "3.14"
+                      framework: pytorch
+                      framework-version: "2.14.1"
+                      numpy-requirement: "numpy>=2.0.0"
+                    - python-version: "3.15"
+                      framework: pytorch
+                      framework-version: "2.14.1"
+                      numpy-requirement: "numpy>=2.0.0"
+                    - python-version: "3.12"
+                      framework: tensorflow
+                      framework-version: "2.21.0"
+                      numpy-requirement: "numpy>=1.26.0"
+                    - python-version: "3.13"
+                      framework: tensorflow
+                      framework-version: "2.21.0"
+                      numpy-requirement: "numpy>=1.26.0"
+                    - python-version: "3.13"
+                      framework: jax
+                      framework-version: "0.11.2"
+                      numpy-requirement: "numpy>=2.0.0"
+                    - python-version: "3.14"
+                      framework: jax
+                      framework-version: "0.11.2"
+                      numpy-requirement: "numpy>=2.0.0"
+                    - python-version: "3.15"
+                      framework: jax
+                      framework-version: "0.11.2"
+                      numpy-requirement: "numpy>=2.0.0"
 
         steps:
             - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -36,20 +80,54 @@ jobs:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install base dependencies
+              env:
+                  NUMPY_REQUIREMENT: ${{ matrix.numpy-requirement }}
               run: |
                   python3 -m pip install --upgrade pip
                   pip install -e . --no-deps
-                  pip install -r requirements-ci-base.txt
+                  pip install -r requirements-ci-base.txt "$NUMPY_REQUIREMENT"
 
             - name: Install framework dependencies
+              env:
+                  FRAMEWORK_VERSION: ${{ matrix.framework-version }}
+                  NUMPY_REQUIREMENT: ${{ matrix.numpy-requirement }}
               run: |
+                  pip install "$NUMPY_REQUIREMENT"
                   if [ "${{ matrix.framework }}" = "pytorch" ]; then
-                      pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
+                      pip install "torch==$FRAMEWORK_VERSION" --index-url https://download.pytorch.org/whl/cpu
                   elif [ "${{ matrix.framework }}" = "tensorflow" ]; then
-                      pip install tensorflow-cpu==2.15.0
+                      pip install -r requirements-ci-base.txt "tensorflow-cpu==$FRAMEWORK_VERSION" "$NUMPY_REQUIREMENT"
                   elif [ "${{ matrix.framework }}" = "jax" ]; then
-                      pip install jax==0.4.20 jaxlib==0.4.20 'numpy<2.0.0' 'protobuf>=6.31.1'
+                      pip install "jax==$FRAMEWORK_VERSION" "jaxlib==$FRAMEWORK_VERSION" "$NUMPY_REQUIREMENT" 'protobuf>=6.31.1'
                   fi
+                  pip check
+
+            - name: Verify PyTorch runtime
+              if: matrix.framework == 'pytorch'
+              run: |
+                  python3 - <<'PY'
+                  import torch
+
+                  print(f"torch={torch.__version__}")
+                  result = torch.arange(3) + 1
+                  assert result.numpy().tolist() == [1, 2, 3]
+                  print(f"result={result}")
+                  PY
+
+            - name: Verify TensorFlow runtime
+              if: matrix.framework == 'tensorflow'
+              run: |
+                  python3 - <<'PY'
+                  import tensorflow as tf
+
+                  print(f"tensorflow={tf.__version__}")
+                  devices = tf.config.list_physical_devices("CPU")
+                  assert devices, "TensorFlow initialized without any CPU devices"
+                  result = tf.range(3) + 1
+                  assert result.numpy().tolist() == [1, 2, 3]
+                  print(f"devices={devices}")
+                  print(f"result={result}")
+                  PY
 
             - name: Verify JAX runtime
               if: matrix.framework == 'jax'
@@ -72,7 +150,7 @@ jobs:
             - name: Run tests
               run: |
                   if [ "${{ matrix.framework }}" = "pytorch" ]; then
-                      python3 -m pytest tests/ --ignore-glob="tests/test_tf*.py" --ignore-glob="tests/test_jax*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
+                      python3 -m pytest tests/ --ignore-glob="tests/test_tf*.py" --ignore-glob="tests/test_jax*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" -o faulthandler_timeout=120 --cov=stormlog --cov-report=xml
                   elif [ "${{ matrix.framework }}" = "tensorflow" ]; then
                       python3 -m pytest tests/ -o "python_files=test_tf*.py" -v -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   elif [ "${{ matrix.framework }}" = "jax" ]; then
@@ -85,6 +163,37 @@ jobs:
                   file: ./coverage.xml
                   flags: unittests
                   name: codecov-umbrella
+
+    mlx-contracts:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        strategy:
+            fail-fast: false
+            matrix:
+                python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+              with:
+                  python-version: ${{ matrix.python-version }}
+            - name: Install framework-independent test environment
+              run: |
+                  python3 -m pip install --upgrade pip
+                  pip install -e '.[tui]' pytest jsonschema packaging
+                  python3 - <<'PY'
+                  import importlib.util
+                  for name in ("mlx", "torch", "jax", "tensorflow"):
+                      assert importlib.util.find_spec(name) is None, name
+                  PY
+            - name: Run MLX fake-runtime and packaging contracts
+              run: |
+                  python3 -m pytest tests/ -o 'python_files=test_mlx*.py' -m 'not mlx_hardware' -q
+                  python3 -m pytest tests/test_packaging_contracts.py -q
+                  python3 -m examples.scenarios.mlx_memory_scenario --output /tmp/mlx-contract-qualification
 
     tui-pr-gate:
         if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/develop')

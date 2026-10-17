@@ -37,6 +37,7 @@ from typing import Any
 
 from .analysis import analyze_inference_events
 from .compatibility import RunField, run_fields
+from .correlation_codec import expand_inference_records
 from .errors import InferInputError
 from .populations import Membership, Segment
 from .slo import SloSpec
@@ -146,6 +147,10 @@ def summary_from_records(
     sha256: str | None = None,
 ) -> RunSummary:
     """A run summary from records already read and analyzed."""
+    try:
+        records = expand_inference_records(records)
+    except ValueError as exc:
+        raise InferInputError(f"{path or 'artifact'}: {exc}") from exc
     identity = next(
         (r for r in records if r.get("event_type") == "infer.artifact"), None
     )
