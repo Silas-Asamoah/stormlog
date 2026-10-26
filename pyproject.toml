@@ -106,7 +106,7 @@ dev = [
     "jsonschema>=4.0.0",
     "prometheus_client>=0.18",
     "pyyaml>=6.0",
-    "black==26.5.1",
+    "black==26.10.1",
     "flake8>=3.8.0",
     "mypy>=0.910",
     "isort>=5.9.0",

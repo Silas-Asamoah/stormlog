@@ -1,4 +1,4 @@
-black==26.5.1
+black==26.10.1
 isort==8.0.1
 flake8==7.3.0
 mypy==1.8.0
