@@ -8,20 +8,15 @@ execute after it ends.
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 import sqlite3
 import subprocess
-import zlib
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable
 
-from scripts.native_probes.workloads.vllm_open_loop import (
-    CUPTI_FRAME_HEADER,
-    CUPTI_TRACE_MAGIC,
-)
+from stormlog.infer.trace_cupti import iter_records
 
 _TEMPLATE_OR_ARGS = re.compile(r"[<(]")
 
@@ -49,26 +44,6 @@ def demangle(names: Iterable[str]) -> dict[str, str]:
     if len(output) != len(unique):
         return {name: name for name in unique}
     return dict(zip(unique, output))
-
-
-def iter_records(path: Path) -> Iterator[dict[str, Any]]:
-    """Yield records from a finalized trace; raise on any framing defect."""
-    with path.open("rb") as source:
-        if source.read(len(CUPTI_TRACE_MAGIC)) != CUPTI_TRACE_MAGIC:
-            raise ValueError(f"{path}: not a Stormlog CUPTI trace")
-        while True:
-            header = source.read(CUPTI_FRAME_HEADER.size)
-            if len(header) != CUPTI_FRAME_HEADER.size:
-                raise ValueError(f"{path}: end frame missing")
-            encoded, raw_size, count = CUPTI_FRAME_HEADER.unpack(header)
-            if (encoded, raw_size, count) == (0, 0, 0):
-                return
-            raw = zlib.decompress(source.read(encoded))
-            lines = raw.splitlines()
-            if len(raw) != raw_size or len(lines) != count:
-                raise ValueError(f"{path}: frame size or record count mismatch")
-            for line in lines:
-                yield json.loads(line)
 
 
 def _overlap_ns(intervals: Iterable[tuple[int, int, str]]) -> int:
