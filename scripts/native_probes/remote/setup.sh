@@ -14,6 +14,14 @@ if [ ! -x "$ROOT/venv/bin/python" ]; then
   "$ROOT/venv/bin/pip" install -q vllm==0.30.0 psutil cmake
 fi
 
+# The stormlog CLI from this checkout, without changing vLLM's pinned packages.
+# The upload has no .git, so setuptools_scm is given the version.
+SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0+qualify \
+  "$ROOT/venv/bin/pip" install -q --no-deps -e "$SRC"
+# stormlog needs scipy and pandas; keep vLLM's numpy.
+NUMPY=$("$ROOT/venv/bin/python" -c "import numpy; print(numpy.__version__)")
+"$ROOT/venv/bin/pip" install -q scipy pandas "numpy==$NUMPY"
+
 if ! command -v nsys >/dev/null 2>&1; then
   log "installing nsight-systems-cli"
   . /etc/os-release

@@ -1,0 +1,281 @@
+{
+ "plan_id": "qualification",
+ "issue": 118,
+ "purpose": "Qualify the experimental `stormlog infer profile --trace cupti` path and the helper 0.4.0 changes (bounded consumer, CUDA runtime check, subscriber hold) on hardware, and run the pre-declared CUDA-graph window-scaling run that the v2 decision record lists as fix 4. Declared before any of these runs.",
+ "scope_note": "The v2 decision rule was evaluated on eager mode and stays as decided (defer). This run decides whether the shipped experimental mode behaves as documented, and records whether the graph-mode criteria below are met for a future adoption decision. It does not by itself change the v2 decision.",
+ "environment": "Same as v2: one JarvisLabs L4, vLLM 0.30.0, torch 2.13.0+cu130, Qwen2.5-0.5B-Instruct at the v2 revision, helper built against the venv's CUDA 13 CUPTI; mismatch control built against the image toolkit.",
+ "checks": {
+  "A_cli_end_to_end": {
+   "how": "qualify_cli.py: vLLM with CUDA graphs and the helper deferred; `stormlog infer profile --trace cupti --trace-max-seconds 20`, concurrency 8, 400 measured requests; the artifact is read back.",
+   "prediction": "One window acknowledged and stopped by time_bound; one activity.sclz per worker imported; activity_ref records present; event_loss all zero.",
+   "pass": "window started and stop confirmed; at least one stormlog-cupti trace imported with activity_ref records; event_loss reported (not null)."
+  },
+  "B_bounded_consumer": {
+   "how": "run_plan trials q-eager-cupti-min-w800 (default 32 MiB cap) and q-eager-cupti-min-w200-delay50 (writer slowed by 50 ms per buffer).",
+   "prediction": "W=800 eager peak added RSS below v2's 234 MiB median, with activity_buffer_peak_outstanding_bytes <= 32 MiB; the delayed trial reports buffer_refusals > 0 with peak outstanding <= 32 MiB.",
+   "pass": "peak outstanding buffer bytes <= maximum_buffer_bytes in both; delayed trial buffer_refusals > 0 and finalized; any loss appears in the status counters."
+  },
+  "C_runtime_mismatch": {
+   "how": "qualify_cli.py: vLLM (eager) with the helper built against the image's CUDA toolkit (v2: 12.6) under torch's CUDA 13 runtime; then `--trace cupti`.",
+   "prediction": "cupti_status.json names the CUDA version mismatch, no control socket, and the CLI window is rejected with that message.",
+   "pass": "initialization_error names the mismatch; window start_outcome is rejected; no trace imported."
+  },
+  "D_coexistence": {
+   "how": "qualify_cli.py: (1) vLLM with the helper and vLLM's torch profiler; `--trace vllm-torch` window; (2) micro_fidelity nsys_trial w1-eager with the helper under Nsight Systems.",
+   "prediction": "(1) the helper initializes (torch does not hold the subscriber at startup); Kineto's trace has no or degraded CUPTI GPU activity. (2) the helper reports 'another CUPTI client' instead of a clean empty finalize.",
+   "pass": "(2) helper status is not a clean finalize with zero records. (1) is recorded as observed; either outcome is documented, neither passes silently."
+  },
+  "E_graph_window_scaling": {
+   "how": "run_plan trials q-graph-*: cupti-min and off, CUDA graphs, W=200, 800, 2200, 3 repetitions each, seeded shuffled order (seed 118), v2 workload.",
+   "prediction": "cupti-min window p95 delta within +2% of the off median at every W; peak added RSS under 150 MiB at every W; stop under 2 s.",
+   "graph_mode_adoption_criteria": {
+    "p95_delta_limit": 0.05,
+    "memory": "median peak added RSS at W=2200 no more than 1.5x the W=200 median",
+    "loss": "every trial finalized; loss counters reported",
+    "statistic": "median over 3 repetitions vs off median at the same W; ranges reported, no confidence intervals"
+   }
+  }
+ },
+ "trials": [
+  {
+   "trial_id": "q-graph-off-w2200-r1",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w2200-r3",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w2200-r2",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w200-r2",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w200-r3",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w2200-r1",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w200-r2",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w2200-r2",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w800-r3",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w800-r2",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w800-r1",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w200-r1",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w800-r2",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w2200-r3",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "2200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w200-r3",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w800-r1",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-off-w200-r1",
+   "args": [
+    "--mode",
+    "off",
+    "--window",
+    "200",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-graph-cupti-min-w800-r3",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "800",
+    "--cuda-graphs"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-eager-cupti-min-w800",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "800"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  },
+  {
+   "trial_id": "q-eager-cupti-min-w200-delay50",
+   "args": [
+    "--mode",
+    "cupti-min",
+    "--window",
+    "200",
+    "--consumer-delay-ms",
+    "50"
+   ],
+   "keep_traces": false,
+   "timeout": 2400
+  }
+ ]
+}
