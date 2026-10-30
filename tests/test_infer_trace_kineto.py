@@ -552,3 +552,22 @@ def test_a_driver_api_graph_launch_marks_graph_work_without_graph_ids(
     assert capture.summary is not None
     assert capture.summary["graph_gpu_events"] == 3
     assert "cuda_graph_ids" not in capture.capabilities.collected
+
+
+def test_a_trace_with_cpu_events_but_no_gpu_activity_says_so(
+    tmp_path: Path,
+) -> None:
+    document = _trace_document()
+    document["traceEvents"] = [
+        event
+        for event in document["traceEvents"]
+        if event.get("cat") not in ("kernel", "gpu_memcpy")
+    ]
+
+    trace = load_kineto_trace(_write(tmp_path, document))
+
+    assert trace.notes == [
+        "the trace has 6 CPU events but no GPU kernels, copies or memsets; "
+        "the profiler may not have had CUPTI"
+    ]
+    assert load_kineto_trace(_write(tmp_path, _trace_document())).notes == []
