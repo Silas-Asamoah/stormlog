@@ -691,8 +691,10 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         "traces",
         nargs="+",
         help=(
-            "Kineto Chrome traces (.json, .json.gz) or Nsight Systems SQLite "
-            "exports (.sqlite); an .nsys-rep report is registered only"
+            "Kineto Chrome traces (.json, .json.gz), Nsight Systems SQLite "
+            "exports (.sqlite) or experimental Stormlog CUPTI traces "
+            "(activity.sclz, read with the cupti_status.json beside it); an "
+            ".nsys-rep report is registered only"
         ),
     )
     import_parser.add_argument(

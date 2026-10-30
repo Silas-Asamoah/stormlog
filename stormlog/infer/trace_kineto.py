@@ -125,6 +125,9 @@ class KinetoTrace:
     # What the reader could not import or resolve, for the import summary.
     notes: list[str] = field(default_factory=list)
     not_imported: dict[str, int] = field(default_factory=dict)
+    # Records the collector counted as lost, when it reports them (Stormlog's
+    # CUPTI helper); None when the format does not say.
+    event_loss: dict[str, int] | None = None
 
 
 def load_kineto_trace(path: str | Path) -> KinetoTrace:
@@ -636,8 +639,12 @@ def _summary(
             1 for event in trace.gpu_events if _from_graph(trace, event)
         ),
         "devices": _device_summary(trace, builder),
-        "event_loss": None,
-        "event_loss_note": "the trace does not report dropped CUPTI records",
+        "event_loss": trace.event_loss,
+        "event_loss_note": (
+            None
+            if trace.event_loss is not None
+            else "the trace does not report dropped CUPTI records"
+        ),
         "not_imported": dict(trace.not_imported),
         "notes": list(trace.notes),
     }
