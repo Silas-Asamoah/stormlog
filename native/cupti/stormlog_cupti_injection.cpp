@@ -790,9 +790,35 @@ void WriteStatus() {
   }
 }
 
+// Why the capture cannot be trusted against the target's CUDA runtime, or
+// empty when it can. A CUPTI from another CUDA major version can lose kernel
+// timestamps without reporting a drop (issue #118, protocol v2).
+std::string RuntimeMismatch() {
+  if (g_state.runtime_version.empty()) {
+    g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
+  }
+  if (g_state.runtime_version.empty()) {
+    return "CUDA runtime version unavailable; cannot confirm CUPTI matches it";
+  }
+  if (std::stoi(g_state.runtime_version) / 1000 != CUDA_VERSION / 1000) {
+    return "helper built against CUDA " + std::to_string(CUDA_VERSION) +
+           " but the target's CUDA runtime is " + g_state.runtime_version +
+           "; rebuild it with the target's CUDA major version";
+  }
+  return {};
+}
+
 // Enables the requested activity kinds once; returns false if none could be.
 bool EnableActivities() {
   if (g_state.activities_enabled.load()) {
+    return false;
+  }
+  // A deferred start runs after the target has used CUDA, so its runtime
+  // must be known by now. A start at injection is checked at finalize.
+  const std::string mismatch = RuntimeMismatch();
+  if (!mismatch.empty() &&
+      (g_state.defer_start || !g_state.runtime_version.empty())) {
+    SetInitializationError(mismatch);
     return false;
   }
   for (const ActivitySelection& activity : kSupportedActivities) {
@@ -876,6 +902,12 @@ void Finalize() {
     }
     if (g_state.initialized && !g_state.activities_enabled.load()) {
       SetInitializationError("capture was stopped before it was started");
+    } else if (g_state.initialized) {
+      // The records cannot be trusted unless the runtime matched by now.
+      const std::string mismatch = RuntimeMismatch();
+      if (!mismatch.empty()) {
+        SetInitializationError(mismatch);
+      }
     }
     g_state.finalized = g_state.initialized && !HasInitializationError();
     WriteStatus();
@@ -1088,21 +1120,15 @@ void Initialize() {
   }
   g_state.driver_version = QueryCudaVersion("cuDriverGetVersion");
   g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
-  // A CUPTI from another CUDA major version can lose kernel timestamps
-  // without reporting a drop (issue #118, protocol v2), so refuse to capture.
-  if (g_state.runtime_version.empty()) {
-    SetInitializationError(
-        "CUDA runtime version unavailable; cannot confirm CUPTI matches it");
-    WriteStatus();
-    return;
-  }
-  if (std::stoi(g_state.runtime_version) / 1000 != CUDA_VERSION / 1000) {
-    SetInitializationError(
-        "helper built against CUDA " + std::to_string(CUDA_VERSION) +
-        " but the target's CUDA runtime is " + g_state.runtime_version +
-        "; rebuild it with the target's CUDA major version");
-    WriteStatus();
-    return;
+  // The runtime is often loaded after CUDA initializes, when this runs; an
+  // unknown version is checked again when capture starts and at finalize.
+  if (!g_state.runtime_version.empty()) {
+    const std::string mismatch = RuntimeMismatch();
+    if (!mismatch.empty()) {
+      SetInitializationError(mismatch);
+      WriteStatus();
+      return;
+    }
   }
   CUptiResult result =
       cuptiActivityRegisterCallbacks(BufferRequested, BufferCompleted);

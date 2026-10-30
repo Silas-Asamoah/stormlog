@@ -864,7 +864,10 @@ check were added after that evaluation and are not yet qualified on hardware.
 **Build** the helper with the CUDA toolkit whose major version matches the
 server's CUDA runtime (for vLLM, the CUDA version of its torch build). The
 helper refuses to capture when they differ: a CUPTI from another major version
-lost 39% of kernel timestamps without reporting a drop.
+lost 39% of kernel timestamps without reporting a drop. The runtime is often
+loaded after the helper, so the versions are compared when the window starts,
+and again when it stops; a process whose CUDA runtime cannot be found by then
+is not captured.
 
 ```bash
 cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release
