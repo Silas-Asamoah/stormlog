@@ -14,10 +14,12 @@
 #include <atomic>
 #include <chrono>
 #include <cerrno>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <limits>
 #include <mutex>
@@ -30,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.3.0";
+constexpr char kHelperVersion[] = "0.4.0";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -40,6 +42,7 @@ constexpr char kOutputDirectoryEnv[] = "STORMLOG_CUPTI_OUTPUT_DIR";
 constexpr char kMaximumBytesEnv[] = "STORMLOG_CUPTI_MAX_BYTES";
 constexpr char kActivitiesEnv[] = "STORMLOG_CUPTI_ACTIVITIES";
 constexpr char kBufferBytesEnv[] = "STORMLOG_CUPTI_BUFFER_BYTES";
+constexpr char kMaximumBufferBytesEnv[] = "STORMLOG_CUPTI_MAX_BUFFER_BYTES";
 constexpr char kConsumerDelayEnv[] = "STORMLOG_CUPTI_CONSUMER_DELAY_MS";
 constexpr char kDeferStartEnv[] = "STORMLOG_CUPTI_DEFER_START";
 constexpr char kDeviceBufferBytesEnv[] = "STORMLOG_CUPTI_DEVICE_BUFFER_BYTES";
@@ -53,6 +56,7 @@ constexpr char kTraceFilename[] = "activity.sclz";
 constexpr char kStatusFilename[] = "cupti_status.json";
 constexpr char kStatusTemporaryFilename[] = "cupti_status.json.tmp";
 constexpr std::size_t kDefaultActivityBufferBytes = 8U * 1024U * 1024U;
+constexpr std::uint64_t kDefaultMaximumBufferBytes = 32U * 1024U * 1024U;
 
 struct ActivitySelection {
   const char* name;
@@ -83,6 +87,10 @@ struct CaptureState {
   std::atomic<std::uint64_t> peak_outstanding_buffer_bytes{0};
   std::atomic<std::uint64_t> buffer_completed_ns{0};
   std::atomic<std::uint64_t> kernels_without_timestamps{0};
+  // Activity buffers CUPTI asked for while the outstanding cap was reached;
+  // CUPTI drops the records it would have written to them.
+  std::atomic<std::uint64_t> buffer_refusals{0};
+  std::uint64_t maximum_buffer_bytes{kDefaultMaximumBufferBytes};
   std::uint64_t device_buffer_bytes{0};
   std::uint64_t device_buffer_pool_limit{0};
   std::uint64_t flush_period_ms{0};
@@ -93,6 +101,14 @@ struct CaptureState {
   int trace_fd{-1};
   std::atomic<int> control_fd{-1};
   std::thread control_thread;
+  // Completed buffers wait here for the writer thread, so CUPTI's callback
+  // never decodes, encodes or compresses records.
+  std::mutex queue_mutex;
+  std::condition_variable queue_ready;
+  std::deque<std::pair<std::uint8_t*, std::size_t>> completed_buffers;
+  bool writer_stopping{false};
+  std::thread writer_thread;
+  CUpti_SubscriberHandle subscriber{nullptr};
   std::string output_directory;
   std::string control_path;
   std::uint64_t maximum_bytes{0};
@@ -421,8 +437,14 @@ std::string NextRecordId() {
 
 void WriteApiRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityAPI*>(record);
-  const char* kind =
-      record->kind == CUPTI_ACTIVITY_KIND_DRIVER ? "driver" : "runtime";
+  const bool driver = record->kind == CUPTI_ACTIVITY_KIND_DRIVER;
+  const char* kind = driver ? "driver" : "runtime";
+  const char* name = nullptr;
+  if (cuptiGetCallbackName(driver ? CUPTI_CB_DOMAIN_DRIVER_API
+                                  : CUPTI_CB_DOMAIN_RUNTIME_API,
+                           activity->cbid, &name) != CUPTI_SUCCESS) {
+    name = nullptr;
+  }
   std::ostringstream output;
   output << RecordPrefix(kind, NextRecordId(), activity->start, activity->end,
                          false)
@@ -432,7 +454,8 @@ void WriteApiRecord(const CUpti_Activity* record) {
          << ",\"provenance\":\"cupti_activity\""
          << ",\"uncertainty\":\"CUPTI timestamps; no cross-clock conversion "
             "applied\""
-         << ",\"metadata\":{\"cbid\":" << activity->cbid
+         << ",\"metadata\":{\"cbid\":" << activity->cbid << ",\"name\":"
+         << (name == nullptr ? "null" : JsonString(name))
          << ",\"process_id\":" << activity->processId
          << ",\"thread_id\":" << activity->threadId << "}}";
   WriteRecord(output.str());
@@ -547,6 +570,15 @@ void ProcessActivityRecord(const CUpti_Activity* record) {
 
 void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
                               std::size_t* maximum_records) {
+  if (g_state.outstanding_buffer_bytes.load() + g_state.activity_buffer_bytes >
+      g_state.maximum_buffer_bytes) {
+    // The writer is behind: let CUPTI drop records rather than grow memory.
+    g_state.buffer_refusals.fetch_add(1);
+    *buffer = nullptr;
+    *size = 0;
+    *maximum_records = 0;
+    return;
+  }
   void* allocation = nullptr;
   if (posix_memalign(&allocation, alignof(std::max_align_t),
                      g_state.activity_buffer_bytes) != 0) {
@@ -569,12 +601,12 @@ void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
   }
 }
 
-void CUPTIAPI BufferCompleted(CUcontext context, std::uint32_t stream_id,
-                              std::uint8_t* buffer, std::size_t size,
-                              std::size_t valid_size) {
-  if (buffer == nullptr) {
-    return;
-  }
+void CUPTIAPI IgnoreCallback(void* /*userdata*/, CUpti_CallbackDomain /*domain*/,
+                            CUpti_CallbackId /*callback_id*/,
+                            const void* /*callback_data*/) {}
+
+// Decodes and writes one completed buffer, then releases it.
+void ConsumeBuffer(std::uint8_t* buffer, std::size_t valid_size) {
   const auto started = std::chrono::steady_clock::now();
   CUpti_Activity* record = nullptr;
   while (valid_size > 0) {
@@ -593,21 +625,69 @@ void CUPTIAPI BufferCompleted(CUcontext context, std::uint32_t stream_id,
       ProcessActivityRecord(record);
     }
   }
-  std::size_t dropped = 0;
-  if (cuptiActivityGetNumDroppedRecords(context, stream_id, &dropped) ==
-      CUPTI_SUCCESS) {
-    g_state.cupti_dropped_records.fetch_add(dropped);
-  }
   if (g_state.consumer_delay_ms > 0) {
     std::this_thread::sleep_for(
         std::chrono::milliseconds(g_state.consumer_delay_ms));
   }
   std::free(buffer);
-  g_state.outstanding_buffer_bytes.fetch_sub(size);
+  g_state.outstanding_buffer_bytes.fetch_sub(g_state.activity_buffer_bytes);
   g_state.buffer_completed_ns.fetch_add(static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - started)
           .count()));
+}
+
+void WriterLoop() {
+  std::unique_lock<std::mutex> lock(g_state.queue_mutex);
+  while (true) {
+    g_state.queue_ready.wait(lock, [] {
+      return g_state.writer_stopping || !g_state.completed_buffers.empty();
+    });
+    if (g_state.completed_buffers.empty()) {
+      return;
+    }
+    const auto [buffer, valid_size] = g_state.completed_buffers.front();
+    g_state.completed_buffers.pop_front();
+    lock.unlock();
+    ConsumeBuffer(buffer, valid_size);
+    lock.lock();
+  }
+}
+
+// Drains every queued buffer, then stops the writer thread.
+void StopWriter() {
+  {
+    std::lock_guard<std::mutex> lock(g_state.queue_mutex);
+    g_state.writer_stopping = true;
+  }
+  g_state.queue_ready.notify_one();
+  if (g_state.writer_thread.joinable()) {
+    g_state.writer_thread.join();
+  }
+}
+
+void CUPTIAPI BufferCompleted(CUcontext context, std::uint32_t stream_id,
+                              std::uint8_t* buffer, std::size_t /*size*/,
+                              std::size_t valid_size) {
+  if (buffer == nullptr) {
+    return;
+  }
+  std::size_t dropped = 0;
+  if (cuptiActivityGetNumDroppedRecords(context, stream_id, &dropped) ==
+      CUPTI_SUCCESS) {
+    g_state.cupti_dropped_records.fetch_add(dropped);
+  }
+  {
+    std::lock_guard<std::mutex> lock(g_state.queue_mutex);
+    if (!g_state.writer_stopping) {
+      g_state.completed_buffers.emplace_back(buffer, valid_size);
+      g_state.queue_ready.notify_one();
+      return;
+    }
+  }
+  // Delivered after finalization: the trace is closed, so every record in it
+  // is counted as dropped.
+  ConsumeBuffer(buffer, valid_size);
 }
 
 std::string JsonStringArray(const std::vector<std::string>& values) {
@@ -672,6 +752,8 @@ void WriteStatus() {
       << ",\"buffer_completed_cpu_ns\":" << g_state.buffer_completed_ns.load()
       << ",\"kernels_without_timestamps\":"
       << g_state.kernels_without_timestamps.load()
+      << ",\"buffer_refusals\":" << g_state.buffer_refusals.load()
+      << ",\"maximum_buffer_bytes\":" << g_state.maximum_buffer_bytes
       << ",\"device_buffer_bytes\":" << g_state.device_buffer_bytes
       << ",\"device_buffer_pool_limit\":" << g_state.device_buffer_pool_limit
       << ",\"flush_period_ms\":" << g_state.flush_period_ms
@@ -756,7 +838,13 @@ void Finalize() {
         SetInitializationError("final timestamp failed: " +
                                CuptiError(timestamp_result));
       }
+      if (g_state.subscriber != nullptr) {
+        cuptiUnsubscribe(g_state.subscriber);
+        g_state.subscriber = nullptr;
+      }
     }
+    // The forced flush has queued every buffer; write them before closing.
+    StopWriter();
     if (g_state.trace_fd >= 0) {
       {
         std::lock_guard<std::mutex> lock(g_state.output_mutex);
@@ -900,6 +988,16 @@ void Initialize() {
     }
     g_state.activity_buffer_bytes = static_cast<std::size_t>(requested);
   }
+  if (const char* value = std::getenv(kMaximumBufferBytesEnv)) {
+    if (!ParsePositiveInteger(value, &g_state.maximum_buffer_bytes)) {
+      SetInitializationError("maximum buffer bytes must be a positive integer");
+      return;
+    }
+  }
+  if (g_state.maximum_buffer_bytes < g_state.activity_buffer_bytes) {
+    SetInitializationError("maximum buffer bytes must hold one activity buffer");
+    return;
+  }
   if (const char* value = std::getenv(kConsumerDelayEnv)) {
     if (!ParseNonnegativeInteger(value, &g_state.consumer_delay_ms) ||
         g_state.consumer_delay_ms > 1000) {
@@ -990,6 +1088,22 @@ void Initialize() {
   }
   g_state.driver_version = QueryCudaVersion("cuDriverGetVersion");
   g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
+  // A CUPTI from another CUDA major version can lose kernel timestamps
+  // without reporting a drop (issue #118, protocol v2), so refuse to capture.
+  if (g_state.runtime_version.empty()) {
+    SetInitializationError(
+        "CUDA runtime version unavailable; cannot confirm CUPTI matches it");
+    WriteStatus();
+    return;
+  }
+  if (std::stoi(g_state.runtime_version) / 1000 != CUDA_VERSION / 1000) {
+    SetInitializationError(
+        "helper built against CUDA " + std::to_string(CUDA_VERSION) +
+        " but the target's CUDA runtime is " + g_state.runtime_version +
+        "; rebuild it with the target's CUDA major version");
+    WriteStatus();
+    return;
+  }
   CUptiResult result =
       cuptiActivityRegisterCallbacks(BufferRequested, BufferCompleted);
   if (result != CUPTI_SUCCESS) {
@@ -1038,10 +1152,25 @@ void Initialize() {
     WriteStatus();
     return;
   }
-  if (!g_state.defer_start && !EnableActivities()) {
+  // CUPTI allows one subscriber per process. Holding it makes a second CUPTI
+  // client fail loudly, and finding it held means one is already attached.
+  result = cuptiSubscribe(&g_state.subscriber, IgnoreCallback, nullptr);
+  if (result != CUPTI_SUCCESS) {
+    g_state.subscriber = nullptr;
+    SetInitializationError(
+        result == CUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED
+            ? "another CUPTI client (Nsight Systems, Kineto) holds this process"
+            : "CUPTI subscription failed: " + CuptiError(result));
     WriteStatus();
     return;
   }
+  if (!g_state.defer_start && !EnableActivities()) {
+    cuptiUnsubscribe(g_state.subscriber);
+    g_state.subscriber = nullptr;
+    WriteStatus();
+    return;
+  }
+  g_state.writer_thread = std::thread(WriterLoop);
   g_state.initialized = true;
   std::atexit(JoinControl);
   std::atexit(Finalize);
