@@ -47,7 +47,7 @@ from .prompts import Prompt, PromptSource
 from .samplers import SystemSampler, build_system_sampler
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
-from .trace_capture import TraceWindows
+from .trace_capture import CUPTI, TraceWindows
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
     flush_execution_log,
@@ -89,6 +89,12 @@ class InferenceProfiler:
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
         self._check_schedules()
+        if config.trace is not None and config.trace.mode == CUPTI:
+            if len(config.cases()) > 1:
+                raise ValueError(
+                    "--trace cupti traces one window per server process; "
+                    "profile one case (a single --concurrency or --rate value)"
+                )
         # The repeated prompt by (seed, length): it is the same in every phase.
         self._repeated_prompts: dict[tuple[int, int], Prompt] = {}
         self.client = OpenAIChatCompletionsClient(

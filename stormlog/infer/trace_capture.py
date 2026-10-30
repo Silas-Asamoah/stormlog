@@ -15,6 +15,12 @@ and to ``/stop_profile`` with nothing running, so a client cannot tell from
 HTTP whether another profile was already active; do not run two profilers
 against one server. The traces are imported after the run.
 
+``--trace cupti`` drives Stormlog's experimental CUPTI helper instead
+(``native/cupti``, loaded into the server with ``CUDA_INJECTION64_PATH``). It
+is controlled over a Unix socket per server process, so Stormlog must run on
+the server's host, and each process gives one window: its stop writes the
+trace and ends the helper.
+
 The profiler adds no synchronization per request; the server writes the trace
 while handling ``/stop_profile``, so that call can take tens of seconds.
 """
@@ -23,6 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import http.client
+import json
+import socket
 import time
 import urllib.error
 import urllib.parse
@@ -45,12 +53,16 @@ from .trace_kineto import SUPPORTED, Detail
 from .vllm_execution_devices import WorkerIndex
 
 VLLM_TORCH = "vllm-torch"
-TRACE_MODES = (VLLM_TORCH,)
+CUPTI = "cupti"
+TRACE_MODES = (VLLM_TORCH, CUPTI)
 TRACE_PHASES = ("measured", "warmup")
 # vLLM names worker traces rank<N>.*, or dp<D>_pp<P>_tp<T>_dcp<C>_ep<E>_rank<N>.*
 # when every parallel group exists (MoE models); the API server's own trace is
 # named *.async_llm.* and is not GPU work.
 TRACE_GLOB = "*.pt.trace.json*"
+# The CUPTI helper makes one private directory per process under its output dir.
+CUPTI_SOCKET_GLOB = "pid-*/stop.sock"
+CUPTI_TRACE_GLOB = "pid-*/activity.sclz"
 # What a /start_profile call established about the server's profiler.
 START_ACKNOWLEDGED = "acknowledged"
 START_REJECTED = "rejected"
@@ -87,6 +99,14 @@ class TraceCaptureConfig:
             raise ValueError(f"--trace must be one of {', '.join(TRACE_MODES)}")
         if self.phase not in TRACE_PHASES:
             raise ValueError(f"--trace-phase must be one of {', '.join(TRACE_PHASES)}")
+        if self.mode == CUPTI:
+            if self.trace_dir is None:
+                raise ValueError(
+                    "--trace cupti needs --trace-dir: the helper's "
+                    "STORMLOG_CUPTI_OUTPUT_DIR on this host"
+                )
+            if not hasattr(socket, "AF_UNIX"):
+                raise ValueError("--trace cupti needs Unix domain sockets")
         for name in ("max_seconds", "max_bytes"):
             value = getattr(self, name)
             if value is not None and value <= 0:
@@ -173,6 +193,81 @@ class HttpProfilerControl:
             return ControlResult(None, f"{type(exc).__name__}: {exc}")
 
 
+class CuptiControl:
+    """Start and stop the CUPTI helper in every traced process under ``directory``.
+
+    ``STRT`` enables activity collection; ``STOP`` flushes, writes
+    ``activity.sclz`` and ends the helper. Answers carry HTTP statuses so
+    ``TraceWindows`` classifies them as it does vLLM's: 200 when every helper
+    answered ``OK``, 404 when none started, and no status when some may have.
+    """
+
+    def __init__(self, directory: Path, *, timeout: float) -> None:
+        self.directory = directory
+        self.timeout = timeout
+        self._sockets: list[Path] = []
+
+    def post(self, route: str) -> ControlResult:
+        if route == "/start_profile":
+            self._sockets = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
+            if not self._sockets:
+                return ControlResult(
+                    404,
+                    f"no CUPTI helper socket under {self.directory}"
+                    + _helper_errors(self.directory),
+                )
+            answers = self._send_all(b"STRT")
+            if all(answer == "OK" for answer in answers.values()):
+                return ControlResult(200)
+            # ERR means that helper did not start; anything else may have.
+            started = 404 if all(a == "ERR" for a in answers.values()) else None
+            return ControlResult(
+                started, _failures(answers) + _helper_errors(self.directory)
+            )
+        answers = self._send_all(b"STOP")
+        if answers and all(answer == "OK" for answer in answers.values()):
+            return ControlResult(200)
+        return ControlResult(None, _failures(answers) or "no CUPTI helper to stop")
+
+    def _send_all(self, command: bytes) -> dict[Path, str]:
+        return {path: self._send(path, command) for path in self._sockets}
+
+    def _send(self, path: Path, command: bytes) -> str:
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                # A stop waits for the helper to flush and write its trace.
+                connection.settimeout(self.timeout)
+                connection.connect(str(path))
+                connection.sendall(command)
+                reply = connection.makefile("rb").readline(16)
+        except OSError as exc:
+            return f"{type(exc).__name__}: {exc}"
+        return reply.decode("ascii", "replace").strip() or "no reply"
+
+
+def _failures(answers: dict[Path, str]) -> str:
+    return "; ".join(
+        f"{path.parent.name}: {answer}"
+        for path, answer in answers.items()
+        if answer != "OK"
+    )
+
+
+def _helper_errors(directory: Path) -> str:
+    """Why helpers under ``directory`` failed, from their status files."""
+    errors = []
+    for path in sorted(directory.glob("pid-*/cupti_status.json")):
+        try:
+            error = json.loads(path.read_text(encoding="utf-8")).get(
+                "initialization_error"
+            )
+        except (OSError, ValueError, AttributeError):
+            continue
+        if error:
+            errors.append(f"{path.parent.name}: {error}")
+    return f" ({'; '.join(errors)})" if errors else ""
+
+
 @dataclass
 class TraceWindow:
     """One profiler window, recorded as an ``infer.trace_window`` event."""
@@ -200,7 +295,9 @@ class TraceWindow:
         default=None, repr=False, compare=False
     )
 
-    def to_record(self, *, session_id: str) -> dict[str, Any]:
+    def to_record(
+        self, *, session_id: str, trace_dir: Path | None = None
+    ) -> dict[str, Any]:
         return {
             "schema_version": 1,
             "event_type": "infer.trace_window",
@@ -220,7 +317,10 @@ class TraceWindow:
             "stop_error": self.stop.error if self.stop else None,
             "stop_reason": self.stop_reason,
             "stopped_at_ns": self.stopped_at_ns,
-            "trace_files": [path.name for path in self.files],
+            "trace_files": [
+                str(path.relative_to(trace_dir)) if trace_dir else path.name
+                for path in self.files
+            ],
             "note": self.note,
         }
 
@@ -237,11 +337,18 @@ class TraceWindows:
         on_warning: Callable[[str], None] | None = None,
     ) -> None:
         self.config = config
-        self.control = control or HttpProfilerControl(
-            config.control_url,
-            api_key=api_key,
-            timeout=config.control_timeout_seconds,
-        )
+        if control is not None:
+            self.control = control
+        elif config.mode == CUPTI and config.trace_dir is not None:
+            self.control = CuptiControl(
+                config.trace_dir, timeout=config.control_timeout_seconds
+            )
+        else:
+            self.control = HttpProfilerControl(
+                config.control_url,
+                api_key=api_key,
+                timeout=config.control_timeout_seconds,
+            )
         self.on_warning = on_warning
         self.windows: list[TraceWindow] = []
         self._unwritten: list[TraceWindow] = []
@@ -331,7 +438,8 @@ class TraceWindows:
     def take_records(self, *, session_id: str) -> list[dict[str, Any]]:
         """``infer.trace_window`` records for windows closed since the last call."""
         records = [
-            window.to_record(session_id=session_id) for window in self._unwritten
+            window.to_record(session_id=session_id, trace_dir=self.config.trace_dir)
+            for window in self._unwritten
         ]
         self._unwritten.clear()
         return records
@@ -410,7 +518,8 @@ class TraceWindows:
             return {}
         try:
             return {
-                path.name: path.stat().st_size for path in _worker_traces(directory)
+                name: path.stat().st_size
+                for name, path in _worker_traces(directory, self.config.mode)
             }
         except OSError as exc:
             # Without the files already there, new ones cannot be told apart.
@@ -423,7 +532,10 @@ class TraceWindows:
         directory = self.config.trace_dir
         if before is None or directory is None or not directory.is_dir():
             return False
-        return any(path.name not in before for path in _worker_traces(directory))
+        return any(
+            name not in before
+            for name, _ in _worker_traces(directory, self.config.mode)
+        )
 
     def _new_files(self, before: dict[str, int]) -> list[Path]:
         """Worker traces written since ``before``, once their sizes settle."""
@@ -434,9 +546,9 @@ class TraceWindows:
         previous: dict[str, int] | None = None
         while not _flush_over(started, previous, self.config):
             current = {
-                path.name: path.stat().st_size
-                for path in _worker_traces(directory)
-                if path.name not in before
+                name: path.stat().st_size
+                for name, path in _worker_traces(directory, self.config.mode)
+                if name not in before
             }
             if current and current == previous:
                 break
@@ -610,12 +722,17 @@ async def _finish_timer(timer: asyncio.Task[None] | None, window: TraceWindow) -
         raise error
 
 
-def _worker_traces(directory: Path) -> list[Path]:
-    return [
-        path
-        for path in directory.glob(TRACE_GLOB)
-        if path.is_file() and _is_worker_trace(path.name)
-    ]
+def _worker_traces(directory: Path, mode: str) -> list[tuple[str, Path]]:
+    """Each GPU worker's trace, keyed by its path below ``directory``."""
+    if mode == CUPTI:
+        paths = [path for path in directory.glob(CUPTI_TRACE_GLOB) if path.is_file()]
+    else:
+        paths = [
+            path
+            for path in directory.glob(TRACE_GLOB)
+            if path.is_file() and _is_worker_trace(path.name)
+        ]
+    return [(str(path.relative_to(directory)), path) for path in paths]
 
 
 def _is_worker_trace(name: str) -> bool:
@@ -625,6 +742,7 @@ def _is_worker_trace(name: str) -> bool:
 
 
 __all__ = [
+    "CUPTI",
     "START_ACKNOWLEDGED",
     "START_REJECTED",
     "START_UNKNOWN",
@@ -632,6 +750,7 @@ __all__ = [
     "TRACE_PHASES",
     "VLLM_TORCH",
     "ControlResult",
+    "CuptiControl",
     "HttpProfilerControl",
     "ProfilerControl",
     "TraceCaptureConfig",

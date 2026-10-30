@@ -49,7 +49,13 @@ from .slo import (
     parse_slo_flags,
     require_measured_window,
 )
-from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
+from .trace_capture import (
+    CUPTI,
+    TRACE_MODES,
+    TRACE_PHASES,
+    TraceCaptureConfig,
+    server_root,
+)
 from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
@@ -680,9 +686,13 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group(
         "profiler trace",
-        "Bounded vLLM torch-profiler windows. The server must be started with "
-        "--profiler-config.profiler=torch and torch_profiler_dir; Stormlog only "
-        "starts and stops the profiler and imports the worker traces.",
+        "Bounded profiler windows. vllm-torch: start the server with "
+        "--profiler-config.profiler=torch and torch_profiler_dir; keep windows "
+        "short with --trace-max-seconds, since the trace is written while "
+        "serving stalls. cupti (experimental, Linux NVIDIA): start the server "
+        "with Stormlog's CUPTI helper (docs/inference.md); one window per "
+        "server process, from the server's host. Stormlog only starts and stops "
+        "the profiler and imports the worker traces.",
     )
     group.add_argument(
         "--trace", choices=TRACE_MODES, default=None, help="Capture a profiler trace"
@@ -692,13 +702,17 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "The server's torch_profiler_dir as this host sees it; without it the "
-            "traces stay on the server for `stormlog infer import-trace`"
+            "traces stay on the server for `stormlog infer import-trace`. With "
+            "--trace cupti (required): the helper's STORMLOG_CUPTI_OUTPUT_DIR"
         ),
     )
     group.add_argument(
         "--trace-control-url",
         default=None,
-        help="Server root for /start_profile and /stop_profile (default: endpoint host)",
+        help=(
+            "Server root for /start_profile and /stop_profile (default: endpoint "
+            "host); not used by --trace cupti"
+        ),
     )
     group.add_argument(
         "--trace-phase",
@@ -736,9 +750,14 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
 def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
     if args.trace is None:
         return None
+    if args.trace == CUPTI and args.trace_dir:
+        # The helper's sockets are the control; record where they were.
+        control_url = Path(args.trace_dir).resolve().as_uri()
+    else:
+        control_url = args.trace_control_url or server_root(endpoint)
     return TraceCaptureConfig(
         mode=args.trace,
-        control_url=args.trace_control_url or server_root(endpoint),
+        control_url=control_url,
         trace_dir=Path(args.trace_dir) if args.trace_dir else None,
         phase=args.trace_phase,
         max_seconds=args.trace_max_seconds,
@@ -750,6 +769,8 @@ def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig
 
 def _validate_trace_arguments(args: argparse.Namespace) -> None:
     if args.trace is not None:
+        if args.trace == CUPTI and args.trace_control_url is not None:
+            raise ValueError("--trace cupti is controlled through --trace-dir")
         _validate_http_url(args.trace_control_url, "--trace-control-url")
         if args.trace_phase == "warmup" and args.warmup_requests < 1:
             raise ValueError(
