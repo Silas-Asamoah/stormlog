@@ -532,7 +532,9 @@ void WriteSynchronizationRecord(const CUpti_Activity* record) {
          << ",\"correlation_id\":"
          << JsonString(std::to_string(activity->correlationId))
          << ",\"stream_id\":"
-         << (activity->streamId == CUPTI_SYNCHRONIZATION_INVALID_VALUE
+         // Some CUPTI headers (pip's 13.0.85) define the sentinel as an int.
+         << (activity->streamId ==
+                     static_cast<std::uint32_t>(CUPTI_SYNCHRONIZATION_INVALID_VALUE)
                  ? "null"
                  : JsonString(std::to_string(activity->streamId)))
          << ",\"graph_id\":null,\"graph_node_id\":null"
