@@ -850,16 +850,21 @@ evaluation](../benchmarks/native_probes/decision_2026-10-05.md) deferred adoptin
 it. Use it only when you accept these measured limits (one NVIDIA L4, vLLM
 0.30.0, Qwen2.5-0.5B):
 
-- In eager mode, p95 latency rose 24–30% during the window (vLLM's profiler:
-  about 51%). The cost is CUPTI's API tracing itself. In CUDA-graph mode, one
-  post-hoc run at a 20 s window measured +0.8%.
+- **CUDA graphs (vLLM's default):** p95 latency during the window rose 1.0%
+  at a 20 s window, 1.6% at 80 s and 5.2% at 220 s. The server's memory grew
+  56, 240 and 666 MiB and was not released after the stop. The growth follows
+  the number of kernels traced, about 3 MiB per second at this load, and is
+  inside CUPTI or the driver, not in Stormlog's writer. Keep windows to tens of
+  seconds ([qualification](../benchmarks/native_probes/results_v2/qualification.md)).
+- **Eager mode:** p95 latency rose 24–30% during the window (vLLM's profiler:
+  about 51%). The cost is CUPTI's API tracing itself. The writer cannot keep
+  up: in an 80 s window, 94% of records were dropped once buffers reached the
+  32 MiB cap. The drops are counted in `event_loss`, but such a trace is not a
+  usable kernel timeline.
 - Kernel names, counts, launch correlation and CUDA-graph node attribution
   matched Nsight Systems.
 - Linux and NVIDIA only. Not tested on other GPUs, as a non-root user, or
   with overlapping streams.
-
-The helper's bounded buffer queue, its CUDA-runtime check and its subscriber
-check were added after that evaluation and are not yet qualified on hardware.
 
 **Build** the helper with the CUDA toolkit whose major version matches the
 server's CUDA runtime (for vLLM, the CUDA version of its torch build). The
@@ -910,9 +915,11 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   default 32 MiB), and kernels without timestamps. A trace whose
   `cupti_status.json` is not finalized, or names an error, is not imported.
 - **One CUPTI client per process.** The helper holds CUPTI's subscriber slot.
-  If Nsight Systems or another profiler holds it first, the helper reports that
-  error instead of capturing; while the helper holds it, vLLM's own profiler
-  cannot start in that process.
+  Do not also start vLLM's profiler in a server with the helper loaded: it
+  still writes a trace, but with CPU operators and no GPU activity, and
+  nothing in that trace says why. Under Nsight Systems, the helper refuses to
+  capture. If another profiler takes the slot first, the helper is meant to
+  report that error, but that case has not been tested on hardware.
 - **Clock and devices.** Timestamps are CUPTI's, not converted to wall time.
   The trace does not name GPU UUIDs, so give `--trace-device-uuid` to measure
   devices. The helper emits no iteration ranges.
