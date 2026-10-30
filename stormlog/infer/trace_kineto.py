@@ -138,10 +138,19 @@ def load_kineto_trace(path: str | Path) -> KinetoTrace:
     ):
         raise ValueError("not a Kineto trace: missing traceEvents")
     trace = _trace_header(document)
+    complete_events = 0
     for index, event in enumerate(document["traceEvents"]):
         if isinstance(event, dict) and event.get("ph") == "X":
+            complete_events += 1
             _add_checked_event(trace, event, index)
     index_spans(trace)
+    if complete_events and not trace.gpu_events:
+        # Seen when another CUPTI client (Stormlog's helper, Nsight) held the
+        # process: Kineto logs the failure but still writes its CPU events.
+        trace.notes.append(
+            f"the trace has {complete_events} CPU events but no GPU kernels, "
+            "copies or memsets; the profiler may not have had CUPTI"
+        )
     return trace
 
 
