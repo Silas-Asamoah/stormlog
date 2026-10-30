@@ -82,7 +82,7 @@ from .server_probe import (
 )
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
-from .trace_capture import TraceCaptureConfig, TraceWindows
+from .trace_capture import CUPTI, TraceCaptureConfig, TraceWindows
 from .trace_context import OFF, TRACEPARENT, TraceIds, new_trace_ids, traceparent
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
@@ -154,6 +154,7 @@ class InferenceProfiler:
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
         self._check_schedules()
+        self._check_trace_windows()
         # The repeated prompt by (seed, length): it is the same in every phase.
         self._repeated_prompts: dict[tuple[int, int], Prompt] = {}
         client_type: type[OpenAIChatCompletionsClient] = (
@@ -315,6 +316,14 @@ class InferenceProfiler:
                 f"--describe-server was taken {age / 3600:.1f} h ago by the "
                 "server's clock; describe the server again so it shows the "
                 "server this run measures"
+            )
+
+    def _check_trace_windows(self) -> None:
+        trace = self.config.trace
+        if trace is not None and trace.mode == CUPTI and len(self.config.cases()) > 1:
+            raise ValueError(
+                "--trace cupti traces one window per server process; "
+                "profile one case (a single --concurrency or --rate value)"
             )
 
     def _check_schedules(self) -> None:

@@ -28,6 +28,7 @@ from stormlog.infer.trace_capture import (
     START_REJECTED,
     START_UNKNOWN,
     ControlResult,
+    CuptiControl,
     HttpProfilerControl,
     TraceCaptureConfig,
     TraceWindows,
@@ -1296,11 +1297,11 @@ def test_a_trace_dir_unreadable_at_the_start_is_not_searched_later(
     real = trace_capture._worker_traces
     calls = {"n": 0}
 
-    def first_call_fails(directory: Path) -> list[Path]:
+    def first_call_fails(directory: Path, mode: str) -> list[tuple[str, Path]]:
         calls["n"] += 1
         if calls["n"] == 1:
             raise PermissionError(13, "Permission denied")
-        return real(directory)
+        return real(directory, mode)
 
     monkeypatch.setattr(trace_capture, "_worker_traces", first_call_fails)
 
@@ -1351,4 +1352,195 @@ def test_worker_trace_names_include_parallel_group_prefixes(
 
     (tmp_path / name).write_text("{}", encoding="utf-8")
 
-    assert bool(_worker_traces(tmp_path)) is worker
+    assert bool(_worker_traces(tmp_path, "vllm-torch")) is worker
+
+
+# ---------------------------------------------------------------- --trace cupti
+
+
+@pytest.fixture
+def cupti_dir() -> Iterator[Path]:
+    """A short private directory: a Unix socket path must fit in ~100 bytes."""
+    import shutil
+    import tempfile
+
+    directory = Path(tempfile.mkdtemp(prefix="slc", dir="/tmp"))
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+class _FakeHelper:
+    """A process's CUPTI helper socket: answers STRT, and on STOP writes its
+    trace and status, then closes, as ``native/cupti`` does."""
+
+    def __init__(self, root: Path, pid: int, *, start_reply: bytes = b"OK\n") -> None:
+        import socket
+
+        self.directory = root / f"pid-{pid}-abcdef"
+        self.directory.mkdir()
+        self.start_reply = start_reply
+        self.commands: list[bytes] = []
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(str(self.directory / "stop.sock"))
+        self.server.listen(4)
+        self.thread = threading.Thread(target=self._serve, daemon=True)
+        self.thread.start()
+
+    def _serve(self) -> None:
+        while True:
+            client, _ = self.server.accept()
+            with client:
+                command = client.recv(4)
+                self.commands.append(command)
+                if command == b"STRT":
+                    client.sendall(self.start_reply)
+                    continue
+                self._finalize()
+                client.sendall(b"OK\n")
+                self.server.close()
+                (self.directory / "stop.sock").unlink()
+                return
+
+    def _finalize(self) -> None:
+        import struct
+        import zlib
+
+        raw = (
+            json.dumps(
+                {
+                    "activity_kind": "kernel",
+                    "correlation_id": "1",
+                    "device_start_ns": 10,
+                    "device_end_ns": 20,
+                    "stream_id": "7",
+                    "graph_id": None,
+                    "graph_node_id": None,
+                    "metadata": {"name": "k", "device_id": 0},
+                }
+            ).encode()
+            + b"\n"
+        )
+        encoded = zlib.compress(raw)
+        (self.directory / "activity.sclz").write_bytes(
+            b"SLCPTZ1\n"
+            + struct.pack("<III", len(encoded), len(raw), 1)
+            + encoded
+            + struct.pack("<III", 0, 0, 0)
+        )
+        (self.directory / "cupti_status.json").write_text(
+            json.dumps({"finalized": True, "initialization_error": None})
+        )
+
+
+def test_cupti_control_starts_and_stops_every_helper(cupti_dir: Path) -> None:
+    helpers = [_FakeHelper(cupti_dir, 1), _FakeHelper(cupti_dir, 2)]
+    control = CuptiControl(cupti_dir, timeout=5)
+
+    assert control.post("/start_profile") == ControlResult(200)
+    assert control.post("/stop_profile") == ControlResult(200)
+    for helper in helpers:
+        helper.thread.join(5)
+        assert helper.commands == [b"STRT", b"STOP"]
+        assert (helper.directory / "activity.sclz").is_file()
+
+
+def test_cupti_control_without_a_helper_reports_why_none_started(
+    cupti_dir: Path,
+) -> None:
+    failed = cupti_dir / "pid-9-abcdef"
+    failed.mkdir()
+    (failed / "cupti_status.json").write_text(
+        json.dumps({"initialization_error": "helper built against CUDA 12060"})
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "pid-9-abcdef: helper built against CUDA 12060" in result.error
+
+
+def test_cupti_control_a_partial_start_is_unknown(cupti_dir: Path) -> None:
+    _FakeHelper(cupti_dir, 1)
+    _FakeHelper(cupti_dir, 2, start_reply=b"ERR\n")
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_UNKNOWN
+    assert result.error == "pid-2-abcdef: ERR"
+
+
+def test_cupti_control_every_helper_refusing_is_a_rejected_start(
+    cupti_dir: Path,
+) -> None:
+    _FakeHelper(cupti_dir, 1, start_reply=b"ERR\n")
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+
+
+def test_a_cupti_window_finds_and_imports_each_process_trace(
+    cupti_dir: Path,
+) -> None:
+    helpers = [_FakeHelper(cupti_dir, 1), _FakeHelper(cupti_dir, 2)]
+    from stormlog.infer.trace_import import TraceFileCollector
+
+    windows = TraceWindows(_config(cupti_dir, mode="cupti"))
+
+    window = _run_window(windows)
+
+    assert window.started and window.stop == ControlResult(200)
+    assert window.files == sorted(h.directory / "activity.sclz" for h in helpers)
+    (record,) = windows.take_records(session_id="s1")
+    assert record["trace_files"] == [
+        "pid-1-abcdef/activity.sclz",
+        "pid-2-abcdef/activity.sclz",
+    ]
+    capture = TraceFileCollector(window.files).collect(run_id="r", session_id="s")
+    summaries = (capture.summary or {})["traces"]
+    assert [s["format"] for s in summaries] == ["stormlog-cupti"] * 2
+
+
+def test_cupti_tracing_needs_a_trace_dir() -> None:
+    with pytest.raises(ValueError, match="--trace cupti needs --trace-dir"):
+        _config(None, mode="cupti")
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (
+            ["--trace-dir", "/tmp", "--concurrency", "1,2"],
+            "--trace cupti traces one window per server process",
+        ),
+        (
+            ["--trace-dir", "/tmp", "--trace-control-url", "http://h:1"],
+            "--trace cupti is controlled through --trace-dir",
+        ),
+        ([], "--trace cupti needs --trace-dir"),
+    ],
+)
+def test_cupti_tracing_usage_errors(
+    tmp_path: Path, extra: list[str], message: str
+) -> None:
+    stderr = io.StringIO()
+    with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+        code = infer_main(
+            [
+                "profile",
+                "--endpoint",
+                "http://127.0.0.1:1/v1/chat/completions",
+                "--model",
+                "m",
+                "--output",
+                str(tmp_path / "out.jsonl"),
+                "--trace",
+                "cupti",
+                *extra,
+            ]
+        )
+    assert code == int(ExitCode.USAGE)
+    assert message in stderr.getvalue()

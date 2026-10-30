@@ -988,7 +988,97 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   A30, with stacks off and `ignore_frontend=true`, output tokens per second fell
   0.4–1.3% for Qwen2.5-7B and 4.4–6.5% for Qwen2.5-0.5B, and requests per step
   were unchanged within 0.5%. A trace import never treats CPU launch time as GPU
-  time.
+  time. The stop's cost grows with the window: on an NVIDIA L4 (vLLM 0.30.0,
+  Qwen2.5-0.5B, eager), a 5 s window added 1.7 GiB of server RSS and stalled
+  serving for 33 s at the stop, and a 20 s window added 7.3 GiB and stalled it
+  for 138 s ([issue #118 evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239)).
+  Keep windows short with `--trace-max-seconds`.
+
+### Experimental: direct CUPTI traces
+
+`--trace cupti` captures CUDA runtime, driver and kernel activity with
+Stormlog's own CUPTI helper (`native/cupti`), instead of vLLM's profiler. It is
+**experimental and off by default**: the [issue #118
+evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239) deferred adopting
+it. Use it only when you accept these measured limits (one NVIDIA L4, vLLM
+0.30.0, Qwen2.5-0.5B):
+
+- **CUDA graphs (vLLM's default):** p95 latency during the window rose 1.0%
+  at a 20 s window, 1.6% at 80 s and 5.2% at 220 s. The server's memory grew
+  56, 240 and 666 MiB and was not released after the stop. The growth follows
+  the number of kernels traced, about 3 MiB per second at this load, and is
+  inside CUPTI or the driver, not in Stormlog's writer. Keep windows to tens of
+  seconds.
+- **Eager mode:** p95 latency rose 24–30% during the window (vLLM's profiler:
+  about 51%). The cost is CUPTI's API tracing itself. The writer cannot keep
+  up: in an 80 s window, 94% of records were dropped once buffers reached the
+  32 MiB cap. The drops are counted in `event_loss`, but such a trace is not a
+  usable kernel timeline.
+- Kernel names, counts, launch correlation and CUDA-graph node attribution
+  matched Nsight Systems.
+- Linux and NVIDIA only. Not tested on other GPUs, as a non-root user, or
+  with overlapping streams.
+
+**Build** the helper with the CUDA toolkit whose major version matches the
+server's CUDA runtime (for vLLM, the CUDA version of its torch build). The
+helper refuses to capture when they differ: a CUPTI from another major version
+lost 39% of kernel timestamps without reporting a drop. The runtime is often
+loaded after the helper, so the versions are compared when the window starts,
+and again when it stops; a process whose CUDA runtime cannot be found by then
+is not captured.
+
+```bash
+cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cupti
+```
+
+**Start the server** with the helper injected, deferred until Stormlog starts
+the window:
+
+```bash
+install -d -m 0700 /var/tmp/stormlog-cupti   # owned by the server's user
+CUDA_INJECTION64_PATH=$PWD/build/cupti/libstormlog_cupti_injection.so \
+STORMLOG_CUPTI_OUTPUT_DIR=/var/tmp/stormlog-cupti \
+STORMLOG_CUPTI_DEFER_START=1 \
+STORMLOG_CUPTI_ACTIVITIES=runtime,driver,kernel \
+STORMLOG_CUPTI_MAX_BYTES=4294967296 \
+vllm serve MODEL ...
+```
+
+**Profile** from the same host, as the server's user:
+
+```bash
+stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
+  --concurrency 8 --requests 512 \
+  --trace cupti --trace-dir /var/tmp/stormlog-cupti \
+  --trace-max-seconds 20 --trace-device-uuid 0=GPU-6d1f0c5e-...
+```
+
+- **Control.** Each traced process gets a private `pid-<PID>-*` directory with
+  a Unix socket. Stormlog sends start and stop over these sockets, which is why
+  it must run on the server's host. The window rules above apply unchanged: a
+  start that every helper refused is `rejected`, and a start some helpers took
+  is `unknown` and stopped at once.
+- **One window per server process.** The stop writes `activity.sclz` and ends
+  the helper, so a run must have a single case. Restart the server for another
+  window.
+- **Loss is reported, not hidden.** The import summary's `event_loss` counts
+  records CUPTI dropped, records past `STORMLOG_CUPTI_MAX_BYTES`, activity
+  buffers refused while the writer was behind (`STORMLOG_CUPTI_MAX_BUFFER_BYTES`,
+  default 32 MiB), and kernels without timestamps. A trace whose
+  `cupti_status.json` is not finalized, or names an error, is not imported.
+- **One CUPTI client per process.** The helper holds CUPTI's subscriber slot.
+  Do not also start vLLM's profiler in a server with the helper loaded: it
+  still writes a trace, but with CPU operators and no GPU activity, and
+  nothing in that trace says why. Under Nsight Systems, the helper refuses to
+  capture. If another profiler takes the slot first, the helper is meant to
+  report that error, but that case has not been tested on hardware.
+- **Clock and devices.** Timestamps are CUPTI's, not converted to wall time.
+  The trace does not name GPU UUIDs, so give `--trace-device-uuid` to measure
+  devices. The helper emits no iteration ranges.
+
+A finished `activity.sclz` can also be imported later with
+`stormlog infer import-trace ARTIFACT /var/tmp/stormlog-cupti/pid-*/activity.sclz`.
 
 For a PyTorch program that is not behind a server, `capture_torch_trace`
 profiles a block in-process and writes a trace for `import-trace`:
