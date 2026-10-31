@@ -267,7 +267,14 @@ class CuptiControl:
                 "socket(s) had no listener, left by processes that ended "
                 "without a stop"
             )
-        return message + _helper_errors(self.directory)
+        errors = _helper_errors(self.directory)
+        if not errors:
+            # A helper that fails before making its directory writes no status.
+            errors = (
+                "; a helper that could not start prints why on the server's "
+                "stderr, as a 'stormlog-cupti:' line"
+            )
+        return message + errors
 
     def _send_all(self, command: bytes, paths: list[Path]) -> dict[Path, str]:
         """Send ``command`` to every helper at once, so their windows line up.

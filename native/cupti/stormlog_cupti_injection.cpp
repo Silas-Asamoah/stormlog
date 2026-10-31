@@ -1215,6 +1215,16 @@ void Initialize() {
   }
 }
 
+// An error found before the process directory exists has no status file to
+// go in: print it, so the server's log says why nothing was captured.
+void ReportUnrecordedError() {
+  if (g_state.directory_fd >= 0 || !HasInitializationError()) {
+    return;
+  }
+  WriteAll(STDERR_FILENO,
+           "stormlog-cupti: not capturing: " + InitializationError() + "\n");
+}
+
 }  // namespace
 
 #if defined(__GNUC__)
@@ -1233,6 +1243,7 @@ extern "C" STORMLOG_EXPORT int InitializeInjection() {
     SetInitializationError("unknown initialization failure");
     WriteStatus();
   }
+  ReportUnrecordedError();
   // Tracing failures never prevent the target CUDA application from starting.
   return 1;
 }

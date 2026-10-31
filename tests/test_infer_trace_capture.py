@@ -1534,6 +1534,16 @@ def test_cupti_control_skips_sockets_nobody_listens_on(cupti_dir: Path) -> None:
     assert helper.commands == [b"STRT", b"STOP"]
 
 
+def test_cupti_control_without_any_helper_points_at_the_servers_stderr(
+    cupti_dir: Path,
+) -> None:
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "'stormlog-cupti:' line" in result.error
+
+
 def test_cupti_control_with_only_dead_sockets_starts_nothing(
     cupti_dir: Path,
 ) -> None:
