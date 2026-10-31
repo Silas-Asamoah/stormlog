@@ -191,8 +191,14 @@ std::string CuptiError(CUptiResult result) {
   return "CUPTI error " + std::to_string(static_cast<int>(result));
 }
 
+// strtoull skips leading spaces and accepts a sign, and "-1" wraps to the
+// largest value: a setting must start with a digit.
+bool StartsWithDigit(const char* value) {
+  return value != nullptr && *value >= '0' && *value <= '9';
+}
+
 bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
-  if (value == nullptr || *value == '\0') {
+  if (!StartsWithDigit(value)) {
     return false;
   }
   errno = 0;
@@ -206,7 +212,7 @@ bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
 }
 
 bool ParseNonnegativeInteger(const char* value, std::uint64_t* result) {
-  if (value == nullptr || *value == '\0' || *value == '-') {
+  if (!StartsWithDigit(value)) {
     return false;
   }
   errno = 0;
