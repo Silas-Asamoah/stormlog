@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1375,13 +1376,23 @@ class _FakeHelper:
     """A process's CUPTI helper socket: answers STRT, and on STOP writes its
     trace and status, then closes, as ``native/cupti`` does."""
 
-    def __init__(self, root: Path, pid: int, *, start_reply: bytes = b"OK\n") -> None:
+    def __init__(
+        self,
+        root: Path,
+        pid: int,
+        *,
+        start_reply: bytes = b"OK\n",
+        stop_seconds: float = 0.0,
+    ) -> None:
         import socket
 
         self.directory = root / f"pid-{pid}-abcdef"
         self.directory.mkdir()
         self.start_reply = start_reply
+        self.stop_seconds = stop_seconds
         self.commands: list[bytes] = []
+        # When each STOP arrived and was answered (time.monotonic()).
+        self.stop_times: list[float] = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(self.directory / "stop.sock"))
         self.server.listen(4)
@@ -1397,7 +1408,10 @@ class _FakeHelper:
                 if command == b"STRT":
                     client.sendall(self.start_reply)
                     continue
+                self.stop_times.append(time.monotonic())
+                time.sleep(self.stop_seconds)
                 self._finalize()
+                self.stop_times.append(time.monotonic())
                 client.sendall(b"OK\n")
                 self.server.close()
                 (self.directory / "stop.sock").unlink()
@@ -1480,6 +1494,20 @@ def test_cupti_control_every_helper_refusing_is_a_rejected_start(
     result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
 
     assert start_outcome(result) == START_REJECTED
+
+
+def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path) -> None:
+    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=0.5) for n in (1, 2, 3)]
+    control = CuptiControl(cupti_dir, timeout=5)
+    assert control.post("/start_profile") == ControlResult(200)
+
+    assert control.post("/stop_profile") == ControlResult(200)
+
+    arrived = [helper.stop_times[0] for helper in helpers]
+    answered = [helper.stop_times[1] for helper in helpers]
+    # Sent one by one, a helper's stop would arrive only after the previous
+    # helper had answered.
+    assert max(arrived) < min(answered)
 
 
 def _dead_socket(root: Path, pid: int) -> Path:

@@ -36,6 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -249,7 +250,16 @@ class CuptiControl:
         return message + _helper_errors(self.directory)
 
     def _send_all(self, command: bytes, paths: list[Path]) -> dict[Path, str]:
-        return {path: self._send(path, command) for path in paths}
+        """Send ``command`` to every helper at once, so their windows line up.
+
+        Each stop waits for its helper to write its trace; sent one by one,
+        the last process would keep tracing for the sum of the others' writes.
+        """
+        if len(paths) < 2:
+            return {path: self._send(path, command) for path in paths}
+        with ThreadPoolExecutor(max_workers=min(len(paths), 32)) as pool:
+            replies = pool.map(lambda path: self._send(path, command), paths)
+            return dict(zip(paths, replies))
 
     def _send(self, path: Path, command: bytes) -> str:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
