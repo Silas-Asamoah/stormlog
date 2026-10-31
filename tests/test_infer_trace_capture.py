@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1368,6 +1369,8 @@ def cupti_dir() -> Iterator[Path]:
     try:
         yield directory
     finally:
+        while _FakeHelper.live:
+            _FakeHelper.live.pop().close()
         shutil.rmtree(directory, ignore_errors=True)
 
 
@@ -1375,29 +1378,60 @@ class _FakeHelper:
     """A process's CUPTI helper socket: answers STRT, and on STOP writes its
     trace and status, then closes, as ``native/cupti`` does."""
 
-    def __init__(self, root: Path, pid: int, *, start_reply: bytes = b"OK\n") -> None:
+    # Helpers still serving; the cupti_dir fixture closes them after a test.
+    live: list[_FakeHelper] = []
+
+    def __init__(
+        self,
+        root: Path,
+        pid: int,
+        *,
+        start_reply: bytes = b"OK\n",
+        stop_seconds: float = 0.0,
+    ) -> None:
         import socket
 
         self.directory = root / f"pid-{pid}-abcdef"
         self.directory.mkdir()
         self.start_reply = start_reply
+        self.stop_seconds = stop_seconds
         self.commands: list[bytes] = []
+        # When each STOP arrived and was answered (time.monotonic()).
+        self.stop_times: list[float] = []
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.server.bind(str(self.directory / "stop.sock"))
         self.server.listen(4)
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
+        _FakeHelper.live.append(self)
+
+    def close(self) -> None:
+        """End a helper that was never stopped: wake its accept and join it."""
+        import socket
+
+        if self.thread.is_alive():
+            with contextlib.suppress(OSError):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as poke:
+                    poke.connect(str(self.directory / "stop.sock"))
+                    poke.sendall(b"QUIT")
+            self.thread.join(5)
+        self.server.close()
 
     def _serve(self) -> None:
         while True:
             client, _ = self.server.accept()
             with client:
                 command = client.recv(4)
+                if command == b"QUIT":
+                    return
                 self.commands.append(command)
                 if command == b"STRT":
                     client.sendall(self.start_reply)
                     continue
+                self.stop_times.append(time.monotonic())
+                time.sleep(self.stop_seconds)
                 self._finalize()
+                self.stop_times.append(time.monotonic())
                 client.sendall(b"OK\n")
                 self.server.close()
                 (self.directory / "stop.sock").unlink()
@@ -1482,6 +1516,146 @@ def test_cupti_control_every_helper_refusing_is_a_rejected_start(
     assert start_outcome(result) == START_REJECTED
 
 
+def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path) -> None:
+    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=0.5) for n in (1, 2, 3)]
+    control = CuptiControl(cupti_dir, timeout=5)
+    assert control.post("/start_profile") == ControlResult(200)
+
+    assert control.post("/stop_profile") == ControlResult(200)
+
+    arrived = [helper.stop_times[0] for helper in helpers]
+    answered = [helper.stop_times[1] for helper in helpers]
+    # Sent one by one, a helper's stop would arrive only after the previous
+    # helper had answered.
+    assert max(arrived) < min(answered)
+
+
+def _dead_socket(root: Path, pid: int) -> Path:
+    """The socket a helper leaves when its process is killed before a stop."""
+    import socket
+
+    directory = root / f"pid-{pid}-dead00"
+    directory.mkdir()
+    path = directory / "stop.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.close()
+    return path
+
+
+def test_cupti_control_skips_sockets_nobody_listens_on(cupti_dir: Path) -> None:
+    _dead_socket(cupti_dir, 7)
+    helper = _FakeHelper(cupti_dir, 8)
+    control = CuptiControl(cupti_dir, timeout=5)
+
+    assert control.post("/start_profile") == ControlResult(200)
+    assert control.post("/stop_profile") == ControlResult(200)
+    helper.thread.join(5)
+    assert helper.commands == [b"STRT", b"STOP"]
+
+
+def test_cupti_control_without_any_helper_points_at_the_servers_stderr(
+    cupti_dir: Path,
+) -> None:
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "'stormlog-cupti:' line" in result.error
+
+
+def test_cupti_control_with_only_dead_sockets_starts_nothing(
+    cupti_dir: Path,
+) -> None:
+    _dead_socket(cupti_dir, 7)
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "no live CUPTI helper" in result.error
+    assert "1 socket(s) had no listener" in result.error
+
+
+def test_cupti_control_names_only_the_answering_helpers_errors(
+    cupti_dir: Path,
+) -> None:
+    earlier = cupti_dir / "pid-3-old000"
+    earlier.mkdir()
+    (earlier / "cupti_status.json").write_text(
+        json.dumps({"initialization_error": "an earlier server's error"})
+    )
+    helper = _FakeHelper(cupti_dir, 4, start_reply=b"ERR\n")
+    (helper.directory / "cupti_status.json").write_text(
+        json.dumps({"initialization_error": "this helper's error"})
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error == "pid-4-abcdef: ERR (pid-4-abcdef: this helper's error)"
+
+
+def test_cupti_control_says_why_an_undeferred_helper_refuses_to_start(
+    cupti_dir: Path,
+) -> None:
+    helper = _FakeHelper(cupti_dir, 5, start_reply=b"ERR\n")
+    # What the helper's STRT handler writes when capture began at injection.
+    (helper.directory / "cupti_status.json").write_text(
+        json.dumps(
+            {
+                "defer_start": False,
+                "activities_enabled": True,
+                "initialization_error": None,
+            }
+        )
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "capturing since the process started" in result.error
+    assert "STORMLOG_CUPTI_DEFER_START=1" in result.error
+
+
+def test_a_finished_undeferred_run_is_not_reported_as_capturing(
+    cupti_dir: Path,
+) -> None:
+    # What an undeferred helper leaves behind when its process exits.
+    earlier = cupti_dir / "pid-6-old000"
+    earlier.mkdir()
+    (earlier / "cupti_status.json").write_text(
+        json.dumps(
+            {
+                "defer_start": False,
+                "activities_enabled": True,
+                "finalized": True,
+                "initialization_error": None,
+            }
+        )
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "capturing since the process started" not in result.error
+
+
+def test_a_cupti_window_is_not_spoiled_by_a_killed_servers_socket(
+    cupti_dir: Path,
+) -> None:
+    _dead_socket(cupti_dir, 7)
+    helper = _FakeHelper(cupti_dir, 8)
+    windows = TraceWindows(_config(cupti_dir, mode="cupti"))
+
+    window = _run_window(windows)
+
+    assert window.started and window.stop == ControlResult(200)
+    assert window.files == [helper.directory / "activity.sclz"]
+
+
 def test_a_cupti_window_finds_and_imports_each_process_trace(
     cupti_dir: Path,
 ) -> None:
@@ -1507,6 +1681,20 @@ def test_a_cupti_window_finds_and_imports_each_process_trace(
 def test_cupti_tracing_needs_a_trace_dir() -> None:
     with pytest.raises(ValueError, match="--trace cupti needs --trace-dir"):
         _config(None, mode="cupti")
+
+
+def test_cupti_tracing_refuses_a_trace_dir_its_sockets_cannot_fit_under() -> None:
+    from stormlog.infer.trace_capture import (
+        CUPTI_SOCKET_SUFFIX,
+        UNIX_SOCKET_PATH_BYTES,
+    )
+
+    longest_ok = "/" + "d" * (UNIX_SOCKET_PATH_BYTES - len(CUPTI_SOCKET_SUFFIX) - 1)
+    _config(Path(longest_ok), mode="cupti")
+    _config(Path("/var/tmp/stormlog-cupti"), mode="cupti")
+
+    with pytest.raises(ValueError, match="--trace-dir is too long for --trace cupti"):
+        _config(Path(longest_ok + "d"), mode="cupti")
 
 
 @pytest.mark.parametrize(

@@ -961,7 +961,10 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
         "--trace-max-bytes",
         type=int,
         default=None,
-        help="Register but do not import a trace file larger than this",
+        help=(
+            "Register but do not import a trace file larger than this many "
+            "bytes on disk (compressed, for .gz and .sclz traces)"
+        ),
     )
     group.add_argument(
         "--trace-device-uuid",

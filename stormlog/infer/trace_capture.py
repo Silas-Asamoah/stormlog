@@ -30,12 +30,15 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
 import socket
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +51,7 @@ from .correlation_capture import (
     TraceCapture,
     append_inference_capture,
 )
+from .trace_cupti import STATUS_FILENAME
 from .trace_import import DeviceUuids, TraceFileCollector
 from .trace_kineto import SUPPORTED, Detail
 from .vllm_execution_devices import WorkerIndex
@@ -63,6 +67,11 @@ TRACE_GLOB = "*.pt.trace.json*"
 # The CUPTI helper makes one private directory per process under its output dir.
 CUPTI_SOCKET_GLOB = "pid-*/stop.sock"
 CUPTI_TRACE_GLOB = "pid-*/activity.sclz"
+# The longest socket path below the trace dir: pid_max is at most 2**22.
+CUPTI_SOCKET_SUFFIX = "/pid-4194304-XXXXXX/stop.sock"
+# sun_path holds 108 bytes on Linux and 104 on macOS and the BSDs; keep one
+# for the terminating NUL.
+UNIX_SOCKET_PATH_BYTES = (108 if sys.platform.startswith("linux") else 104) - 1
 # What a /start_profile call established about the server's profiler.
 START_ACKNOWLEDGED = "acknowledged"
 START_REJECTED = "rejected"
@@ -100,17 +109,30 @@ class TraceCaptureConfig:
         if self.phase not in TRACE_PHASES:
             raise ValueError(f"--trace-phase must be one of {', '.join(TRACE_PHASES)}")
         if self.mode == CUPTI:
-            if self.trace_dir is None:
-                raise ValueError(
-                    "--trace cupti needs --trace-dir: the helper's "
-                    "STORMLOG_CUPTI_OUTPUT_DIR on this host"
-                )
-            if not hasattr(socket, "AF_UNIX"):
-                raise ValueError("--trace cupti needs Unix domain sockets")
+            self._check_cupti()
         for name in ("max_seconds", "max_bytes"):
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"trace {name} must be > 0")
+
+    def _check_cupti(self) -> None:
+        if self.trace_dir is None:
+            raise ValueError(
+                "--trace cupti needs --trace-dir: the helper's "
+                "STORMLOG_CUPTI_OUTPUT_DIR on this host"
+            )
+        if not hasattr(socket, "AF_UNIX"):
+            raise ValueError("--trace cupti needs Unix domain sockets")
+        # Stormlog connects by path, so the sockets must fit in sun_path.
+        longest = len(os.fsencode(self.trace_dir)) + len(CUPTI_SOCKET_SUFFIX)
+        if longest > UNIX_SOCKET_PATH_BYTES:
+            limit = UNIX_SOCKET_PATH_BYTES - len(CUPTI_SOCKET_SUFFIX)
+            raise ValueError(
+                f"--trace-dir is too long for --trace cupti: the helpers' "
+                f"sockets below it can need {longest} bytes, and a Unix socket "
+                f"path holds {UNIX_SOCKET_PATH_BYTES}; use a directory path of "
+                f"at most {limit} bytes"
+            )
 
 
 def server_root(endpoint: str) -> str:
@@ -200,6 +222,10 @@ class CuptiControl:
     ``activity.sclz`` and ends the helper. Answers carry HTTP statuses so
     ``TraceWindows`` classifies them as it does vLLM's: 200 when every helper
     answered ``OK``, 404 when none started, and no status when some may have.
+
+    A socket nobody listens on was left by a process that ended without its
+    helper's stop (SIGKILL, a crash): the command never reached a helper, so
+    it is skipped rather than read as a start that may have taken effect.
     """
 
     def __init__(self, directory: Path, *, timeout: float) -> None:
@@ -210,42 +236,78 @@ class CuptiControl:
     def post(self, route: str) -> ControlResult:
         if route == "/start_profile":
             return self._start()
-        answers = self._send_all(b"STOP")
+        answers = self._send_all(b"STOP", self._sockets)
         if answers and all(answer == "OK" for answer in answers.values()):
             return ControlResult(200)
         return ControlResult(None, _failures(answers) or "no CUPTI helper to stop")
 
     def _start(self) -> ControlResult:
-        self._sockets = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
-        if not self._sockets:
-            return ControlResult(
-                404,
-                f"no CUPTI helper socket under {self.directory}"
-                + _helper_errors(self.directory),
-            )
-        answers = self._send_all(b"STRT")
+        found = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
+        answers = {
+            path: answer
+            for path, answer in self._send_all(b"STRT", found).items()
+            if answer != _NO_HELPER
+        }
+        self._sockets = list(answers)
+        if not answers:
+            return ControlResult(404, self._no_helper(len(found)))
         if all(answer == "OK" for answer in answers.values()):
             return ControlResult(200)
         # ERR means that helper did not start; anything else may have.
         started = 404 if all(a == "ERR" for a in answers.values()) else None
         return ControlResult(
-            started, _failures(answers) + _helper_errors(self.directory)
+            started, _failures(answers) + _helper_errors(self.directory, answers)
         )
 
-    def _send_all(self, command: bytes) -> dict[Path, str]:
-        return {path: self._send(path, command) for path in self._sockets}
+    def _no_helper(self, stale: int) -> str:
+        message = f"no CUPTI helper socket under {self.directory}"
+        if stale:
+            message = (
+                f"no live CUPTI helper under {self.directory}: {stale} "
+                "socket(s) had no listener, left by processes that ended "
+                "without a stop"
+            )
+        errors = _helper_errors(self.directory)
+        if not errors:
+            # A helper that fails before making its directory writes no status.
+            errors = (
+                "; a helper that could not start prints why on the server's "
+                "stderr, as a 'stormlog-cupti:' line"
+            )
+        return message + errors
+
+    def _send_all(self, command: bytes, paths: list[Path]) -> dict[Path, str]:
+        """Send ``command`` to every helper at once, so their windows line up.
+
+        Each stop waits for its helper to write its trace; sent one by one,
+        the last process would keep tracing for the sum of the others' writes.
+        """
+        if len(paths) < 2:
+            return {path: self._send(path, command) for path in paths}
+        with ThreadPoolExecutor(max_workers=min(len(paths), 32)) as pool:
+            replies = pool.map(lambda path: self._send(path, command), paths)
+            return dict(zip(paths, replies))
 
     def _send(self, path: Path, command: bytes) -> str:
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                # A stop waits for the helper to flush and write its trace.
-                connection.settimeout(self.timeout)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            # A stop waits for the helper to flush and write its trace.
+            connection.settimeout(self.timeout)
+            try:
                 connection.connect(str(path))
+            except (ConnectionRefusedError, FileNotFoundError):
+                return _NO_HELPER
+            except OSError as exc:
+                return f"{type(exc).__name__}: {exc}"
+            try:
                 connection.sendall(command)
                 reply = connection.makefile("rb").readline(16)
-        except OSError as exc:
-            return f"{type(exc).__name__}: {exc}"
+            except OSError as exc:
+                return f"{type(exc).__name__}: {exc}"
         return reply.decode("ascii", "replace").strip() or "no reply"
+
+
+# What _send answers for a socket file with no helper listening on it.
+_NO_HELPER = "no helper listening"
 
 
 def _failures(answers: dict[Path, str]) -> str:
@@ -256,19 +318,47 @@ def _failures(answers: dict[Path, str]) -> str:
     )
 
 
-def _helper_errors(directory: Path) -> str:
-    """Why helpers under ``directory`` failed, from their status files."""
+def _helper_errors(directory: Path, answered: dict[Path, str] | None = None) -> str:
+    """Why helpers under ``directory`` failed, from their status files.
+
+    With ``answered``, only the helpers that answered are read, so status files
+    left by earlier servers in the same directory do not join the message.
+    """
+    paths = (
+        sorted(directory.glob(f"pid-*/{STATUS_FILENAME}"))
+        if answered is None
+        else [socket_path.with_name(STATUS_FILENAME) for socket_path in answered]
+    )
     errors = []
-    for path in sorted(directory.glob("pid-*/cupti_status.json")):
-        try:
-            error = json.loads(path.read_text(encoding="utf-8")).get(
-                "initialization_error"
-            )
-        except (OSError, ValueError, AttributeError):
-            continue
+    for path in paths:
+        error = _status_error(path)
         if error:
             errors.append(f"{path.parent.name}: {error}")
     return f" ({'; '.join(errors)})" if errors else ""
+
+
+def _status_error(path: Path) -> str | None:
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+        error = status.get("initialization_error")
+        undeferred = status.get("defer_start") is False
+        # Still capturing: an undeferred run that ended leaves the same flags.
+        capturing = (
+            status.get("activities_enabled") is True
+            and status.get("finalized") is not True
+        )
+    except (OSError, ValueError, AttributeError):
+        return None
+    if error:
+        return str(error)
+    if undeferred and capturing:
+        # Such a helper refuses STRT: it has captured since the process
+        # started, and records until it exits or is stopped.
+        return (
+            "capturing since the process started; start the server with "
+            "STORMLOG_CUPTI_DEFER_START=1"
+        )
+    return None
 
 
 @dataclass

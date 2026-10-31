@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.0";
+constexpr char kHelperVersion[] = "0.4.1";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -124,6 +124,8 @@ struct CaptureState {
   bool defer_start{false};
   std::atomic<bool> activities_enabled{false};
   bool finalized{false};
+  // The process that loaded the helper; a fork()ed child inherits the state.
+  pid_t owner_pid{0};
   std::string initialization_error;
   std::string driver_version;
   std::string runtime_version;
@@ -138,7 +140,9 @@ using KernelRecord = CUpti_ActivityKernel10;
 using KernelRecord = CUpti_ActivityKernel9;
 #endif
 
-CaptureState g_state;
+// Never destroyed: at exit, a fork()ed child still holds the parent's thread
+// objects, whose destructors would call std::terminate.
+CaptureState& g_state = *new CaptureState();
 std::once_flag g_initialize_once;
 std::once_flag g_finalize_once;
 
@@ -191,8 +195,14 @@ std::string CuptiError(CUptiResult result) {
   return "CUPTI error " + std::to_string(static_cast<int>(result));
 }
 
+// strtoull skips leading spaces and accepts a sign, and "-1" wraps to the
+// largest value: a setting must start with a digit.
+bool StartsWithDigit(const char* value) {
+  return value != nullptr && *value >= '0' && *value <= '9';
+}
+
 bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
-  if (value == nullptr || *value == '\0') {
+  if (!StartsWithDigit(value)) {
     return false;
   }
   errno = 0;
@@ -206,7 +216,7 @@ bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
 }
 
 bool ParseNonnegativeInteger(const char* value, std::uint64_t* result) {
-  if (value == nullptr || *value == '\0' || *value == '-') {
+  if (!StartsWithDigit(value)) {
     return false;
   }
   errno = 0;
@@ -845,7 +855,15 @@ bool EnableActivities() {
   return true;
 }
 
+// A child that fork()s without exec and then exits runs the inherited
+// atexit handlers. Its descriptors are the parent's, and its writer and
+// control threads do not exist, so it must leave the capture alone.
+bool InForkedChild() { return getpid() != g_state.owner_pid; }
+
 void Finalize() {
+  if (InForkedChild()) {
+    return;
+  }
   std::call_once(g_finalize_once, [] {
     if (g_state.initialized) {
       // Disable first so no record is produced after the final flush.
@@ -873,6 +891,17 @@ void Finalize() {
     }
     // The forced flush has queued every buffer; write them before closing.
     StopWriter();
+    // Judge the capture before the trace is finalized, so a capture that
+    // cannot be trusted keeps its .partial name and no end frame.
+    if (g_state.initialized && !g_state.activities_enabled.load()) {
+      SetInitializationError("capture was stopped before it was started");
+    } else if (g_state.initialized) {
+      // The records cannot be trusted unless the runtime matched by now.
+      const std::string mismatch = RuntimeMismatch();
+      if (!mismatch.empty()) {
+        SetInitializationError(mismatch);
+      }
+    }
     if (g_state.trace_fd >= 0) {
       {
         std::lock_guard<std::mutex> lock(g_state.output_mutex);
@@ -902,15 +931,6 @@ void Finalize() {
         SetSystemError("capture directory fsync failed");
       }
     }
-    if (g_state.initialized && !g_state.activities_enabled.load()) {
-      SetInitializationError("capture was stopped before it was started");
-    } else if (g_state.initialized) {
-      // The records cannot be trusted unless the runtime matched by now.
-      const std::string mismatch = RuntimeMismatch();
-      if (!mismatch.empty()) {
-        SetInitializationError(mismatch);
-      }
-    }
     g_state.finalized = g_state.initialized && !HasInitializationError();
     WriteStatus();
     const int control_fd = g_state.control_fd.exchange(-1);
@@ -927,9 +947,29 @@ void Finalize() {
 }
 
 void JoinControl() {
+  if (InForkedChild()) {
+    return;
+  }
   if (g_state.control_thread.joinable() &&
       g_state.control_thread.get_id() != std::this_thread::get_id()) {
     g_state.control_thread.join();
+  }
+}
+
+// MSG_NOSIGNAL: a client that has gone away must not raise SIGPIPE in the
+// traced process, whose default action would end it.
+void SendReply(int client, std::string_view reply) {
+  std::size_t offset = 0;
+  while (offset < reply.size()) {
+    const ssize_t sent = send(client, reply.data() + offset,
+                              reply.size() - offset, MSG_NOSIGNAL);
+    if (sent < 0 && errno == EINTR) {
+      continue;
+    }
+    if (sent <= 0) {
+      return;
+    }
+    offset += static_cast<std::size_t>(sent);
   }
 }
 
@@ -951,18 +991,18 @@ void ControlLoop() {
         std::memcmp(request, "STRT", sizeof(request)) == 0) {
       const bool started = g_state.defer_start && EnableActivities();
       WriteStatus();
-      WriteAll(client, started ? "OK\n" : "ERR\n");
+      SendReply(client, started ? "OK\n" : "ERR\n");
       close(client);
       continue;
     }
     if (received == static_cast<ssize_t>(sizeof(request)) &&
         std::memcmp(request, "STOP", sizeof(request)) == 0) {
       Finalize();
-      WriteAll(client, g_state.finalized ? "OK\n" : "ERR\n");
+      SendReply(client, g_state.finalized ? "OK\n" : "ERR\n");
       close(client);
       return;
     }
-    WriteAll(client, "ERR\n");
+    SendReply(client, "ERR\n");
     close(client);
   }
 }
@@ -999,6 +1039,7 @@ bool StartControl() {
 }
 
 void Initialize() {
+  g_state.owner_pid = getpid();
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
   if (output_directory == nullptr || output_directory[0] != '/') {
     SetInitializationError("output directory must be absolute");
@@ -1207,6 +1248,16 @@ void Initialize() {
   }
 }
 
+// An error found before the process directory exists has no status file to
+// go in: print it, so the server's log says why nothing was captured.
+void ReportUnrecordedError() {
+  if (g_state.directory_fd >= 0 || !HasInitializationError()) {
+    return;
+  }
+  WriteAll(STDERR_FILENO,
+           "stormlog-cupti: not capturing: " + InitializationError() + "\n");
+}
+
 }  // namespace
 
 #if defined(__GNUC__)
@@ -1225,6 +1276,7 @@ extern "C" STORMLOG_EXPORT int InitializeInjection() {
     SetInitializationError("unknown initialization failure");
     WriteStatus();
   }
+  ReportUnrecordedError();
   // Tracing failures never prevent the target CUDA application from starting.
   return 1;
 }
