@@ -48,6 +48,7 @@ from .correlation_capture import (
     TraceCapture,
     append_inference_capture,
 )
+from .trace_cupti import STATUS_FILENAME
 from .trace_import import DeviceUuids, TraceFileCollector
 from .trace_kineto import SUPPORTED, Detail
 from .vllm_execution_devices import WorkerIndex
@@ -200,6 +201,10 @@ class CuptiControl:
     ``activity.sclz`` and ends the helper. Answers carry HTTP statuses so
     ``TraceWindows`` classifies them as it does vLLM's: 200 when every helper
     answered ``OK``, 404 when none started, and no status when some may have.
+
+    A socket nobody listens on was left by a process that ended without its
+    helper's stop (SIGKILL, a crash): the command never reached a helper, so
+    it is skipped rather than read as a start that may have taken effect.
     """
 
     def __init__(self, directory: Path, *, timeout: float) -> None:
@@ -210,42 +215,62 @@ class CuptiControl:
     def post(self, route: str) -> ControlResult:
         if route == "/start_profile":
             return self._start()
-        answers = self._send_all(b"STOP")
+        answers = self._send_all(b"STOP", self._sockets)
         if answers and all(answer == "OK" for answer in answers.values()):
             return ControlResult(200)
         return ControlResult(None, _failures(answers) or "no CUPTI helper to stop")
 
     def _start(self) -> ControlResult:
-        self._sockets = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
-        if not self._sockets:
-            return ControlResult(
-                404,
-                f"no CUPTI helper socket under {self.directory}"
-                + _helper_errors(self.directory),
-            )
-        answers = self._send_all(b"STRT")
+        found = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
+        answers = {
+            path: answer
+            for path, answer in self._send_all(b"STRT", found).items()
+            if answer != _NO_HELPER
+        }
+        self._sockets = list(answers)
+        if not answers:
+            return ControlResult(404, self._no_helper(len(found)))
         if all(answer == "OK" for answer in answers.values()):
             return ControlResult(200)
         # ERR means that helper did not start; anything else may have.
         started = 404 if all(a == "ERR" for a in answers.values()) else None
         return ControlResult(
-            started, _failures(answers) + _helper_errors(self.directory)
+            started, _failures(answers) + _helper_errors(self.directory, answers)
         )
 
-    def _send_all(self, command: bytes) -> dict[Path, str]:
-        return {path: self._send(path, command) for path in self._sockets}
+    def _no_helper(self, stale: int) -> str:
+        message = f"no CUPTI helper socket under {self.directory}"
+        if stale:
+            message = (
+                f"no live CUPTI helper under {self.directory}: {stale} "
+                "socket(s) had no listener, left by processes that ended "
+                "without a stop"
+            )
+        return message + _helper_errors(self.directory)
+
+    def _send_all(self, command: bytes, paths: list[Path]) -> dict[Path, str]:
+        return {path: self._send(path, command) for path in paths}
 
     def _send(self, path: Path, command: bytes) -> str:
-        try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                # A stop waits for the helper to flush and write its trace.
-                connection.settimeout(self.timeout)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            # A stop waits for the helper to flush and write its trace.
+            connection.settimeout(self.timeout)
+            try:
                 connection.connect(str(path))
+            except (ConnectionRefusedError, FileNotFoundError):
+                return _NO_HELPER
+            except OSError as exc:
+                return f"{type(exc).__name__}: {exc}"
+            try:
                 connection.sendall(command)
                 reply = connection.makefile("rb").readline(16)
-        except OSError as exc:
-            return f"{type(exc).__name__}: {exc}"
+            except OSError as exc:
+                return f"{type(exc).__name__}: {exc}"
         return reply.decode("ascii", "replace").strip() or "no reply"
+
+
+# What _send answers for a socket file with no helper listening on it.
+_NO_HELPER = "no helper listening"
 
 
 def _failures(answers: dict[Path, str]) -> str:
@@ -256,19 +281,32 @@ def _failures(answers: dict[Path, str]) -> str:
     )
 
 
-def _helper_errors(directory: Path) -> str:
-    """Why helpers under ``directory`` failed, from their status files."""
+def _helper_errors(directory: Path, answered: dict[Path, str] | None = None) -> str:
+    """Why helpers under ``directory`` failed, from their status files.
+
+    With ``answered``, only the helpers that answered are read, so status files
+    left by earlier servers in the same directory do not join the message.
+    """
+    paths = (
+        sorted(directory.glob(f"pid-*/{STATUS_FILENAME}"))
+        if answered is None
+        else [socket_path.with_name(STATUS_FILENAME) for socket_path in answered]
+    )
     errors = []
-    for path in sorted(directory.glob("pid-*/cupti_status.json")):
-        try:
-            error = json.loads(path.read_text(encoding="utf-8")).get(
-                "initialization_error"
-            )
-        except (OSError, ValueError, AttributeError):
-            continue
+    for path in paths:
+        error = _status_error(path)
         if error:
             errors.append(f"{path.parent.name}: {error}")
     return f" ({'; '.join(errors)})" if errors else ""
+
+
+def _status_error(path: Path) -> str | None:
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+        error = status.get("initialization_error")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return str(error) if error else None
 
 
 @dataclass

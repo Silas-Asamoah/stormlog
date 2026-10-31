@@ -1482,6 +1482,75 @@ def test_cupti_control_every_helper_refusing_is_a_rejected_start(
     assert start_outcome(result) == START_REJECTED
 
 
+def _dead_socket(root: Path, pid: int) -> Path:
+    """The socket a helper leaves when its process is killed before a stop."""
+    import socket
+
+    directory = root / f"pid-{pid}-dead00"
+    directory.mkdir()
+    path = directory / "stop.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.close()
+    return path
+
+
+def test_cupti_control_skips_sockets_nobody_listens_on(cupti_dir: Path) -> None:
+    _dead_socket(cupti_dir, 7)
+    helper = _FakeHelper(cupti_dir, 8)
+    control = CuptiControl(cupti_dir, timeout=5)
+
+    assert control.post("/start_profile") == ControlResult(200)
+    assert control.post("/stop_profile") == ControlResult(200)
+    helper.thread.join(5)
+    assert helper.commands == [b"STRT", b"STOP"]
+
+
+def test_cupti_control_with_only_dead_sockets_starts_nothing(
+    cupti_dir: Path,
+) -> None:
+    _dead_socket(cupti_dir, 7)
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "no live CUPTI helper" in result.error
+    assert "1 socket(s) had no listener" in result.error
+
+
+def test_cupti_control_names_only_the_answering_helpers_errors(
+    cupti_dir: Path,
+) -> None:
+    earlier = cupti_dir / "pid-3-old000"
+    earlier.mkdir()
+    (earlier / "cupti_status.json").write_text(
+        json.dumps({"initialization_error": "an earlier server's error"})
+    )
+    helper = _FakeHelper(cupti_dir, 4, start_reply=b"ERR\n")
+    (helper.directory / "cupti_status.json").write_text(
+        json.dumps({"initialization_error": "this helper's error"})
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error == "pid-4-abcdef: ERR (pid-4-abcdef: this helper's error)"
+
+
+def test_a_cupti_window_is_not_spoiled_by_a_killed_servers_socket(
+    cupti_dir: Path,
+) -> None:
+    _dead_socket(cupti_dir, 7)
+    helper = _FakeHelper(cupti_dir, 8)
+    windows = TraceWindows(_config(cupti_dir, mode="cupti"))
+
+    window = _run_window(windows)
+
+    assert window.started and window.stop == ControlResult(200)
+    assert window.files == [helper.directory / "activity.sclz"]
+
+
 def test_a_cupti_window_finds_and_imports_each_process_trace(
     cupti_dir: Path,
 ) -> None:
