@@ -125,6 +125,9 @@ class KinetoTrace:
     # What the reader could not import or resolve, for the import summary.
     notes: list[str] = field(default_factory=list)
     not_imported: dict[str, int] = field(default_factory=dict)
+    # Records the collector counted as lost, when it reports them (Stormlog's
+    # CUPTI helper); None when the format does not say.
+    event_loss: dict[str, int] | None = None
 
 
 def load_kineto_trace(path: str | Path) -> KinetoTrace:
@@ -135,10 +138,19 @@ def load_kineto_trace(path: str | Path) -> KinetoTrace:
     ):
         raise ValueError("not a Kineto trace: missing traceEvents")
     trace = _trace_header(document)
+    complete_events = 0
     for index, event in enumerate(document["traceEvents"]):
         if isinstance(event, dict) and event.get("ph") == "X":
+            complete_events += 1
             _add_checked_event(trace, event, index)
     index_spans(trace)
+    if complete_events and not trace.gpu_events:
+        # Seen when another CUPTI client (Stormlog's helper, Nsight) held the
+        # process: Kineto logs the failure but still writes its CPU events.
+        trace.notes.append(
+            f"the trace has {complete_events} CPU events but no GPU kernels, "
+            "copies or memsets; the profiler may not have had CUPTI"
+        )
     return trace
 
 
@@ -636,8 +648,12 @@ def _summary(
             1 for event in trace.gpu_events if _from_graph(trace, event)
         ),
         "devices": _device_summary(trace, builder),
-        "event_loss": None,
-        "event_loss_note": "the trace does not report dropped CUPTI records",
+        "event_loss": trace.event_loss,
+        "event_loss_note": (
+            None
+            if trace.event_loss is not None
+            else "the trace does not report dropped CUPTI records"
+        ),
         "not_imported": dict(trace.not_imported),
         "notes": list(trace.notes),
     }

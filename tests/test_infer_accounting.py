@@ -1,6 +1,7 @@
 """Shared execution accounting and incomplete evidence behavior."""
 
 from dataclasses import replace
+from typing import Any
 
 import pytest
 
@@ -46,7 +47,7 @@ def _context(
     )
 
 
-def _shared_events():
+def _shared_events() -> tuple[list[Any], EntityRef, EntityRef, EntityRef, EntityRef]:
     engine = _context("engine-a")
     trace = _context("trace-a")
     request_a = EntityRef("client", "A")
@@ -212,7 +213,7 @@ def test_estimated_shares_require_an_explicit_model_and_remainder() -> None:
             iteration_ref=iteration_1,
             device_clock=key,
             shares=shares,
-            unattributed_ns=1_000_000.0,
+            unattributed_ns=1_000_000.0,  # type: ignore[arg-type]
         )
     with pytest.raises(ValueError, match="one estimation model"):
         validate_request_shares(
@@ -457,7 +458,7 @@ def test_device_and_monotonic_clock_kinds_do_not_merge() -> None:
     )
 
 
-def test_compact_accounting_keeps_conflicts_runs_and_device_clock_dimensions():
+def test_compact_accounting_keeps_conflicts_runs_and_device_clock_dimensions() -> None:
     from stormlog.infer.correlation_codec import (
         CorrelationRecordEncoder,
         expand_inference_records,
@@ -488,7 +489,7 @@ def test_compact_accounting_keeps_conflicts_runs_and_device_clock_dimensions():
     ]
     original = [*events, *variants]
 
-    def roundtrip(values):
+    def roundtrip(values: list[Any]) -> list[Any]:
         encoder = CorrelationRecordEncoder()
         rows = [row for event in values for row in encoder.encode(event.to_record())]
         return [parse_inference_record(row) for row in expand_inference_records(rows)]

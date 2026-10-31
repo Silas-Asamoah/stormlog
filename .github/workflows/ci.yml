@@ -576,3 +576,28 @@ jobs:
               run: |
                   python3 -m examples.cli.quickstart
                   python3 -m examples.cli.capability_matrix --mode smoke --target auto --oom-mode simulated --skip-tui
+
+    native-cupti-build:
+        if: github.event_name != 'schedule'
+        runs-on: ubuntu-latest
+        permissions:
+            contents: read
+        # Compile only: CI has no GPU. The CUDA major must match the runtime the
+        # helper is loaded into; the helper refuses to capture otherwise.
+        container: nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92
+
+        steps:
+            - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+              with:
+                  persist-credentials: false
+
+            - name: Install build tools
+              run: |
+                  apt-get update
+                  apt-get install -y --no-install-recommends cmake make zlib1g-dev
+
+            - name: Build the CUPTI helper with warnings as errors
+              run: |
+                  cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+                  cmake --build build/cupti
+                  nm -D --defined-only build/cupti/libstormlog_cupti_injection.so | grep -w InitializeInjection

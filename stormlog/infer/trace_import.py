@@ -1,4 +1,5 @@
-"""Import profiler traces (Kineto, Nsight Systems) into an inference artifact.
+"""Import profiler traces (Kineto, Nsight Systems, Stormlog CUPTI) into an
+inference artifact.
 
 The artifact's ``infer.artifact`` record supplies the run and session. Each
 trace is registered in the run envelope and its GPU activity is appended as
@@ -26,6 +27,7 @@ from .correlation_events import (
     load_inference_artifact,
 )
 from .errors import InferInputError, InferUsageError
+from .trace_cupti import load_cupti_trace
 from .trace_kineto import (
     SUPPORTED,
     Detail,
@@ -171,6 +173,7 @@ def trace_attachment_id(path: Path, prefix: str = "kineto") -> str:
 FORMATS = {
     ".sqlite": ("nsys", "Nsight Systems SQLite export", "nsys-sqlite"),
     ".nsys-rep": ("nsys", "Nsight Systems report", "nsys-rep"),
+    ".sclz": ("cupti", "Stormlog CUPTI trace", "stormlog-cupti"),
 }
 KINETO = ("kineto", "Kineto trace", "kineto-chrome-trace")
 
@@ -179,8 +182,8 @@ class TraceFileCollector:
     """A ``TraceCollector`` over profiler trace files, chosen by file type.
 
     ``.sqlite`` files are read as Nsight Systems exports; ``.nsys-rep`` reports
-    are registered but not read (export them to SQLite first); anything else
-    is read as a Kineto Chrome trace.
+    are registered but not read (export them to SQLite first); ``.sclz`` files
+    are Stormlog CUPTI traces; anything else is read as a Kineto Chrome trace.
     """
 
     def __init__(
@@ -326,6 +329,8 @@ def _shared_device_message(scope: str | None, index: int) -> str:
 def _load(path: Path, file_format: str) -> KinetoTrace:
     if file_format == "nsys-sqlite":
         return load_nsys_sqlite(path)
+    if file_format == "stormlog-cupti":
+        return load_cupti_trace(path)
     return load_kineto_trace(path)
 
 
