@@ -109,7 +109,20 @@ A missing/unauthorized stats endpoint is evidence loss, not an inference
 failure. Counter decreases and uptime restarts mark epoch changes; outage
 and sampling scope are explicit. Aggregate statistics can include other
 clients and do not prove request ownership, allocator usage or pure compute
-time. Sampling uses bounded GET requests to `/admin/api/stats` only.
+time. Sampling uses bounded GET requests to `/admin/api/stats` only. The
+whole-request deadline covers connection, response headers and body, so a
+server trickling response headers cannot keep an abandoned worker alive.
+
+A completed phase takes a final stats sample. An interrupted or failed phase
+starts no final GET: already running samples are abandoned with no late append,
+and bounded daemon workers do not hold event-loop shutdown open. A skipped
+final sample is absent, rather than represented as a successful observation.
+
+Elapsed scrape time uses the monotonic clock. The raw wall-clock start/end
+stamps are retained even if the clock moves backwards; the observation lies
+between their minimum and maximum. Clock uncertainty includes the disagreement
+between wall-clock movement and monotonic elapsed time. Offline analysis accepts
+these records without treating a clock step as an invalid input artifact.
 
 ## Same-process server evidence
 
@@ -148,8 +161,16 @@ identity and sample timestamps without importing MLX or server packages.
 Repeat `--mlx-server-evidence` for separate captures. Identical copies are
 deduplicated; conflicting identities or contents fail validation.
 
-Matching run IDs and endpoints produce `declared_direct` association. A
-controlled launcher with an observed literal-loopback listener owned by its
+Matching run IDs and endpoints produce `declared_direct` association. For this
+declaration only, `localhost` (case-insensitive, with an optional trailing dot)
+and literal IPv4/IPv6 loopback addresses are equivalent. Matching stays offline:
+it performs no DNS lookup and preserves the scheme and port. Wildcard bind
+addresses such as `0.0.0.0` are not loopback aliases. Overlapping captures using
+these aliases remain ambiguous. Alias matching alone never upgrades a capture
+to `verified`; listener verification still requires the literal declared origin
+as well as its existing process and host/boot proof.
+
+A controlled launcher with an observed literal-loopback listener owned by its
 sampled PID and matching host/boot can establish `verified` process
 association. Request execution ownership remains unavailable. Missing identity
 is `unjoined`; overlapping endpoint process epochs are `ambiguous`.

@@ -15,9 +15,15 @@ import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any
 
-from .http_transport import BoundedResponse, inference_opener, validate_http_endpoint
+from .http_transport import (
+    BoundedResponse,
+    inference_opener,
+    off_loop,
+    validate_http_endpoint,
+)
 
 SOURCE_REVISION = "013bc3f3a48fa9a4b7dffbfeb6cdc7c1face1c5d"
 # raw path -> (unit, metric kind). These values are engine counters/gauges,
@@ -155,7 +161,7 @@ class OmlxStatsSampler:
             run_id,
             server_version,
         )
-        self.opener = inference_opener()
+        self.opener = inference_opener(request_deadline_seconds=self.timeout)
         self.previous: dict[str, float | int] = {}
         self.outage = False
 
@@ -225,7 +231,7 @@ class OmlxStatsSampler:
     ) -> None:
         started_ns, started = time.time_ns(), time.perf_counter()
         try:
-            record = await asyncio.to_thread(self.fetch, case_id, phase, marker)
+            record = await off_loop(partial(self.fetch, case_id, phase, marker))
         except asyncio.CancelledError:
             ended_ns = time.time_ns()
             elapsed_ns = round((time.perf_counter() - started) * 1e9)
@@ -297,13 +303,16 @@ class OmlxStatsSampler:
         await self.sample(append, case_id, phase, "phase_start")
         stop = asyncio.Event()
         task = asyncio.create_task(self._interval_loop(append, case_id, phase, stop))
+        completed = False
         try:
             yield
+            completed = True
         finally:
             stop.set()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            await self.sample(append, case_id, phase, "phase_end")
+            if completed:
+                await self.sample(append, case_id, phase, "phase_end")
 
     async def _interval_loop(
         self,
@@ -381,11 +390,8 @@ def _validate_stats_times(record: dict[str, Any]) -> None:
         value = record.get(key)
         if type(value) is not int or value < 0:
             raise ValueError(f"Invalid oMLX statistics {key}")
-    if (
-        not record["scrape_started_at_ns"]
-        <= record["observed_at_ns"]
-        <= record["scrape_ended_at_ns"]
-    ):
+    start, end = record["scrape_started_at_ns"], record["scrape_ended_at_ns"]
+    if not min(start, end) <= record["observed_at_ns"] <= max(start, end):
         raise ValueError("Invalid oMLX scrape time window")
 
 

@@ -199,3 +199,40 @@ def test_the_runtime_line_says_when_device_details_failed() -> None:
         {"mlx_version": "0.32.4", "raw_device_info": {}, "device_info_error": "boom"}
     )
     assert line.endswith("device details unavailable: boom.")
+
+
+@pytest.mark.tui_pilot
+def test_live_mlx_timeline_includes_phase_observations(monkeypatch, tmp_path):
+    async def scenario():
+        runtime = make_runtime()
+        monkeypatch.setattr("stormlog.mlx.tracker.MLXRuntime", lambda *a, **kw: runtime)
+        app = GPUMemoryProfilerTUI(framework="mlx")
+        async with app.run_test(size=(160, 55)):
+            await app.start_live_tracking()
+            session = app.tracker_session
+            assert session is not None
+            adapter = session._tracker
+            tracker = adapter.tracker
+            runtime.core.values["active_memory"] = 400
+            with tracker.phase("prefill"):
+                runtime.core.values["active_memory"] = 900
+            app.refresh_monitoring_panel()
+            await app.refresh_visualizations()
+            events = tracker.get_results().telemetry_events
+            phase_values = [
+                r["allocator_allocated_bytes"]
+                for r in events
+                if r["event_type"] in {"phase_enter", "phase_exit"}
+            ]
+            assert phase_values == [400, 900]
+            assert all(
+                value in app._last_timeline["allocated"] for value in phase_values
+            )
+            path = tmp_path / "phases.json"
+            tracker.export(path)
+            assert [
+                point["active_bytes"] for point in analyze(path)["timeline"]
+            ] == app._last_timeline["allocated"]
+            app.stop_live_tracking()
+
+    asyncio.run(scenario())

@@ -21,10 +21,11 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, TypeVar
+from typing import Any
 
 from ..scrub import redact_url
 from .correlation_events import CapabilityEvent, CorrelationContext
+from .http_transport import off_loop as _off_loop
 from .vllm_metrics import (
     CATALOG,
     VERIFIED_VLLM_VERSION,
@@ -226,40 +227,6 @@ def _fetch_and_parse(
 
 def _failed_fetch(result: FetchResult, error: str) -> FetchResult:
     return FetchResult(None, result.http_status, error, result.duration_ms)
-
-
-T = TypeVar("T")
-
-
-async def _off_loop(func: Callable[[], T]) -> T:
-    """Run ``func`` on a daemon thread; cancelling the await abandons it.
-
-    ``asyncio.to_thread`` would make a cancelled caller, and then the
-    interpreter's exit, wait for a fetch blocked on a silent endpoint until
-    its socket timeout. A daemon thread is dropped instead, and its result
-    is discarded because nothing awaits it any more.
-    """
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[T] = loop.create_future()
-
-    def deliver(outcome: Callable[[], None]) -> None:
-        if not future.done():
-            outcome()
-
-    def run() -> None:
-        try:
-            value = func()
-        except BaseException as exc:
-            outcome = partial(future.set_exception, exc)
-        else:
-            outcome = partial(future.set_result, value)
-        try:
-            loop.call_soon_threadsafe(deliver, outcome)
-        except RuntimeError:
-            pass  # the loop is closed: nobody is waiting
-
-    threading.Thread(target=run, name="stormlog-vllm-scrape", daemon=True).start()
-    return await future
 
 
 def _started() -> tuple[int, int]:

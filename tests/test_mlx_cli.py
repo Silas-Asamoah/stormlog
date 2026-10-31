@@ -274,3 +274,57 @@ def test_text_mode_prints_an_analyze_error_once(
     assert main(["analyze", str(missing), "--output", str(tmp_path / "out")]) == 5
     captured = capsys.readouterr()
     assert (captured.out + captured.err).count(str(missing)) == 1
+
+
+@pytest.mark.parametrize("command", ["info", "track", "analyze"])
+def test_unexpected_value_error_is_an_internal_error(command, monkeypatch, capsys):
+    import stormlog.mlx.cli as module
+
+    def fail(*args, **kwargs):
+        raise ValueError("internal invariant broke")
+
+    monkeypatch.setattr(
+        module,
+        {"info": "_info", "track": "_capture", "analyze": "_analysis"}[command],
+        fail,
+    )
+    args = [command] + (["input.json"] if command == "analyze" else [])
+    assert main(args) == 1
+    assert "ValueError: internal invariant broke" in capsys.readouterr().err
+
+
+def test_capture_internal_value_error_is_not_a_usage_report(
+    tmp_path, monkeypatch, capsys
+):
+    def fail(*args, **kwargs):
+        raise ValueError("internal capture invariant")
+
+    monkeypatch.setattr("stormlog.mlx.artifacts.CaptureBundle.start", fail)
+    assert (
+        main(
+            [
+                "track",
+                "--duration",
+                "0",
+                "--json",
+                "--output",
+                str(tmp_path / "capture"),
+            ]
+        )
+        == 1
+    )
+    output = json.loads(capsys.readouterr().out)
+    report = load_report(Path(output["artifact_dir"]) / "report.json")
+    assert report["verdict"]["status"] == "error"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["--rank", "1"], ["--local-rank", "-1"], ["--world-size", "1", "--rank", "2"]],
+)
+def test_distributed_usage_errors_are_validated_before_capture(args, monkeypatch):
+    def no_capture(*a, **kw):
+        pytest.fail("invalid CLI must fail before creating artifacts")
+
+    monkeypatch.setattr("stormlog.mlx.cli._capture", no_capture)
+    assert main(["track", *args]) == 2

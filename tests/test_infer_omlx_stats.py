@@ -277,3 +277,147 @@ def test_invalid_admin_cookie_fails_before_traffic(cookie):
             run_id="r",
             server_version=None,
         )
+
+
+def test_interrupted_phase_does_not_start_a_final_scrape(monkeypatch):
+    import asyncio
+    import time
+
+    capture = sampler("http://localhost")
+    calls = []
+
+    async def sample(append, case, phase, marker):
+        calls.append(marker)
+        if marker == "phase_end":
+            await asyncio.sleep(0.3)
+
+    monkeypatch.setattr(capture, "sample", sample)
+
+    async def run():
+        entered = asyncio.Event()
+
+        async def phase():
+            async with capture.phase(list().append, "case", "measured"):
+                entered.set()
+                await asyncio.sleep(60)
+
+        task = asyncio.create_task(phase())
+        await entered.wait()
+        started = time.perf_counter()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert time.perf_counter() - started < 0.15
+
+    asyncio.run(run())
+    assert calls == ["phase_start"]
+
+
+def test_backwards_wall_clock_remains_analyzable(monkeypatch):
+    import stormlog.infer.omlx_stats as module
+    from stormlog.infer.omlx_stats import stats_report
+
+    capture = sampler("http://localhost")
+    monkeypatch.setattr(
+        capture,
+        "_fetch_metrics",
+        lambda _: normalize_stats(PINNED_RESPONSE, capture.identity),
+    )
+    stamps = iter([2_000_000_000, 1_000_000_000])
+    monkeypatch.setattr(module.time, "time_ns", lambda: next(stamps))
+    record = capture.observe("case", "measured", "phase_start")
+    assert record["scrape_started_at_ns"] > record["scrape_ended_at_ns"]
+    assert record["scrape_elapsed_ns"] >= 0
+    assert record["clock_uncertainty_ns"] >= 1_000_000_000
+    assert stats_report([record])["failed_samples"] == 0
+
+
+def test_observation_outside_either_wall_clock_endpoint_is_invalid(monkeypatch):
+    from stormlog.infer.omlx_stats import validate_stats_record
+
+    capture = sampler("http://localhost")
+    monkeypatch.setattr(capture, "_fetch_metrics", lambda _: [])
+    record = capture.observe("case", "measured", "phase_start")
+    record["observed_at_ns"] = record["scrape_ended_at_ns"] + 1
+    with pytest.raises(ValueError, match="time window"):
+        validate_stats_record(record)
+
+
+def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
+    import asyncio
+    import time
+
+    capture = sampler("http://localhost")
+    entered, release = threading.Event(), threading.Event()
+    records = []
+    original = capture.fetch
+    monkeypatch.setattr(capture, "_fetch_metrics", lambda _: [])
+
+    def fetch(case, phase, marker):
+        if marker == "interval":
+            entered.set()
+            release.wait(timeout=0.6)
+        return original(case, phase, marker)
+
+    monkeypatch.setattr(capture, "fetch", fetch)
+
+    async def run():
+        async def phase():
+            async with capture.phase(records.append, "case", "measured"):
+                await asyncio.sleep(60)
+
+        task = asyncio.create_task(phase())
+        while not entered.is_set():
+            await asyncio.sleep(0.001)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    started = time.perf_counter()
+    try:
+        asyncio.run(run())
+        assert time.perf_counter() - started < 0.3
+    finally:
+        release.set()
+    assert [r["marker"] for r in records] == ["phase_start", "interval"]
+    assert records[-1]["status"] == "abandoned"
+
+
+def test_stats_header_trickle_cannot_outlive_the_scrape_deadline():
+    import time
+
+    class DribblingHeaders(BaseHTTPRequestHandler):
+        def do_GET(self):
+            try:
+                self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
+                for _ in range(30):
+                    self.connection.sendall(b"x")
+                    time.sleep(0.03)
+                self.connection.sendall(b"\r\nContent-Length: 2\r\n\r\n{}")
+            except OSError:
+                pass
+
+        def log_message(self, *_):
+            pass
+
+    http = ThreadingHTTPServer(("127.0.0.1", 0), DribblingHeaders)
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    try:
+        capture = OmlxStatsSampler(
+            url=f"http://127.0.0.1:{http.server_port}/admin/api/stats",
+            api_key=None,
+            interval=1,
+            timeout=0.1,
+            session_id="s",
+            run_id="r",
+            server_version=None,
+        )
+        started = time.perf_counter()
+        record = capture.observe("case", "measured", "phase_start")
+        assert time.perf_counter() - started < 0.5
+        assert record["status"] == "error"
+    finally:
+        http.shutdown()
+        http.server_close()
+        thread.join(timeout=2)

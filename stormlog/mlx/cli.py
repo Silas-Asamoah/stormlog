@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from typing import TYPE_CHECKING, Any, Sequence
 
@@ -307,6 +308,28 @@ def _analysis(args: argparse.Namespace) -> int:
     return int(code)
 
 
+def _validate_arguments(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    from stormlog.diagnose_report import validate_output_directory
+    from stormlog.telemetry import resolve_distributed_identity
+
+    if args.command == "run" and not [a for a in args.script_args if a != "--"]:
+        parser.error("run requires -- script.py [args...]")
+    try:
+        validate_output_directory(args.output)
+        if args.command in {"monitor", "track", "run", "diagnose"}:
+            resolve_distributed_identity(
+                job_id=args.job_id,
+                rank=args.rank,
+                local_rank=args.local_rank,
+                world_size=args.world_size,
+                env=os.environ,
+            )
+    except ValueError as exc:
+        parser.error(str(exc))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     try:
@@ -314,16 +337,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else int(ExitCode.USAGE)
     try:
+        _validate_arguments(parser, args)
         if args.command == "info":
             return _info(args)
         if args.command == "analyze":
             return _analysis(args)
         return _capture(args)
+    except SystemExit as exc:
+        return exc.code if isinstance(exc.code, int) else int(ExitCode.USAGE)
     except KeyboardInterrupt:
         return int(ExitCode.INTERRUPTED)
-    except ValueError as exc:
-        print(str(exc), file=sys.stderr)
-        return int(ExitCode.USAGE)
     except Exception as exc:
         print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
         return int(ExitCode.ERROR)

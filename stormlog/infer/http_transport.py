@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import http.client
 import math
@@ -13,9 +14,42 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, TypeVar
 
 from stormlog.scrub import KnownSecrets, scrub_text
+
+T = TypeVar("T")
+
+
+async def off_loop(func: Callable[[], T]) -> T:
+    """Run ``func`` on a daemon thread; cancelling the await abandons it.
+
+    ``asyncio.to_thread`` would make a cancelled caller, and then the
+    interpreter's exit, wait for a fetch blocked on a silent endpoint until
+    its socket timeout. A daemon thread is dropped instead, and its result
+    is discarded because nothing awaits it any more.
+    """
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[T] = loop.create_future()
+
+    def deliver(outcome: Callable[[], None]) -> None:
+        if not future.done():
+            outcome()
+
+    def run() -> None:
+        try:
+            value = func()
+        except BaseException as exc:
+            outcome = functools.partial(future.set_exception, exc)
+        else:
+            outcome = functools.partial(future.set_result, value)
+        try:
+            loop.call_soon_threadsafe(deliver, outcome)
+        except RuntimeError:
+            pass  # the loop is closed: nobody is waiting
+
+    threading.Thread(target=run, name="stormlog-http-scrape", daemon=True).start()
+    return await future
 
 
 class EndpointHTTPError(RuntimeError):

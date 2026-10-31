@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import urllib.parse
 from collections.abc import Sequence
@@ -107,6 +108,24 @@ def _origin(url: str) -> tuple[str, str, int | None]:
     return parsed.scheme, parsed.hostname or "", port
 
 
+def _declared_host(host: str) -> str:
+    """Offline loopback equivalence is a declaration, never routing proof."""
+    name = host.lower().removesuffix(".")
+    if name == "localhost":
+        return "localhost"
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return name
+    return "localhost" if address.is_loopback else str(address)
+
+
+def _declared_origin(
+    origin: tuple[str, str, int | None],
+) -> tuple[str, str, int | None]:
+    return origin[0], _declared_host(origin[1]), origin[2]
+
+
 def _association(
     item: LoadedEvidence, records: list[dict[str, Any]], artifact: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -127,13 +146,16 @@ def _association(
     state["run_id_match"] = True
     endpoint = item.manifest["endpoint"]
     expected = ("http", endpoint["host"] or "", endpoint["port"])
-    if expected not in _client_endpoints(records):
+    origins = _client_endpoints(records)
+    if _declared_origin(expected) not in {
+        _declared_origin(origin) for origin in origins
+    }:
         state["reason"] = "endpoint_not_declared_or_different"
         return state
     state.update(
         state="declared_direct", reason="declared_endpoint_and_run_id_not_routing_proof"
     )
-    if _verified_process_association(item, artifact):
+    if expected in origins and _verified_process_association(item, artifact):
         state.update(
             state="verified",
             reason="same_host_boot_and_observed_qualified_launcher_listener_pid",
@@ -177,7 +199,10 @@ def _mark_ambiguity(
 
 def _conflicting_endpoint_epochs(left: LoadedEvidence, right: LoadedEvidence) -> bool:
     a, b = left.manifest["endpoint"], right.manifest["endpoint"]
-    if (a["host"], a["port"]) != (b["host"], b["port"]):
+    if (_declared_host(a["host"] or ""), a["port"]) != (
+        _declared_host(b["host"] or ""),
+        b["port"],
+    ):
         return False
     if left.clock_domain != right.clock_domain:
         return True

@@ -334,3 +334,21 @@ workflow uses a dedicated self-hosted macOS/ARM64 runner whose operator has
 prepared the environment and endpoints. It does not install models or reset
 services. Successful authenticated stats are still unqualified locally at the
 user's request; the complete live gate remains strict for future qualification.
+
+
+## Review behavior contracts (issue #325)
+
+The live MLX timeline counts start, periodic sample, stop, phase-enter and
+phase-exit allocator observations, including missing values as gaps. This is
+the same set of observations used by offline MLX analysis; a phase-only peak
+therefore appears in both views. Phase markers remain visible in the event
+stream, and the timeline keeps allocator, cache and RSS series separate.
+
+`mlxmemprof` validates known argument, output-path and distributed-identity
+errors as usage failures (exit 2). Unexpected internal `ValueError` failures
+use exit 1, including failures recorded by capture bundles. Missing or invalid
+input artifacts still use exit 5, unavailable runtimes retain their existing
+usage status, and SIGINT retains exit 130.
+
+See [the issue #325 reproduction and validation record](issue-325-mlx-behaviors.md)
+for regression commands, behavior choices and live-check limits.

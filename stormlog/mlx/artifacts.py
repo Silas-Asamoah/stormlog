@@ -371,6 +371,6 @@ def capture_failure(exc: BaseException) -> Outcome:
     code = ExitCode.ERROR
     if isinstance(exc, KeyboardInterrupt):
         code = ExitCode.INTERRUPTED
-    elif isinstance(exc, (MLXRuntimeError, ValueError)):
+    elif isinstance(exc, MLXRuntimeError):
         code = ExitCode.USAGE
     return Outcome(int(code), f"{type(exc).__name__}: {exc}")
