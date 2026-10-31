@@ -334,9 +334,24 @@ def _status_error(path: Path) -> str | None:
     try:
         status = json.loads(path.read_text(encoding="utf-8"))
         error = status.get("initialization_error")
+        undeferred = status.get("defer_start") is False
+        # Still capturing: an undeferred run that ended leaves the same flags.
+        capturing = (
+            status.get("activities_enabled") is True
+            and status.get("finalized") is not True
+        )
     except (OSError, ValueError, AttributeError):
         return None
-    return str(error) if error else None
+    if error:
+        return str(error)
+    if undeferred and capturing:
+        # Such a helper refuses STRT: it has captured since the process
+        # started, and records until it exits or is stopped.
+        return (
+            "capturing since the process started; start the server with "
+            "STORMLOG_CUPTI_DEFER_START=1"
+        )
+    return None
 
 
 @dataclass

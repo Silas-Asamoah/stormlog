@@ -1566,6 +1566,53 @@ def test_cupti_control_names_only_the_answering_helpers_errors(
     assert result.error == "pid-4-abcdef: ERR (pid-4-abcdef: this helper's error)"
 
 
+def test_cupti_control_says_why_an_undeferred_helper_refuses_to_start(
+    cupti_dir: Path,
+) -> None:
+    helper = _FakeHelper(cupti_dir, 5, start_reply=b"ERR\n")
+    # What the helper's STRT handler writes when capture began at injection.
+    (helper.directory / "cupti_status.json").write_text(
+        json.dumps(
+            {
+                "defer_start": False,
+                "activities_enabled": True,
+                "initialization_error": None,
+            }
+        )
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "capturing since the process started" in result.error
+    assert "STORMLOG_CUPTI_DEFER_START=1" in result.error
+
+
+def test_a_finished_undeferred_run_is_not_reported_as_capturing(
+    cupti_dir: Path,
+) -> None:
+    # What an undeferred helper leaves behind when its process exits.
+    earlier = cupti_dir / "pid-6-old000"
+    earlier.mkdir()
+    (earlier / "cupti_status.json").write_text(
+        json.dumps(
+            {
+                "defer_start": False,
+                "activities_enabled": True,
+                "finalized": True,
+                "initialization_error": None,
+            }
+        )
+    )
+
+    result = CuptiControl(cupti_dir, timeout=5).post("/start_profile")
+
+    assert start_outcome(result) == START_REJECTED
+    assert result.error is not None
+    assert "capturing since the process started" not in result.error
+
+
 def test_a_cupti_window_is_not_spoiled_by_a_killed_servers_socket(
     cupti_dir: Path,
 ) -> None:
