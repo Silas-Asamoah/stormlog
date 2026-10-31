@@ -941,6 +941,23 @@ void JoinControl() {
   }
 }
 
+// MSG_NOSIGNAL: a client that has gone away must not raise SIGPIPE in the
+// traced process, whose default action would end it.
+void SendReply(int client, std::string_view reply) {
+  std::size_t offset = 0;
+  while (offset < reply.size()) {
+    const ssize_t sent = send(client, reply.data() + offset,
+                              reply.size() - offset, MSG_NOSIGNAL);
+    if (sent < 0 && errno == EINTR) {
+      continue;
+    }
+    if (sent <= 0) {
+      return;
+    }
+    offset += static_cast<std::size_t>(sent);
+  }
+}
+
 void ControlLoop() {
   while (g_state.control_fd >= 0) {
     const int client = accept4(g_state.control_fd, nullptr, nullptr, SOCK_CLOEXEC);
@@ -959,18 +976,18 @@ void ControlLoop() {
         std::memcmp(request, "STRT", sizeof(request)) == 0) {
       const bool started = g_state.defer_start && EnableActivities();
       WriteStatus();
-      WriteAll(client, started ? "OK\n" : "ERR\n");
+      SendReply(client, started ? "OK\n" : "ERR\n");
       close(client);
       continue;
     }
     if (received == static_cast<ssize_t>(sizeof(request)) &&
         std::memcmp(request, "STOP", sizeof(request)) == 0) {
       Finalize();
-      WriteAll(client, g_state.finalized ? "OK\n" : "ERR\n");
+      SendReply(client, g_state.finalized ? "OK\n" : "ERR\n");
       close(client);
       return;
     }
-    WriteAll(client, "ERR\n");
+    SendReply(client, "ERR\n");
     close(client);
   }
 }
