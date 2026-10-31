@@ -124,6 +124,8 @@ struct CaptureState {
   bool defer_start{false};
   std::atomic<bool> activities_enabled{false};
   bool finalized{false};
+  // The process that loaded the helper; a fork()ed child inherits the state.
+  pid_t owner_pid{0};
   std::string initialization_error;
   std::string driver_version;
   std::string runtime_version;
@@ -138,7 +140,9 @@ using KernelRecord = CUpti_ActivityKernel10;
 using KernelRecord = CUpti_ActivityKernel9;
 #endif
 
-CaptureState g_state;
+// Never destroyed: at exit, a fork()ed child still holds the parent's thread
+// objects, whose destructors would call std::terminate.
+CaptureState& g_state = *new CaptureState();
 std::once_flag g_initialize_once;
 std::once_flag g_finalize_once;
 
@@ -851,7 +855,15 @@ bool EnableActivities() {
   return true;
 }
 
+// A child that fork()s without exec and then exits runs the inherited
+// atexit handlers. Its descriptors are the parent's, and its writer and
+// control threads do not exist, so it must leave the capture alone.
+bool InForkedChild() { return getpid() != g_state.owner_pid; }
+
 void Finalize() {
+  if (InForkedChild()) {
+    return;
+  }
   std::call_once(g_finalize_once, [] {
     if (g_state.initialized) {
       // Disable first so no record is produced after the final flush.
@@ -935,6 +947,9 @@ void Finalize() {
 }
 
 void JoinControl() {
+  if (InForkedChild()) {
+    return;
+  }
   if (g_state.control_thread.joinable() &&
       g_state.control_thread.get_id() != std::this_thread::get_id()) {
     g_state.control_thread.join();
@@ -1024,6 +1039,7 @@ bool StartControl() {
 }
 
 void Initialize() {
+  g_state.owner_pid = getpid();
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
   if (output_directory == nullptr || output_directory[0] != '/') {
     SetInitializationError("output directory must be absolute");
