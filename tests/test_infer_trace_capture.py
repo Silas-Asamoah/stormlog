@@ -1369,12 +1369,17 @@ def cupti_dir() -> Iterator[Path]:
     try:
         yield directory
     finally:
+        while _FakeHelper.live:
+            _FakeHelper.live.pop().close()
         shutil.rmtree(directory, ignore_errors=True)
 
 
 class _FakeHelper:
     """A process's CUPTI helper socket: answers STRT, and on STOP writes its
     trace and status, then closes, as ``native/cupti`` does."""
+
+    # Helpers still serving; the cupti_dir fixture closes them after a test.
+    live: list[_FakeHelper] = []
 
     def __init__(
         self,
@@ -1398,12 +1403,27 @@ class _FakeHelper:
         self.server.listen(4)
         self.thread = threading.Thread(target=self._serve, daemon=True)
         self.thread.start()
+        _FakeHelper.live.append(self)
+
+    def close(self) -> None:
+        """End a helper that was never stopped: wake its accept and join it."""
+        import socket
+
+        if self.thread.is_alive():
+            with contextlib.suppress(OSError):
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as poke:
+                    poke.connect(str(self.directory / "stop.sock"))
+                    poke.sendall(b"QUIT")
+            self.thread.join(5)
+        self.server.close()
 
     def _serve(self) -> None:
         while True:
             client, _ = self.server.accept()
             with client:
                 command = client.recv(4)
+                if command == b"QUIT":
+                    return
                 self.commands.append(command)
                 if command == b"STRT":
                     client.sendall(self.start_reply)
