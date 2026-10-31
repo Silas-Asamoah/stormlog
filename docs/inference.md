@@ -1025,7 +1025,10 @@ helper refuses to capture when they differ: a CUPTI from another major version
 lost 39% of kernel timestamps without reporting a drop. The runtime is often
 loaded after the helper, so the versions are compared when the window starts,
 and again when it stops; a process whose CUDA runtime cannot be found by then
-is not captured.
+is not captured. The helper looks the runtime up among the process's global
+symbols, so the target must load `libcudart.so` into them, as PyTorch (and so
+vLLM) does. A program linked against the static runtime, nvcc's default, is
+refused with "CUDA runtime version unavailable".
 
 ```bash
 cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release
@@ -1033,12 +1036,12 @@ cmake --build build/cupti
 ```
 
 **Start the server** with the helper injected, deferred until Stormlog starts
-the window:
+the window. Give each server its own output directory:
 
 ```bash
-install -d -m 0700 /var/tmp/stormlog-cupti   # owned by the server's user
+install -d -m 0700 /var/tmp/stormlog-cupti/server-a   # owned by the server's user
 CUDA_INJECTION64_PATH=$PWD/build/cupti/libstormlog_cupti_injection.so \
-STORMLOG_CUPTI_OUTPUT_DIR=/var/tmp/stormlog-cupti \
+STORMLOG_CUPTI_OUTPUT_DIR=/var/tmp/stormlog-cupti/server-a \
 STORMLOG_CUPTI_DEFER_START=1 \
 STORMLOG_CUPTI_ACTIVITIES=runtime,driver,kernel \
 STORMLOG_CUPTI_MAX_BYTES=4294967296 \
@@ -1050,23 +1053,39 @@ vllm serve MODEL ...
 ```bash
 stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   --concurrency 8 --requests 512 \
-  --trace cupti --trace-dir /var/tmp/stormlog-cupti \
+  --trace cupti --trace-dir /var/tmp/stormlog-cupti/server-a \
   --trace-max-seconds 20 --trace-device-uuid 0=GPU-6d1f0c5e-...
 ```
 
 - **Control.** Each traced process gets a private `pid-<PID>-*` directory with
-  a Unix socket. Stormlog sends start and stop over these sockets, which is why
-  it must run on the server's host. The window rules above apply unchanged: a
-  start that every helper refused is `rejected`, and a start some helpers took
-  is `unknown` and stopped at once.
+  a Unix socket. Stormlog sends start and stop over these sockets, to every
+  process at once, which is why it must run on the server's host. The window
+  rules above apply unchanged: a start that every helper refused is
+  `rejected`, and a start some helpers took is `unknown` and stopped at once.
+- **One directory per server.** Stormlog starts every helper listening under
+  `--trace-dir`, so a second server sharing the directory would be traced too.
+  A socket left by a process that ended without a stop (killed, crashed) has
+  no listener and is skipped. Stormlog connects to each socket by its path,
+  which a Unix socket limits to 108 bytes on Linux, so `--trace-dir` can be at
+  most 78 bytes long.
+- **When nothing starts.** A helper that cannot capture records why in its
+  `cupti_status.json`, and Stormlog's start error quotes it. A helper that
+  fails before it makes its directory, for example because
+  `STORMLOG_CUPTI_MAX_BYTES` (which has no default) is unset or invalid, prints
+  a `stormlog-cupti: not capturing:` line on the server's stderr instead.
+  Without `STORMLOG_CUPTI_DEFER_START=1` the helper captures from the moment
+  the process starts, until it exits, and refuses Stormlog's start.
 - **One window per server process.** The stop writes `activity.sclz` and ends
   the helper, so a run must have a single case. Restart the server for another
   window.
 - **Loss is reported, not hidden.** The import summary's `event_loss` counts
   records CUPTI dropped, records past `STORMLOG_CUPTI_MAX_BYTES`, activity
   buffers refused while the writer was behind (`STORMLOG_CUPTI_MAX_BUFFER_BYTES`,
-  default 32 MiB), and kernels without timestamps. A trace whose
-  `cupti_status.json` is not finalized, or names an error, is not imported.
+  default 32 MiB), and kernels without timestamps. A window whose trace
+  dropped records is unhealthy in the run's trace health; kernels without
+  timestamps are reported but do not count as drops. A trace whose
+  `cupti_status.json` is not finalized, or names an error, keeps its
+  `activity.sclz.partial` name and is not imported.
 - **One CUPTI client per process.** The helper holds CUPTI's subscriber slot.
   Do not also start vLLM's profiler in a server with the helper loaded: it
   still writes a trace, but with CPU operators and no GPU activity. The trace
@@ -1079,7 +1098,9 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   devices. The helper emits no iteration ranges.
 
 A finished `activity.sclz` can also be imported later with
-`stormlog infer import-trace ARTIFACT /var/tmp/stormlog-cupti/pid-*/activity.sclz`.
+`stormlog infer import-trace ARTIFACT TRACE...`. Name the run's own traces: its
+window record lists them under `trace_files`, as paths below `--trace-dir`. A
+glob over every `pid-*` directory would also take traces from earlier servers.
 
 For a PyTorch program that is not behind a server, `capture_torch_trace`
 profiles a block in-process and writes a trace for `import-trace`:
