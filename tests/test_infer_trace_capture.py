@@ -1606,6 +1606,20 @@ def test_cupti_tracing_needs_a_trace_dir() -> None:
         _config(None, mode="cupti")
 
 
+def test_cupti_tracing_refuses_a_trace_dir_its_sockets_cannot_fit_under() -> None:
+    from stormlog.infer.trace_capture import (
+        CUPTI_SOCKET_SUFFIX,
+        UNIX_SOCKET_PATH_BYTES,
+    )
+
+    longest_ok = "/" + "d" * (UNIX_SOCKET_PATH_BYTES - len(CUPTI_SOCKET_SUFFIX) - 1)
+    _config(Path(longest_ok), mode="cupti")
+    _config(Path("/var/tmp/stormlog-cupti"), mode="cupti")
+
+    with pytest.raises(ValueError, match="--trace-dir is too long for --trace cupti"):
+        _config(Path(longest_ok + "d"), mode="cupti")
+
+
 @pytest.mark.parametrize(
     ("extra", "message"),
     [

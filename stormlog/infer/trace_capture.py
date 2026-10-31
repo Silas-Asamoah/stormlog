@@ -30,7 +30,9 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
 import socket
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -65,6 +67,11 @@ TRACE_GLOB = "*.pt.trace.json*"
 # The CUPTI helper makes one private directory per process under its output dir.
 CUPTI_SOCKET_GLOB = "pid-*/stop.sock"
 CUPTI_TRACE_GLOB = "pid-*/activity.sclz"
+# The longest socket path below the trace dir: pid_max is at most 2**22.
+CUPTI_SOCKET_SUFFIX = "/pid-4194304-XXXXXX/stop.sock"
+# sun_path holds 108 bytes on Linux and 104 on macOS and the BSDs; keep one
+# for the terminating NUL.
+UNIX_SOCKET_PATH_BYTES = (108 if sys.platform.startswith("linux") else 104) - 1
 # What a /start_profile call established about the server's profiler.
 START_ACKNOWLEDGED = "acknowledged"
 START_REJECTED = "rejected"
@@ -102,17 +109,30 @@ class TraceCaptureConfig:
         if self.phase not in TRACE_PHASES:
             raise ValueError(f"--trace-phase must be one of {', '.join(TRACE_PHASES)}")
         if self.mode == CUPTI:
-            if self.trace_dir is None:
-                raise ValueError(
-                    "--trace cupti needs --trace-dir: the helper's "
-                    "STORMLOG_CUPTI_OUTPUT_DIR on this host"
-                )
-            if not hasattr(socket, "AF_UNIX"):
-                raise ValueError("--trace cupti needs Unix domain sockets")
+            self._check_cupti()
         for name in ("max_seconds", "max_bytes"):
             value = getattr(self, name)
             if value is not None and value <= 0:
                 raise ValueError(f"trace {name} must be > 0")
+
+    def _check_cupti(self) -> None:
+        if self.trace_dir is None:
+            raise ValueError(
+                "--trace cupti needs --trace-dir: the helper's "
+                "STORMLOG_CUPTI_OUTPUT_DIR on this host"
+            )
+        if not hasattr(socket, "AF_UNIX"):
+            raise ValueError("--trace cupti needs Unix domain sockets")
+        # Stormlog connects by path, so the sockets must fit in sun_path.
+        longest = len(os.fsencode(self.trace_dir)) + len(CUPTI_SOCKET_SUFFIX)
+        if longest > UNIX_SOCKET_PATH_BYTES:
+            limit = UNIX_SOCKET_PATH_BYTES - len(CUPTI_SOCKET_SUFFIX)
+            raise ValueError(
+                f"--trace-dir is too long for --trace cupti: the helpers' "
+                f"sockets below it can need {longest} bytes, and a Unix socket "
+                f"path holds {UNIX_SOCKET_PATH_BYTES}; use a directory path of "
+                f"at most {limit} bytes"
+            )
 
 
 def server_root(endpoint: str) -> str:
