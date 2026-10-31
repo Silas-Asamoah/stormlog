@@ -96,7 +96,12 @@ def _span_capability(**counters: int) -> dict[str, Any]:
     }
 
 
-def _trace(*, imported: bool = True) -> list[dict[str, Any]]:
+def _trace(
+    *,
+    imported: bool = True,
+    files: tuple[str, ...] = ("host.12345.pt.trace.json.gz",),
+    summaries: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = [
         {
             "event_type": "infer.trace_window",
@@ -105,17 +110,16 @@ def _trace(*, imported: bool = True) -> list[dict[str, Any]]:
             "started": True,
             "stopped_at_ns": END,
             "stop_error": None,
-            "trace_files": ["host.12345.pt.trace.json.gz"],
+            "trace_files": list(files),
         }
     ]
     if imported:
+        traces = summaries if summaries is not None else [{"file": f} for f in files]
         records.append(
             {
                 "event_type": "infer.capabilities",
                 "component": "trace_collector",
-                "metadata": {
-                    "summary": {"traces": [{"file": "host.12345.pt.trace.json.gz"}]}
-                },
+                "metadata": {"summary": {"traces": traces}},
             }
         )
     return records
@@ -261,6 +265,64 @@ def test_a_trace_that_was_not_imported_is_unhealthy() -> None:
     trace = observer_states(records)["observers"]["trace"]
     assert trace["active"] is True and trace["healthy"] is False
     assert trace["phases"]["c1"]["reasons"] == ["its trace was not imported"]
+
+
+def test_a_cupti_trace_counts_only_when_its_own_process_trace_was_imported() -> None:
+    # Every CUPTI trace is named activity.sclz; another process's import
+    # (an earlier server's, say) must not stand for this window's.
+    files = ("pid-11-aaaaaa/activity.sclz",)
+    other = [{"path": "/var/tmp/stormlog-cupti/pid-10-zzzzzz/activity.sclz"}]
+    own = [{"path": "/var/tmp/stormlog-cupti/pid-11-aaaaaa/activity.sclz"}]
+
+    spoofed = observer_states([*_base(), *_trace(files=files, summaries=other)])
+    matched = observer_states([*_base(), *_trace(files=files, summaries=own)])
+
+    assert spoofed["observers"]["trace"]["phases"]["c1"]["reasons"] == [
+        "its trace was not imported"
+    ]
+    assert matched["observers"]["trace"]["healthy"] is True
+
+
+def test_a_trace_whose_collector_dropped_records_is_unhealthy() -> None:
+    files = ("pid-11-aaaaaa/activity.sclz",)
+    loss = {
+        "cupti_dropped_records": 817491,
+        "local_dropped_records": 0,
+        "buffer_refusals": 817491,
+        "kernels_without_timestamps": 3,
+    }
+    summary = [{"path": "/d/pid-11-aaaaaa/activity.sclz", "event_loss": loss}]
+
+    trace = observer_states([*_base(), *_trace(files=files, summaries=summary)])[
+        "observers"
+    ]["trace"]
+
+    assert trace["healthy"] is False
+    assert trace["phases"]["c1"]["reasons"] == [
+        "its trace lost records: cupti_dropped_records=817491, buffer_refusals=817491"
+    ]
+
+
+def test_a_trace_with_no_gpu_activity_is_unhealthy() -> None:
+    files = ("pid-11-aaaaaa/activity.sclz",)
+    summary = [{"path": "/d/pid-11-aaaaaa/activity.sclz", "gpu_events": 0}]
+
+    trace = observer_states([*_base(), *_trace(files=files, summaries=summary)])[
+        "observers"
+    ]["trace"]
+
+    assert trace["healthy"] is False
+    assert trace["phases"]["c1"]["reasons"] == ["its trace has no GPU activity"]
+
+
+def test_kernels_without_timestamps_alone_keep_a_trace_healthy() -> None:
+    files = ("pid-11-aaaaaa/activity.sclz",)
+    loss = {"cupti_dropped_records": 0, "kernels_without_timestamps": 175}
+    summary = [{"path": "/d/pid-11-aaaaaa/activity.sclz", "event_loss": loss}]
+
+    states = observer_states([*_base(), *_trace(files=files, summaries=summary)])
+
+    assert states["observers"]["trace"]["healthy"] is True
 
 
 def test_a_hook_that_dropped_records_is_unhealthy() -> None:
