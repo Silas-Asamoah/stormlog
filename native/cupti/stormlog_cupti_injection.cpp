@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.0";
+constexpr char kHelperVersion[] = "0.4.1";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -873,6 +873,17 @@ void Finalize() {
     }
     // The forced flush has queued every buffer; write them before closing.
     StopWriter();
+    // Judge the capture before the trace is finalized, so a capture that
+    // cannot be trusted keeps its .partial name and no end frame.
+    if (g_state.initialized && !g_state.activities_enabled.load()) {
+      SetInitializationError("capture was stopped before it was started");
+    } else if (g_state.initialized) {
+      // The records cannot be trusted unless the runtime matched by now.
+      const std::string mismatch = RuntimeMismatch();
+      if (!mismatch.empty()) {
+        SetInitializationError(mismatch);
+      }
+    }
     if (g_state.trace_fd >= 0) {
       {
         std::lock_guard<std::mutex> lock(g_state.output_mutex);
@@ -900,15 +911,6 @@ void Finalize() {
       }
       if (!HasInitializationError() && fsync(g_state.directory_fd) != 0) {
         SetSystemError("capture directory fsync failed");
-      }
-    }
-    if (g_state.initialized && !g_state.activities_enabled.load()) {
-      SetInitializationError("capture was stopped before it was started");
-    } else if (g_state.initialized) {
-      // The records cannot be trusted unless the runtime matched by now.
-      const std::string mismatch = RuntimeMismatch();
-      if (!mismatch.empty()) {
-        SetInitializationError(mismatch);
       }
     }
     g_state.finalized = g_state.initialized && !HasInitializationError();
