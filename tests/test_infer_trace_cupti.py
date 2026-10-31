@@ -154,6 +154,55 @@ def test_an_api_record_without_a_name_falls_back_to_its_callback_id(
     assert load_cupti_trace(path).launches[(None, 1)].name == "runtime:cbid=211"
 
 
+def test_a_kernel_ending_before_it_starts_is_counted_not_imported(
+    tmp_path: Path,
+) -> None:
+    backwards = {**_kernel(2, 9_000), "device_end_ns": 0}
+    boolean = {**_kernel(3, 9_000), "device_start_ns": True, "device_end_ns": False}
+    path = _trace(tmp_path, [_frame([_kernel(1, 5_000), backwards, boolean])])
+
+    trace = load_cupti_trace(path)
+
+    assert [(e.start_ns, e.end_ns) for e in trace.gpu_events] == [(5_000, 7_000)]
+    assert trace.not_imported == {
+        "kernel_ending_before_start": 1,
+        "kernel_without_timestamps": 1,
+    }
+
+
+def test_an_api_record_without_a_timestamp_is_counted(tmp_path: Path) -> None:
+    untimed = {**_api(2, 2_000), "cpu_start_ns": None}
+    path = _trace(tmp_path, [_frame([_api(1, 1_000), untimed, _kernel(1, 5_000)])])
+
+    trace = load_cupti_trace(path)
+
+    assert list(trace.launches) == [(None, 1)]
+    assert trace.not_imported == {"runtime_without_timestamps": 1}
+
+
+@pytest.mark.parametrize(
+    ("record", "message"),
+    [
+        ({**_api(1, 1_000), "metadata": {"thread_id": 7}}, "lacks process_id"),
+        ({**_api(1, 1_000), "metadata": ["not", "a", "dict"]}, "not an object"),
+    ],
+)
+def test_a_malformed_record_is_refused_with_its_number(
+    tmp_path: Path, record: dict[str, Any], message: str
+) -> None:
+    path = _trace(tmp_path, [_frame([_kernel(1, 5_000), record])])
+
+    with pytest.raises(ValueError, match=f"record 2 is malformed: .*{message}"):
+        load_cupti_trace(path)
+
+
+def test_a_boolean_loss_count_is_refused(tmp_path: Path) -> None:
+    path = _trace(tmp_path, status=_status(buffer_refusals=True))
+
+    with pytest.raises(ValueError, match="invalid buffer_refusals"):
+        load_cupti_trace(path)
+
+
 @pytest.mark.parametrize(
     ("tail", "message"),
     [
@@ -279,6 +328,16 @@ def test_cli_refuses_a_trace_from_a_failed_helper(tmp_path: Path) -> None:
         tmp_path,
         status=_status(finalized=False, initialization_error="helper built against"),
     )
+
+    assert main(["import-trace", str(artifact), str(trace)]) == int(
+        ExitCode.INVALID_INPUT
+    )
+
+
+def test_cli_refuses_a_malformed_record_as_invalid_input(tmp_path: Path) -> None:
+    artifact = _artifact(tmp_path / "infer.jsonl")
+    record = {**_api(1, 1_000), "metadata": {"thread_id": 7}}
+    trace = _trace(tmp_path, [_frame([record])])
 
     assert main(["import-trace", str(artifact), str(trace)]) == int(
         ExitCode.INVALID_INPUT

@@ -25,7 +25,7 @@ import struct
 import zlib
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, TypeGuard
 
 from .trace_kineto import GpuEvent, KinetoTrace, LaunchCall
 
@@ -140,8 +140,8 @@ def load_cupti_trace(path: str | Path) -> KinetoTrace:
         device_names={},
         source="stormlog-cupti",
     )
-    for record in iter_records(path):
-        _add_record(trace, record)
+    for number, record in enumerate(iter_records(path), 1):
+        _add_checked_record(trace, record, number)
     trace.event_loss = _event_loss(status)
     lost = {name: count for name, count in trace.event_loss.items() if count}
     if lost:
@@ -156,17 +156,44 @@ def load_cupti_trace(path: str | Path) -> KinetoTrace:
     return trace
 
 
+def _add_checked_record(
+    trace: KinetoTrace, record: dict[str, Any], number: int
+) -> None:
+    try:
+        _add_record(trace, record)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"record {number} is malformed: {exc!r}") from exc
+
+
 def _add_record(trace: KinetoTrace, record: dict[str, Any]) -> None:
     kind = record.get("activity_kind")
     metadata = record.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata is not an object")
     correlation = _optional_int(record.get("correlation_id"))
     if kind in API_KINDS:
         _add_launch(trace, kind, metadata, correlation, record.get("cpu_start_ns"))
-        return
+    elif kind in GPU_KINDS:
+        _add_gpu_event(trace, kind, record, metadata, correlation)
+    else:
+        _not_imported(trace, str(kind))
+
+
+def _add_gpu_event(
+    trace: KinetoTrace,
+    kind: str,
+    record: dict[str, Any],
+    metadata: dict[str, Any],
+    correlation: int | None,
+) -> None:
     start, end = record.get("device_start_ns"), record.get("device_end_ns")
-    if kind not in GPU_KINDS or not isinstance(start, int) or not isinstance(end, int):
-        reason = f"{kind}_without_timestamps" if kind in GPU_KINDS else str(kind)
-        trace.not_imported[reason] = trace.not_imported.get(reason, 0) + 1
+    if not _is_int(start) or not _is_int(end):
+        _not_imported(trace, f"{kind}_without_timestamps")
+        return
+    if end < start:
+        # The helper writes CUPTI's pair as it came; one end missing reads
+        # as 0. Counted, so one bad record does not refuse the whole trace.
+        _not_imported(trace, f"{kind}_ending_before_start")
         return
     trace.gpu_events.append(
         GpuEvent(
@@ -190,21 +217,41 @@ def _add_launch(
     correlation: int | None,
     start: Any,
 ) -> None:
-    if not correlation or not isinstance(start, int):
+    if not correlation:
+        _not_imported(trace, f"{kind}_without_correlation")
+        return
+    if not _is_int(start):
+        _not_imported(trace, f"{kind}_without_timestamps")
         return
     trace.launches[(None, correlation)] = LaunchCall(
-        pid=int(metadata["process_id"]),
-        tid=int(metadata["thread_id"]),
+        pid=_required_int(metadata, "process_id"),
+        tid=_required_int(metadata, "thread_id"),
         ts_us=start / 1000,
-        name=str(metadata.get("name") or f"{kind}:cbid={metadata['cbid']}"),
+        name=str(metadata.get("name") or f"{kind}:cbid={metadata.get('cbid')}"),
     )
+
+
+def _not_imported(trace: KinetoTrace, reason: str) -> None:
+    trace.not_imported[reason] = trace.not_imported.get(reason, 0) + 1
+
+
+def _is_int(value: Any) -> TypeGuard[int]:
+    """An integer, and not a JSON boolean (which Python reads as one)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _required_int(metadata: dict[str, Any], key: str) -> int:
+    value = _optional_int(metadata.get(key))
+    if value is None:
+        raise ValueError(f"metadata lacks {key}")
+    return value
 
 
 def _event_loss(status: dict[str, Any]) -> dict[str, int]:
     loss = {}
     for name in LOSS_COUNTERS:
         value = status.get(name, 0)
-        if not isinstance(value, int) or value < 0:
+        if not _is_int(value) or value < 0:
             raise ValueError(f"{STATUS_FILENAME} has an invalid {name}")
         loss[name] = value
     return loss
