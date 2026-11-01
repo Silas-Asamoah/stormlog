@@ -1679,6 +1679,8 @@ def test_a_cupti_window_finds_and_imports_each_process_trace(
     capture = TraceFileCollector(window.files).collect(run_id="r", session_id="s")
     summaries = (capture.summary or {})["traces"]
     assert [s["format"] for s in summaries] == ["stormlog-cupti"] * 2
+    # Trace health matches the window's files to their imports by these.
+    assert record["trace_paths"] == [s["path"] for s in summaries]
 
 
 def test_cupti_tracing_needs_a_trace_dir() -> None:

@@ -414,6 +414,11 @@ class TraceWindow:
                 str(path.relative_to(trace_dir)) if trace_dir else path.name
                 for path in self.files
             ],
+            # Resolved as an import's summary records its trace's path, so
+            # trace health can tell this window's files from same-named ones.
+            # Path.resolve() there is os.path.realpath plus a symlink-loop
+            # check, so the two agree for every file a window finds.
+            "trace_paths": [os.path.realpath(path) for path in self.files],
             "note": self.note,
         }
 

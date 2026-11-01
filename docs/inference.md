@@ -959,7 +959,10 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   when the window was requested, when the `/start_profile` call itself was
   sent and answered (`start_requested_at_ns`, `start_returned_at_ns`), the
   `start_outcome`, when the start was confirmed, start and stop HTTP status or
-  error, why it stopped, and the trace files found. A cancelled run
+  error, why it stopped, and the trace files found: `trace_files` below
+  `--trace-dir`, and `trace_paths` resolved, as the import summary records
+  each trace's `path`. Trace health counts only the imports whose `path` is
+  one of the window's `trace_paths`. A cancelled run
   does not import its traces; import the listed files with
   `stormlog infer import-trace`. If `--trace` was requested and no trace could
   be imported, the trace collector's `infer.capabilities` record says so, with

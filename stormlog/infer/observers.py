@@ -388,7 +388,7 @@ def _trace_reasons(
     if window.get("stop_error") or not is_number(window.get("stopped_at_ns")):
         reasons.append("the trace did not stop cleanly")
     files = [str(name) for name in window.get("trace_files") or []]
-    own = _own_traces(files, imported)
+    own = _own_traces(window, imported)
     if not files:
         reasons.append("no trace file was written")
     elif not own:
@@ -410,24 +410,16 @@ def _content_reasons(own: list[Mapping[str, Any]]) -> list[str]:
 
 
 def _own_traces(
-    files: list[str], imported: list[Mapping[str, Any]]
+    window: Mapping[str, Any], imported: list[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
-    """The imported traces that are one of the window's ``files``."""
-    return [trace for trace in imported if any(_is_file(trace, f) for f in files)]
+    """The imported traces that are the window's own files.
 
-
-def _is_file(trace: Mapping[str, Any], name: str) -> bool:
-    """Whether an imported trace is the window's file ``name``.
-
-    ``name`` is the file's path below the trace dir. Matching on that path,
-    not the base name, keeps one process's ``pid-*/activity.sclz`` from
-    standing for another's: every CUPTI trace has the same base name.
+    Matched on the absolute path the window recorded. Every CUPTI trace is
+    named ``activity.sclz``, and the same path below another directory (a
+    copy, another server's trace dir) is another file.
     """
-    for key in ("path", "file"):
-        value = str(trace.get(key) or "")
-        if value and (value == name or value.endswith(f"/{name}")):
-            return True
-    return False
+    paths = {str(path) for path in window.get("trace_paths") or []}
+    return [trace for trace in imported if str(trace.get("path") or "") in paths]
 
 
 def _lost_records(traces: list[Mapping[str, Any]]) -> str:
