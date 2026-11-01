@@ -582,18 +582,25 @@ void ProcessActivityRecord(const CUpti_Activity* record) {
 
 void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
                               std::size_t* maximum_records) {
-  if (g_state.outstanding_buffer_bytes.load() + g_state.activity_buffer_bytes >
-      g_state.maximum_buffer_bytes) {
-    // The writer is behind: let CUPTI drop records rather than grow memory.
-    g_state.buffer_refusals.fetch_add(1);
-    *buffer = nullptr;
-    *size = 0;
-    *maximum_records = 0;
-    return;
-  }
+  const std::uint64_t bytes = g_state.activity_buffer_bytes;
+  // Reserve the bytes before allocating: checked and added apart, requests
+  // that arrive together could each pass the cap.
+  std::uint64_t reserved = g_state.outstanding_buffer_bytes.load();
+  do {
+    if (reserved + bytes > g_state.maximum_buffer_bytes) {
+      // The writer is behind: let CUPTI drop records rather than grow memory.
+      g_state.buffer_refusals.fetch_add(1);
+      *buffer = nullptr;
+      *size = 0;
+      *maximum_records = 0;
+      return;
+    }
+  } while (!g_state.outstanding_buffer_bytes.compare_exchange_weak(
+      reserved, reserved + bytes));
   void* allocation = nullptr;
   if (posix_memalign(&allocation, alignof(std::max_align_t),
                      g_state.activity_buffer_bytes) != 0) {
+    g_state.outstanding_buffer_bytes.fetch_sub(bytes);
     SetInitializationError("could not allocate a CUPTI activity buffer");
     *buffer = nullptr;
     *size = 0;
@@ -604,8 +611,7 @@ void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
   *size = g_state.activity_buffer_bytes;
   *maximum_records = 0;
   g_state.buffers_requested.fetch_add(1);
-  const std::uint64_t outstanding =
-      g_state.outstanding_buffer_bytes.fetch_add(*size) + *size;
+  const std::uint64_t outstanding = reserved + bytes;
   std::uint64_t peak = g_state.peak_outstanding_buffer_bytes.load();
   while (outstanding > peak &&
          !g_state.peak_outstanding_buffer_bytes.compare_exchange_weak(
