@@ -1149,6 +1149,13 @@ void Initialize() {
       }
     }
   }
+  // CUPTI takes the period in 32 bits: a larger one would wrap, and
+  // 4294967296 would become 0, which turns periodic flushing off.
+  if (g_state.flush_period_ms > std::numeric_limits<std::uint32_t>::max()) {
+    SetInitializationError(std::string(kFlushPeriodEnv) +
+                           " must be at most 4294967295");
+    return;
+  }
   if (const char* value = std::getenv(kDiscardEnv)) {
     g_state.discard_records = std::strcmp(value, "1") == 0;
   }
