@@ -268,12 +268,18 @@ def _event_loss(status: dict[str, Any]) -> dict[str, int]:
 
 
 def _optional_int(value: Any) -> int | None:
+    """An identifier: a JSON integer, or the decimal string the helper writes.
+
+    Anything else is refused, not converted: ``int()`` would truncate 1.5 to
+    1 and link the record to another launch.
+    """
     if value is None or isinstance(value, bool):
         return None
-    try:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
         return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"expected an integer identifier, got {value!r}") from exc
+    raise ValueError(f"expected an integer identifier, got {value!r}")
 
 
 def _text(value: Any) -> str | None:

@@ -186,6 +186,9 @@ def test_an_api_record_without_a_timestamp_is_counted(tmp_path: Path) -> None:
     [
         ({**_api(1, 1_000), "metadata": {"thread_id": 7}}, "lacks process_id"),
         ({**_api(1, 1_000), "metadata": ["not", "a", "dict"]}, "not an object"),
+        # Truncated, either would link the record to launch 1.
+        ({**_kernel(1, 9_000), "correlation_id": 1.5}, "got 1.5"),
+        ({**_kernel(1, 9_000), "correlation_id": " 1"}, "got ' 1'"),
     ],
 )
 def test_a_malformed_record_is_refused_with_its_number(
