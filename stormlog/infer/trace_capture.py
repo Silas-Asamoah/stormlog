@@ -281,10 +281,11 @@ class CuptiControl:
 
         Each stop waits for its helper to write its trace; sent one by one,
         the last process would keep tracing for the sum of the others' writes.
+        One thread per helper: with fewer, the rest would wait their turn.
         """
         if len(paths) < 2:
             return {path: self._send(path, command) for path in paths}
-        with ThreadPoolExecutor(max_workers=min(len(paths), 32)) as pool:
+        with ThreadPoolExecutor(max_workers=len(paths)) as pool:
             replies = pool.map(lambda path: self._send(path, command), paths)
             return dict(zip(paths, replies))
 

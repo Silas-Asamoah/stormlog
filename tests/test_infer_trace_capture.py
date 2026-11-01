@@ -1519,8 +1519,10 @@ def test_cupti_control_every_helper_refusing_is_a_rejected_start(
     assert start_outcome(result) == START_REJECTED
 
 
-def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path) -> None:
-    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=0.5) for n in (1, 2, 3)]
+# 40: past the 32 threads the stops were once limited to.
+@pytest.mark.parametrize("count", [3, 40])
+def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path, count: int) -> None:
+    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=1.0) for n in range(1, count + 1)]
     control = CuptiControl(cupti_dir, timeout=5)
     assert control.post("/start_profile") == ControlResult(200)
 
