@@ -715,16 +715,18 @@ std::string JsonStringArray(const std::vector<std::string>& values) {
   return output.str();
 }
 
-void WriteStatus() {
+// Whether the status reached cupti_status.json; on failure, errno says why.
+bool WriteStatus() {
   if (g_state.directory_fd < 0) {
-    return;
+    errno = EBADF;
+    return false;
   }
   unlinkat(g_state.directory_fd, kStatusTemporaryFilename, 0);
   const int descriptor =
       openat(g_state.directory_fd, kStatusTemporaryFilename,
              O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (descriptor < 0) {
-    return;
+    return false;
   }
   std::ostringstream output;
   const std::string initialization_error = InitializationError();
@@ -786,20 +788,26 @@ void WriteStatus() {
   }
   output << "}\n";
   const std::string content = output.str();
-  bool persisted = WriteAll(descriptor, content);
-  if (persisted && fsync(descriptor) != 0) {
-    persisted = false;
+  int failure = 0;
+  errno = 0;
+  if (!WriteAll(descriptor, content) || fsync(descriptor) != 0) {
+    // A write that wrote nothing sets no errno.
+    failure = errno == 0 ? EIO : errno;
   }
-  if (close(descriptor) != 0) {
-    persisted = false;
+  if (close(descriptor) != 0 && failure == 0) {
+    failure = errno;
   }
-  if (persisted && renameat(g_state.directory_fd, kStatusTemporaryFilename,
-                            g_state.directory_fd, kStatusFilename) != 0) {
-    persisted = false;
+  if (failure == 0 &&
+      renameat(g_state.directory_fd, kStatusTemporaryFilename,
+               g_state.directory_fd, kStatusFilename) != 0) {
+    failure = errno;
   }
-  if (persisted) {
-    fsync(g_state.directory_fd);
+  if (failure != 0) {
+    errno = failure;
+    return false;
   }
+  fsync(g_state.directory_fd);
+  return true;
 }
 
 // Why the capture cannot be trusted against the target's CUDA runtime, or
@@ -961,7 +969,20 @@ void Finalize() {
       }
     }
     g_state.finalized = g_state.initialized && !HasInitializationError();
-    WriteStatus();
+    if (!WriteStatus() && g_state.finalized) {
+      // The importer refuses a trace whose status does not say it
+      // finalized, so STOP must not answer OK, and the trace goes back to
+      // its .partial name like any other it cannot vouch for. That status
+      // cannot hold the error, so the server's log gets it.
+      g_state.finalized = false;
+      SetSystemError("could not write the final cupti_status.json");
+      if (renameat(g_state.directory_fd, kTraceFilename, g_state.directory_fd,
+                   kTracePartialFilename) == 0) {
+        fsync(g_state.directory_fd);
+      }
+      WriteAll(STDERR_FILENO,
+               "stormlog-cupti: " + InitializationError() + "\n");
+    }
     const int control_fd = g_state.control_fd.exchange(-1);
     if (control_fd >= 0) {
       shutdown(control_fd, SHUT_RDWR);
