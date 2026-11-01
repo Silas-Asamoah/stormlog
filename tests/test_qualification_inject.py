@@ -3,6 +3,7 @@ process: priming, baseline, three episodes with recovery, and the truth."""
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import re
@@ -10,6 +11,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -35,6 +37,21 @@ pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or not hasattr(signal, "SIGSTOP"),
     reason="needs SIGSTOP and SIGCONT",
 )
+
+
+@pytest.fixture(autouse=True)
+def _freeze_older_objects() -> Iterator[None]:
+    # Late in the suite this process holds 600-850k objects left by earlier
+    # tests. On CI (3.11-3.13) a full collection over them held the GIL for
+    # 250-415 ms, and one inside a neighbor's 2 s window delayed its sends
+    # past the 0.25 s p95 dispatch-lag rule, so its actuation failed. A real
+    # harness is a fresh process with a small heap. Freezing what earlier
+    # tests left behind keeps each collection to this test's own objects.
+    gc.freeze()
+    try:
+        yield
+    finally:
+        gc.unfreeze()
 
 
 def _plan(path: Path) -> Path:
