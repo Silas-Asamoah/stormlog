@@ -897,12 +897,10 @@ void Finalize() {
   }
   std::call_once(g_finalize_once, [] {
     if (g_state.initialized) {
-      // Disable first so no record is produced after the final flush.
-      for (const ActivitySelection& activity : kSupportedActivities) {
-        if (IsRequested(activity.name)) {
-          cuptiActivityDisable(activity.kind);
-        }
-      }
+      // Disable first so no record is produced after the final flush. A
+      // kind that stays enabled fails the capture, so STOP answers ERR and
+      // Stormlog says the profiler may still be running.
+      DisableActivities();
       const CUptiResult flush_result =
           cuptiActivityFlushAll(CUPTI_ACTIVITY_FLAG_FLUSH_FORCED);
       if (flush_result != CUPTI_SUCCESS) {
