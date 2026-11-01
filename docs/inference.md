@@ -1093,7 +1093,7 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   Do not also start vLLM's profiler in a server with the helper loaded: it
   still writes a trace, but with CPU operators and no GPU activity. The trace
   itself does not say why; Stormlog's import adds a note to the summary when a
-  trace has CPU events and no GPU activity. Under Nsight Systems, the helper refuses to
+  trace has timed events and no GPU activity. Under Nsight Systems, the helper refuses to
   capture. If another profiler takes the slot first, the helper is meant to
   report that error, but that case has not been tested on hardware.
 - **Clock and devices.** Timestamps are CUPTI's, not converted to wall time.

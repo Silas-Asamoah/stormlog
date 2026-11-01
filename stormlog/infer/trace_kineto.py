@@ -154,8 +154,11 @@ def load_kineto_trace(path: str | Path) -> KinetoTrace:
     if complete_events and not trace.gpu_events:
         # Seen when another CUPTI client (Stormlog's helper, Nsight) held the
         # process: Kineto logs the failure but still writes its CPU events.
+        # Not all are CPU events (gpu_user_annotation is not), so the note
+        # does not call them that.
+        events = "event" if complete_events == 1 else "events"
         trace.notes.append(
-            f"the trace has {complete_events} CPU events but no GPU kernels, "
+            f"the trace has {complete_events} timed {events} but no GPU kernels, "
             "copies or memsets; the profiler may not have had CUPTI"
         )
     return trace
