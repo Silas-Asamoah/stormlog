@@ -403,9 +403,15 @@ def _content_reasons(own: list[Mapping[str, Any]]) -> list[str]:
     if lost:
         reasons.append(f"its trace lost records: {lost}")
     # A profiler that never had CUPTI (another client held it) still writes
-    # its CPU events, so an empty trace imports without an error.
-    if own and all(trace.get("gpu_events") == 0 for trace in own):
-        reasons.append("its trace has no GPU activity")
+    # its CPU events, so an empty trace imports without an error. A summary
+    # without the count shows no GPU activity either.
+    counts = [trace.get("gpu_events") for trace in own]
+    if own and not any(is_number(count) and count > 0 for count in counts):
+        reasons.append(
+            "its trace has no GPU activity"
+            if all(is_number(count) for count in counts)
+            else "its trace does not count its GPU events"
+        )
     return reasons
 
 

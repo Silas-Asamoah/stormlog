@@ -311,7 +311,13 @@ def test_a_trace_whose_collector_dropped_records_is_unhealthy() -> None:
         "buffer_refusals": 817491,
         "kernels_without_timestamps": 3,
     }
-    summary = [{"path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz", "event_loss": loss}]
+    summary = [
+        {
+            "path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz",
+            "gpu_events": 1,
+            "event_loss": loss,
+        }
+    ]
 
     trace = observer_states([*_base(), *_trace(files=files, summaries=summary)])[
         "observers"
@@ -323,22 +329,38 @@ def test_a_trace_whose_collector_dropped_records_is_unhealthy() -> None:
     ]
 
 
-def test_a_trace_with_no_gpu_activity_is_unhealthy() -> None:
+@pytest.mark.parametrize(
+    ("count", "reason"),
+    [
+        ({"gpu_events": 0}, "its trace has no GPU activity"),
+        ({}, "its trace does not count its GPU events"),
+        ({"gpu_events": True}, "its trace does not count its GPU events"),
+    ],
+)
+def test_a_trace_that_shows_no_gpu_activity_is_unhealthy(
+    count: dict[str, Any], reason: str
+) -> None:
     files = ("pid-11-aaaaaa/activity.sclz",)
-    summary = [{"path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz", "gpu_events": 0}]
+    summary = [{"path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz", **count}]
 
     trace = observer_states([*_base(), *_trace(files=files, summaries=summary)])[
         "observers"
     ]["trace"]
 
     assert trace["healthy"] is False
-    assert trace["phases"]["c1"]["reasons"] == ["its trace has no GPU activity"]
+    assert trace["phases"]["c1"]["reasons"] == [reason]
 
 
 def test_kernels_without_timestamps_alone_keep_a_trace_healthy() -> None:
     files = ("pid-11-aaaaaa/activity.sclz",)
     loss = {"cupti_dropped_records": 0, "kernels_without_timestamps": 175}
-    summary = [{"path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz", "event_loss": loss}]
+    summary = [
+        {
+            "path": f"{TRACE_DIR}/pid-11-aaaaaa/activity.sclz",
+            "gpu_events": 1,
+            "event_loss": loss,
+        }
+    ]
 
     states = observer_states([*_base(), *_trace(files=files, summaries=summary)])
 
