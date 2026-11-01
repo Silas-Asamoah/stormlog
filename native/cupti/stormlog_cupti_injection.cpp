@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.1";
+constexpr char kHelperVersion[] = "0.4.2";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -820,7 +820,33 @@ std::string RuntimeMismatch() {
   return {};
 }
 
-// Enables the requested activity kinds once; returns false if none could be.
+bool IsEnabled(std::string_view name) {
+  for (const std::string& enabled : g_state.enabled_activities) {
+    if (enabled == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Disables every requested kind. One that EnableActivities enabled and that
+// stays enabled keeps collecting after the stop, so its failure is the
+// capture's error; what CUPTI answers for a kind never enabled is not.
+void DisableActivities() {
+  for (const ActivitySelection& activity : kSupportedActivities) {
+    if (!IsRequested(activity.name)) {
+      continue;
+    }
+    const CUptiResult result = cuptiActivityDisable(activity.kind);
+    if (result != CUPTI_SUCCESS && IsEnabled(activity.name)) {
+      SetInitializationError(std::string("activity ") + activity.name +
+                             " could not be disabled: " + CuptiError(result));
+    }
+  }
+}
+
+// Enables every requested activity kind, or none: a kind CUPTI refused would
+// be missing from the trace with no drop to show for it. Runs once.
 bool EnableActivities() {
   if (g_state.activities_enabled.load()) {
     return false;
@@ -833,23 +859,28 @@ bool EnableActivities() {
     SetInitializationError(mismatch);
     return false;
   }
+  // Before any kind is enabled, so this failure leaves nothing collecting.
+  const CUptiResult timestamp_result =
+      cuptiGetTimestamp(&g_state.started_timestamp_ns);
+  if (timestamp_result != CUPTI_SUCCESS) {
+    SetInitializationError("timestamp initialization failed: " +
+                           CuptiError(timestamp_result));
+    return false;
+  }
   for (const ActivitySelection& activity : kSupportedActivities) {
     if (!IsRequested(activity.name)) {
       continue;
     }
-    if (cuptiActivityEnable(activity.kind) == CUPTI_SUCCESS) {
-      g_state.enabled_activities.emplace_back(activity.name);
+    const CUptiResult result = cuptiActivityEnable(activity.kind);
+    if (result != CUPTI_SUCCESS) {
+      // The refusal is the error reported; then undo the kinds enabled.
+      SetInitializationError(std::string("activity ") + activity.name +
+                             " could not be enabled: " + CuptiError(result));
+      DisableActivities();
+      g_state.enabled_activities.clear();
+      return false;
     }
-  }
-  if (g_state.enabled_activities.empty()) {
-    SetInitializationError("none of the requested activities could be enabled");
-    return false;
-  }
-  const CUptiResult result = cuptiGetTimestamp(&g_state.started_timestamp_ns);
-  if (result != CUPTI_SUCCESS) {
-    SetInitializationError("timestamp initialization failed: " +
-                           CuptiError(result));
-    return false;
+    g_state.enabled_activities.emplace_back(activity.name);
   }
   g_state.activities_enabled.store(true);
   return true;
