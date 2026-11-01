@@ -131,7 +131,7 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
     # read from the scraped prefix-cache counters, while the victim's own
     # cached fraction holds.
     twin = injections["T3b"]
-    assert twin.status == "valid", twin.validity
+    assert twin.status == "valid", (twin.validity, twin.injected.get("actuation"))
     checks = {c["name"]: c for c in twin.validity.checks}
     assert checks["engine_hit_ratio_fell"]["passed"] is True
     assert not checks["engine_hit_ratio_fell"]["incomplete"]
@@ -769,7 +769,11 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     assert verify(run) == []
     twin, fault = load_injections(run / "truth" / "injections.jsonl")
     for injection in (twin, fault):
-        assert injection.validity.actuation == "ok", injection.validity
+        # The neighbor's own record says which actuation rule failed.
+        assert injection.validity.actuation == "ok", (
+            injection.validity,
+            injection.injected.get("actuation"),
+        )
         assert injection.times.effect_end_ns is not None  # it recovered
     assert fault.status == "valid", fault.validity
     checks = {c["name"]: c["passed"] for c in fault.validity.checks}
