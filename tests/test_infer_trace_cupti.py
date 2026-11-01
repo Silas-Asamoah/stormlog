@@ -24,6 +24,14 @@ from stormlog.infer.trace_import import TraceFileCollector
 
 MAGIC = b"SLCPTZ1\n"
 END = struct.pack("<III", 0, 0, 0)
+# Written by helper 0.4.2 on an NVIDIA A10 (CUDA 12.8, torch 2.7.1): one
+# deferred window around a 64x64 matmul, a relu (a clamp kernel), a copy to
+# the host and a zero fill, with every activity kind requested. CI has no
+# GPU, so this is the parser's check against the helper's own output;
+# regenerate it when the helper's record or frame format changes.
+HELPER_TRACE = (
+    Path(__file__).parent / "fixtures" / "cupti" / "pid-13019-aNTdcf" / "activity.sclz"
+)
 
 
 def _frame(records: list[dict[str, Any]]) -> bytes:
@@ -139,6 +147,34 @@ def test_reads_launches_kernels_and_graph_ids(tmp_path: Path) -> None:
         (3, None, 7),
     ]
     assert kernels[1].graph_node_id == 3
+    assert trace.event_loss == {
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "buffer_refusals": 0,
+        "kernels_without_timestamps": 0,
+    }
+
+
+def test_reads_a_trace_the_helper_wrote() -> None:
+    trace = load_cupti_trace(HELPER_TRACE)
+
+    assert sum(1 for _ in iter_records(HELPER_TRACE)) == 59  # delivered_records
+    launched = [
+        (event.kind, trace.launches[(None, event.correlation or 0)].name)
+        for event in trace.gpu_events
+    ]
+    assert launched == [
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+        ("gpu_memcpy", "cudaMemcpyAsync_v3020"),
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+    ]
+    assert trace.gpu_events[0].name == "ampere_sgemm_32x128_nn"
+    assert {(event.device, event.stream) for event in trace.gpu_events} == {(0, 7)}
+    assert all(event.end_ns > event.start_ns for event in trace.gpu_events)
+    assert trace.pids() == {13019}
+    # Synchronization records are read but not imported.
+    assert trace.not_imported == {"synchronization": 2}
     assert trace.event_loss == {
         "cupti_dropped_records": 0,
         "local_dropped_records": 0,
