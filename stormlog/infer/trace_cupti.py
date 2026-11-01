@@ -139,6 +139,9 @@ def load_cupti_trace(path: str | Path) -> KinetoTrace:
         cupti_version=_text(status.get("cupti_version")),
         device_names={},
         source="stormlog-cupti",
+        # The traced process, also when no API record names it: two
+        # GPU-only traces must not read as one process.
+        process_ids={_status_pid(status)},
     )
     for number, record in enumerate(iter_records(path), 1):
         _add_checked_record(trace, record, number)
@@ -245,6 +248,13 @@ def _required_int(metadata: dict[str, Any], key: str) -> int:
     if value is None:
         raise ValueError(f"metadata lacks {key}")
     return value
+
+
+def _status_pid(status: dict[str, Any]) -> int:
+    pid = status.get("pid")
+    if not _is_int(pid) or pid <= 0:
+        raise ValueError(f"{STATUS_FILENAME} has an invalid pid")
+    return pid
 
 
 def _event_loss(status: dict[str, Any]) -> dict[str, int]:

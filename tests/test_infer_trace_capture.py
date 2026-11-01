@@ -1393,6 +1393,7 @@ class _FakeHelper:
 
         self.directory = root / f"pid-{pid}-abcdef"
         self.directory.mkdir()
+        self.pid = pid
         self.start_reply = start_reply
         self.stop_seconds = stop_seconds
         self.commands: list[bytes] = []
@@ -1464,7 +1465,9 @@ class _FakeHelper:
             + struct.pack("<III", 0, 0, 0)
         )
         (self.directory / "cupti_status.json").write_text(
-            json.dumps({"finalized": True, "initialization_error": None})
+            json.dumps(
+                {"pid": self.pid, "finalized": True, "initialization_error": None}
+            )
         )
 
 

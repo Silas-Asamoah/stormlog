@@ -18,6 +18,7 @@ from stormlog.infer.correlation_events import (
     CorrelationContext,
     load_inference_artifact,
 )
+from stormlog.infer.errors import InferUsageError
 from stormlog.infer.trace_cupti import iter_records, load_cupti_trace
 from stormlog.infer.trace_import import TraceFileCollector
 
@@ -258,6 +259,8 @@ def test_a_file_without_the_magic_is_not_a_trace(tmp_path: Path) -> None:
             "another CUPTI client",
         ),
         (_status(buffer_refusals=-1), "invalid buffer_refusals"),
+        (_status(pid=None), "invalid pid"),
+        (_status(pid=True), "invalid pid"),
     ],
 )
 def test_an_unvouched_status_is_refused(
@@ -293,6 +296,20 @@ def test_counted_losses_reach_the_import_summary(tmp_path: Path) -> None:
     assert summary["not_imported"] == {"kernel_without_timestamps": 1}
     assert any("buffer_refusals=3" in note for note in summary["notes"])
     assert any("STORMLOG_CUPTI_MAX_BYTES" in note for note in summary["notes"])
+
+
+def test_a_gpu_only_trace_keeps_the_process_its_status_names(tmp_path: Path) -> None:
+    first = _trace(tmp_path / "pid-42-abc", [_frame([_kernel(1, 5_000)])])
+    second = _trace(
+        tmp_path / "pid-43-def", [_frame([_kernel(1, 6_000)])], status=_status(pid=43)
+    )
+
+    assert load_cupti_trace(first).pids() == {42}
+    # Without API records, both traces had no process, so one shared ordinal
+    # was applied to both although each process may map it to another GPU.
+    collector = TraceFileCollector([first, second], device_uuids={0: "GPU-A"})
+    with pytest.raises(InferUsageError, match="several processes use device 0"):
+        collector.collect(run_id="r", session_id="s")
 
 
 def test_cli_imports_a_trace_into_an_artifact(

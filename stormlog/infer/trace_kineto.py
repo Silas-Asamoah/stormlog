@@ -128,6 +128,13 @@ class KinetoTrace:
     # Records the collector counted as lost, when it reports them (Stormlog's
     # CUPTI helper); None when the format does not say.
     event_loss: dict[str, int] | None = None
+    # Processes the trace names outside its launch calls: the pid in a Stormlog
+    # CUPTI trace's status, which a trace of GPU activity alone still has.
+    process_ids: set[int] = field(default_factory=set)
+
+    def pids(self) -> set[int]:
+        """Every process the trace names: its launching pids and ``process_ids``."""
+        return {launch.pid for launch in self.launches.values()} | self.process_ids
 
 
 def load_kineto_trace(path: str | Path) -> KinetoTrace:
@@ -223,7 +230,7 @@ def capture_trace(
         attachment_id=attachment.attachment_id if attachment else None,
         device_uuids=dict(device_uuids or {}),
         device_uuids_by_pid=_by_pid(device_uuids_by_pid),
-        processes={launch.pid for launch in trace.launches.values()},
+        processes=trace.pids(),
     )
     groups = _group_events(trace, detail)
     events = tuple(
@@ -637,7 +644,7 @@ def _summary(
         "trace_id": trace.trace_id,
         "host": trace.host,
         "rank": trace.rank,
-        "processes": sorted({launch.pid for launch in trace.launches.values()}),
+        "processes": sorted(trace.pids()),
         "engine_version": trace.engine_version,
         "cupti_version": trace.cupti_version,
         "gpu_events": len(trace.gpu_events),
