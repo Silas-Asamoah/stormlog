@@ -376,7 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
             "it; when the run ends, its final scheduler steps are imported and "
-            "its worker hellos name the GPU of each traced process"
+            "its worker hellos name the GPU of each traced process (not for "
+            "--trace cupti, whose traces name no host: give --trace-device-uuid)"
         ),
     )
     profile_parser.add_argument(
@@ -733,7 +734,9 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
             "name the GPU of each traced process (by host, pid and lifetime), so "
-            "--device-uuid is only needed where that leaves a gap"
+            "--device-uuid is only needed where that leaves a gap. A Stormlog "
+            "CUPTI trace (.sclz) names no host and has no wall clock, so it "
+            "always needs --device-uuid"
         ),
     )
     import_parser.add_argument(

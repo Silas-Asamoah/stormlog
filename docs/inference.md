@@ -1098,7 +1098,9 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   report that error, but that case has not been tested on hardware.
 - **Clock and devices.** Timestamps are CUPTI's, not converted to wall time.
   The trace does not name GPU UUIDs, so give `--trace-device-uuid` to measure
-  devices. The helper emits no iteration ranges.
+  devices (`--device-uuid` with `import-trace`). The vLLM execution hook's
+  worker hellos cannot name them either: they are matched by host and wall
+  time, which the trace does not record. The helper emits no iteration ranges.
 
 A finished `activity.sclz` can also be imported later with
 `stormlog infer import-trace ARTIFACT TRACE...`. Name the run's own traces: its
