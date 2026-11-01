@@ -102,7 +102,261 @@ def _plan(path: Path) -> Path:
     return path
 
 
-def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
+class _DiagPeaks:
+    """DIAGNOSTIC ONLY (never merged): peak thread counts, sampled every
+    100 ms while the run goes, in this process and the fake engine's tree."""
+
+    def __init__(self, pid: int) -> None:
+        import threading
+
+        self.pid = pid
+        self.own = 0
+        self.engine = 0
+        self.heap = 0
+        self.frozen = 0
+        self.pauses: list[tuple[int, int, float]] = []
+        self.writes: list[tuple[str, int, float]] = []
+        self.cpu: list[tuple[int, dict[int, int]]] = []
+        self.names: dict[int, str] = {}
+        self.meminfo: list[tuple[int, int, int]] = []
+        self._append: Any = None
+        self._gc_start = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="diag", daemon=True)
+
+    def _run(self) -> None:
+        import threading
+        import time
+
+        root = psutil.Process(self.pid)
+        linux = os.path.isdir("/proc/self/task")
+        while not self._stop.wait(0.1):
+            self.own = max(self.own, threading.active_count())
+            if linux:
+                now = time.time_ns()
+                for t in threading.enumerate():
+                    if t.native_id is not None:
+                        self.names[t.native_id] = t.name
+                ticks: dict[int, int] = {}
+                for tid in os.listdir("/proc/self/task"):
+                    try:
+                        with open(f"/proc/self/task/{tid}/stat") as stat:
+                            fields = stat.read().rsplit(")", 1)[1].split()
+                        ticks[int(tid)] = int(fields[11]) + int(fields[12])
+                    except (OSError, IndexError, ValueError):
+                        pass
+                self.cpu.append((now, ticks))
+                try:
+                    with open("/proc/meminfo") as info:
+                        kb = {
+                            k: int(v.split()[0])
+                            for k, v in (x.split(":", 1) for x in info if ":" in x)
+                        }
+                    self.meminfo.append((now, kb["Dirty"], kb["Writeback"]))
+                except (OSError, KeyError, ValueError):
+                    pass
+            try:
+                tree = [root, *root.children(recursive=True)]
+                self.engine = max(self.engine, sum(p.num_threads() for p in tree))
+            except psutil.Error:
+                pass
+
+    def _gc(self, phase: str, info: dict[str, int]) -> None:
+        import time
+
+        if phase == "start":
+            self._gc_start = time.time_ns()
+        else:
+            took = (time.time_ns() - self._gc_start) / 1e6
+            self.pauses.append((info["generation"], self._gc_start, took))
+
+    def __enter__(self) -> "_DiagPeaks":
+        import gc
+        import time
+
+        from stormlog.infer import events
+
+        self.heap = len(gc.get_objects())
+        self.frozen = gc.get_freeze_count()
+        gc.callbacks.append(self._gc)
+        original = events.JsonlEventWriter.append
+        self._append = original
+        writes = self.writes
+
+        def timed(writer: Any, *args: Any, **kwargs: Any) -> None:
+            start = time.time_ns()
+            try:
+                original(writer, *args, **kwargs)
+            finally:
+                took = (time.time_ns() - start) / 1e6
+                if took >= 20:
+                    writes.append((writer.path.name, start, took))
+
+        events.JsonlEventWriter.append = timed  # type: ignore[method-assign,assignment]
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        import gc
+
+        from stormlog.infer import events
+
+        gc.callbacks.remove(self._gc)
+        events.JsonlEventWriter.append = self._append  # type: ignore[method-assign]
+        self._stop.set()
+        self._thread.join(1)
+
+
+def _diag_margins(run: Path, hook: Path, label: str, peaks: _DiagPeaks) -> None:
+    """DIAGNOSTIC ONLY (never merged): each neighbor's actuation and margins."""
+    import statistics
+    import threading
+    import warnings
+    from collections import Counter
+
+    try:
+        affinity = getattr(os, "sched_getaffinity", None)
+        parts = [
+            f"cpus={os.cpu_count()} affinity={len(affinity(0)) if affinity else None}",
+            f"load={tuple(round(x, 1) for x in os.getloadavg())}",
+            f"peak_threads own={peaks.own} engine={peaks.engine}",
+            f"threads_after={sorted(Counter(t.name.split('-')[0] for t in threading.enumerate()).items())}",
+            f"thread_names={sorted(Counter(t.name for t in threading.enumerate()).items())}",
+            f"heap={peaks.heap} frozen={peaks.frozen} gcs={len(peaks.pauses)}"
+            f" gen2={sum(1 for g, _s, _d in peaks.pauses if g == 2)}"
+            f" max_by_gen={[round(max((d for g, _s, d in peaks.pauses if g == k), default=0), 1) for k in range(3)]}",
+        ]
+        first_sends = {}
+        for injection in load_injections(run / "truth" / "injections.jsonl"):
+            actuation = injection.injected.get("actuation")
+            if actuation is not None:
+                parts.append(
+                    f"{injection.episode_type} {injection.status}"
+                    f" act={json.dumps(actuation, sort_keys=True)}"
+                )
+        steps: list[int] = []
+        for log in hook.rglob("engine-*/0*.jsonl*"):
+            for line in log.read_text().splitlines():
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("kind") == "scheduled":
+                    steps.append(int(record["start_wall_ns"]))
+        steps.sort()
+        for path in sorted((run / "truth").glob("neighbor-*.jsonl")):
+            records = [json.loads(x) for x in path.read_text().splitlines() if x]
+            requests = sorted(
+                (
+                    r
+                    for r in records
+                    if r.get("event_type") == "infer.request"
+                    and r.get("phase") == "measured"
+                ),
+                key=lambda r: int(r.get("started_at_ns") or 0),
+            )
+            statuses = Counter(
+                (r.get("status"), r.get("error_type"), r.get("http_status"))
+                for r in requests
+            )
+            lagged = [
+                (i, float(r["dispatch_lag_ms"]))
+                for i, r in enumerate(requests)
+                if r.get("dispatch_lag_ms") is not None
+            ]
+            lags = sorted(lag for _i, lag in lagged)
+            late = [(i, lag) for i, lag in lagged if lag > 250]
+            starts = [
+                int(r["started_at_ns"]) for r in requests if r.get("started_at_ns")
+            ]
+            ends = sorted(
+                int(r["ended_at_ns"]) for r in requests if r.get("ended_at_ns")
+            )
+            p95 = lags[min(len(lags) - 1, int(0.95 * len(lags)))] if lags else None
+            if starts:
+                first_sends[path.name] = min(starts)
+            window = [
+                t
+                for t in steps
+                if starts and starts[0] <= t <= (ends[-1] if ends else starts[-1])
+            ]
+            gaps = sorted((b - a) / 1e6 for a, b in zip(window, window[1:]))
+            parts.append(
+                f"{path.name}: n={len(requests)} statuses={dict(statuses)}"
+                f" lag_ms p50={statistics.median(lags) if lags else None}"
+                f" p95={p95} max={lags[-1] if lags else None}"
+                f" late>250ms={len(late)} first_late={late[0] if late else None}"
+                f" lags_by_tenth={[round(max((g for i, g in lagged if j * len(lagged) // 10 <= i < (j + 1) * len(lagged) // 10), default=0)) for j in range(10)] if lagged else None}"
+                f" span={(max(starts) - min(starts)) / 1e9 if starts else None}"
+                f" last_end={(ends[-1] - min(starts)) / 1e9 if ends and starts else None}"
+                f" step_ms p50={statistics.median(gaps) if gaps else None}"
+                f" p95={gaps[int(0.95 * len(gaps))] if gaps else None}"
+                f" max={gaps[-1] if gaps else None} steps={len(window)}"
+            )
+        tick_ms = 1000 / os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 10
+        for name, first in first_sends.items():
+            low, high = first - int(1e9), first + int(3e9)
+            near = [
+                f"g{g}@{(start - first) / 1e6:+.0f}ms:{took:.0f}ms"
+                for g, start, took in peaks.pauses
+                if took >= 20 and low <= start <= high
+            ]
+            slow = [
+                f"{file}@{(start - first) / 1e6:+.0f}ms:{took:.0f}ms"
+                for file, start, took in peaks.writes
+                if low <= start <= high
+            ]
+            inside = [
+                took
+                for g, start, took in peaks.pauses
+                if g == 2 and first <= start <= first + int(2.3e9)
+            ]
+            parts.append(
+                f"{name} gc>=20ms near window: {near} slow_writes: {slow}"
+                f" g2_in_window={len(inside)} g2_max_ms={max(inside, default=0):.1f}"
+            )
+            before = [c for c in peaks.cpu if c[0] <= first]
+            after = [c for c in peaks.cpu if c[0] >= first + int(2.3e9)]
+            if before and after:
+                t0, c0 = before[-1]
+                t1, c1 = after[0]
+                deltas = sorted(
+                    (
+                        (
+                            (c1[tid] - c0.get(tid, 0)) * tick_ms,
+                            peaks.names.get(tid, "?"),
+                        )
+                        for tid in c1
+                    ),
+                    reverse=True,
+                )
+                busy = [f"{n}:{ms:.0f}" for ms, n in deltas[:6] if ms >= 20]
+                leaked = [
+                    f"{n}:{ms:.0f}"
+                    for ms, n in deltas
+                    if ms >= 20
+                    and n.startswith(("stormlog", "Thread"))
+                    and not n.startswith("stormlog-infer")
+                ]
+                parts.append(
+                    f"{name} cpu_ms over {(t1 - t0) / 1e6:.0f}ms top={busy}"
+                    f" leaked_busy={leaked[:8]}"
+                )
+            dirty = [(d, w) for t, d, w in peaks.meminfo if low <= t <= high]
+            if dirty:
+                parts.append(
+                    f"{name} dirty_kb start={dirty[0][0]} max={max(d for d, _w in dirty)}"
+                    f" writeback_kb max={max(w for _d, w in dirty)}"
+                )
+        warnings.warn(f"DIAG {label} | " + " | ".join(parts), stacklevel=1)
+    except Exception as error:  # never break the test
+        warnings.warn(f"DIAG {label} failed: {error!r}", stacklevel=1)
+
+
+@pytest.mark.parametrize("repeat", range(3))
+def test_a_run_injects_its_plan_and_publishes_the_truth(
+    tmp_path: Path, repeat: int
+) -> None:
     hook = tmp_path / "hook"
     arguments = [
         "--step-seconds", "0.002",
@@ -111,7 +365,7 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
         "--max-num-seqs", "8",
         "--hook-dir", str(hook),
     ]  # fmt: skip
-    with FakeEngineProcess(arguments) as server:
+    with FakeEngineProcess(arguments) as server, _DiagPeaks(server.pid) as peaks:
         code = main(
             [
                 "inject",
@@ -125,8 +379,9 @@ def test_a_run_injects_its_plan_and_publishes_the_truth(tmp_path: Path) -> None:
                 "--", "--tokenizer", "none", "--system-sampler", "none",
             ]  # fmt: skip
         )
-    assert code == 0
     run = tmp_path / "runs" / "q221-0123456789abcdef"
+    _diag_margins(run, hook, f"run_injects[{repeat}] code={code}", peaks)
+    assert code == 0
     assert run.is_dir() and verify(run) == []
     injections = {
         i.episode_type: i for i in load_injections(run / "truth" / "injections.jsonl")
@@ -745,7 +1000,8 @@ def test_targets_are_bound_at_startup(tmp_path: Path) -> None:
         _targets(None, [f"sidecar={stand_in.pid}"])
 
 
-def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
+@pytest.mark.parametrize("repeat", range(5))
+def test_queue_episodes_recover_end_to_end(tmp_path: Path, repeat: int) -> None:
     # Fable's A2 deltas, N0: the e2e above has no queue episode, so a plan
     # whose queue recovery could never hold passed CI. T1 and F1 with a
     # baseline and hold long enough for the waits and the waiting gauge:
@@ -780,9 +1036,11 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
         "--max-num-seqs", "8",
         "--hook-dir", str(tmp_path / "hook"),
     ]  # fmt: skip
-    with FakeEngineProcess(arguments) as server:
-        assert _inject(server, tmp_path, plan) == 0
+    with FakeEngineProcess(arguments) as server, _DiagPeaks(server.pid) as peaks:
+        code = _inject(server, tmp_path, plan)
     run = tmp_path / "runs" / "q221-00000000000000bb"
+    _diag_margins(run, tmp_path / "hook", f"queue[{repeat}] code={code}", peaks)
+    assert code == 0
     assert verify(run) == []
     twin, fault = load_injections(run / "truth" / "injections.jsonl")
     for injection in (twin, fault):

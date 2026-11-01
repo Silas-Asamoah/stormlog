@@ -160,6 +160,11 @@ jobs:
                       python3 -m pytest tests/ -o "python_files=test_jax*.py" -v -ra -m "not tui_pilot and not tui_snapshot and not tui_pty" --cov=stormlog --cov-report=xml
                   fi
 
+            - name: DIAG inject e2e in its own session
+              if: ${{ !cancelled() && matrix.framework == 'pytorch' }}
+              run: |
+                  python3 -m pytest "tests/test_qualification_inject.py::test_queue_episodes_recover_end_to_end" "tests/test_qualification_inject.py::test_a_run_injects_its_plan_and_publishes_the_truth" -v -p no:cacheprovider -o faulthandler_timeout=120 --cov=stormlog --cov-report= || true
+
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
               with:
