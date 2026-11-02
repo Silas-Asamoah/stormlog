@@ -686,6 +686,42 @@ def test_one_watcher_owns_a_root_and_a_second_is_refused(tmp_path: Path) -> None
     assert (tmp_path / LOCK_FILENAME).exists()
 
 
+def _writer_threads(watcher: Watcher) -> list[threading.Thread]:
+    return [watcher._store_worker._thread, watcher.ledger._worker._thread]
+
+
+def test_closing_a_watcher_stops_its_writers(tmp_path: Path) -> None:
+    """close() freed the root but left the store's and the ledger's worker
+    threads waiting for work forever: each watcher made and closed without
+    a run left two threads behind."""
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    watcher = Watcher(config, tmp_path)
+    threads = _writer_threads(watcher)
+    assert all(thread.is_alive() for thread in threads)
+    assert watcher.close() is True
+    assert not any(thread.is_alive() for thread in threads)
+    assert watcher.close() is True  # closing twice is harmless
+    Watcher(config, tmp_path).close()  # and the root is free
+
+
+def test_a_writer_that_will_not_stop_keeps_the_root(tmp_path: Path) -> None:
+    """A writer still busy at close() may write under the root, so the root
+    stays locked until it has stopped."""
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    watcher = Watcher(config, tmp_path)
+    release = threading.Event()
+    assert watcher._store_worker.submit(release.wait)
+    try:
+        assert watcher.close(timeout=0.2) is False
+        with pytest.raises(InferUsageError, match="another watcher"):
+            Watcher(config, tmp_path)
+    finally:
+        release.set()
+    assert watcher.close() is True
+    assert not any(thread.is_alive() for thread in _writer_threads(watcher))
+    Watcher(config, tmp_path).close()
+
+
 def test_a_store_another_process_owns_is_refused(tmp_path: Path) -> None:
     other = IncidentStore(tmp_path)
     config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
