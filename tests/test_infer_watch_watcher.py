@@ -1094,13 +1094,7 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
             tmp_path,
             options=WatchOptions(shutdown_deadline_seconds=30.0),
         )
-        stall = threading.Event()
-
-        def stalled_close(timeout: float) -> bool:
-            stall.wait(timeout)
-            return False
-
-        watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
+        stall = _stall_store(watcher)
 
         async def main() -> WatchOutcome:
             stop = asyncio.Event()
@@ -1110,17 +1104,21 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
             return await watcher.run(stop)
 
         started = time.monotonic()
-        outcome = asyncio.run(main())
-        elapsed = time.monotonic() - started
-        stall.set()
+        try:
+            outcome = asyncio.run(main())
+        finally:
+            elapsed = time.monotonic() - started
+            _unstall_store(watcher, stall)
     assert elapsed < 3.0
     assert "store_writer_timeout" in outcome.unsound
     with pytest.raises(InferUsageError, match="another watcher"):
         Watcher(resolve_watch_config(watch_config(base_url)), tmp_path)
-    watcher.close()
+    assert watcher.close() is True
 
 
 def _stall_store(watcher: Watcher) -> threading.Event:
+    """Make the store's writer miss its shutdown time, until the event is
+    set; the real writer is left open, for _unstall_store to close."""
     stall = threading.Event()
 
     def stalled_close(timeout: float) -> bool:
@@ -1129,6 +1127,13 @@ def _stall_store(watcher: Watcher) -> threading.Event:
 
     watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
     return stall
+
+
+def _unstall_store(watcher: Watcher, stall: threading.Event) -> None:
+    """Undo _stall_store, so watcher.close() stops the real writer: the
+    stalled close never did, and left its thread waiting for work."""
+    stall.set()
+    del watcher._store_worker.close
 
 
 def _slow_ledger(watcher: Watcher, seconds: float) -> None:
@@ -1170,10 +1175,12 @@ def test_a_stalled_store_leaves_the_ledger_its_share(
                 loop.call_later(0.5, watcher.hurry)
             return await watcher.run(stop)
 
-        outcome = asyncio.run(main())
-        stall.set()
+        try:
+            outcome = asyncio.run(main())
+        finally:
+            _unstall_store(watcher, stall)
     assert outcome.unsound == ["store_writer_timeout"]
-    watcher.close()
+    assert watcher.close() is True
 
 
 def test_a_store_operation_that_raises_is_in_the_report(tmp_path: Path) -> None:
