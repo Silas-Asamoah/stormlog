@@ -262,6 +262,29 @@ class _EndlessHandler(BaseHTTPRequestHandler):
         self.close_connection = True
 
 
+class _TricklingBody:
+    """A body that sends a byte every ``pause`` seconds and never ends: each
+    socket read returns well within any socket timeout."""
+
+    status = 200
+    length = None
+
+    def __init__(self, pause: float) -> None:
+        self.pause = pause
+        self.taken = 0
+
+    def read1(self, amount: int = -1) -> bytes:
+        time.sleep(self.pause)
+        self.taken += 1
+        return b"x"
+
+    def __enter__(self) -> _TricklingBody:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
 class _EndlessBody:
     """A response body that never ends, counting what the client takes."""
 
@@ -761,6 +784,22 @@ class TestScraperUnits:
         assert result.http_status == 200
         assert result.error is not None and "IncompleteRead" in result.error
         assert "972 more expected" in result.error
+
+    def test_a_trickling_response_ends_the_fetch_at_its_timeout(self) -> None:
+        # The timeout bounded each socket read only: a body arriving a byte
+        # every 20 ms was read for as long as it kept coming, so a scrape the
+        # watcher had given up on held its thread, and every later scrape.
+        body = _TricklingBody(pause=0.02)
+        started = time.perf_counter()
+        with mock.patch.object(vllm_scraper._OPENER, "open", return_value=body):
+            result = fetch_metrics("http://server/metrics", timeout_seconds=0.3)
+        took = time.perf_counter() - started
+        assert 0.3 <= took < 2.0
+        assert result.text is None
+        assert result.http_status == 200
+        assert result.error is not None
+        assert result.error.startswith("deadline: the body was still arriving")
+        assert 0 < body.taken < 100
 
     def test_a_response_over_the_byte_cap_is_read_no_further(self) -> None:
         body = _EndlessBody(give_up_after=10 * 64 * 1024)

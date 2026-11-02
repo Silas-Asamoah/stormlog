@@ -891,6 +891,34 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     assert stats["ticks_missed_total"] >= 1
 
 
+def test_an_abandoned_scrape_stops_reading_soon_after_its_timeout(
+    tmp_path: Path,
+) -> None:
+    """A fetch given up at the 0.3 s scrape timeout read a byte every 0.2 s
+    on its thread until the whole body came, minutes later; until then the
+    watcher started no other scrape. Now it ends within a read of 0.3 s."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    payload = watch_config("", scrape_timeout_seconds=0.3)
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        watcher = Watcher(resolve_watch_config(payload), tmp_path)
+
+        async def scrape() -> Any:
+            return await watcher._scrape(watcher.clock.wall_ns(), asyncio.Event())
+
+        try:
+            record = asyncio.run(scrape())
+            given_up = time.monotonic()
+            while watcher.scraper.fetching() and time.monotonic() - given_up < 5:
+                time.sleep(0.01)
+            still_reading = time.monotonic() - given_up
+        finally:
+            watcher.close()
+    assert record is not None and record.status == "error"
+    assert still_reading < 1.0
+
+
 def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None:
     """The watcher stamps a scrape's start on its own clock. The one it gave
     up on ended on the real clock, so with the watcher's clock behind it the

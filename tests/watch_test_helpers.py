@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import select
+import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -111,7 +113,13 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
             for index in range(len(body)):
                 self.wfile.write(body[index : index + 1])
                 self.wfile.flush()
-                time.sleep(metrics.dribble)
+                if self._hung_up(metrics.dribble):
+                    return  # in flight no longer, as the watcher sees it
+
+        def _hung_up(self, seconds: float) -> bool:
+            """Wait ``seconds``; True at once if the client closes meanwhile."""
+            readable, _, _ = select.select([self.connection], [], [], seconds)
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
         def log_message(self, *args: Any) -> None:
             return None
