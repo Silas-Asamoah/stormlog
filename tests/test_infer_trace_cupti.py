@@ -168,6 +168,12 @@ def test_reads_launches_kernels_and_graph_ids(tmp_path: Path) -> None:
 
 
 def test_reads_a_trace_the_helper_wrote() -> None:
+    """The fixture is the helper's own output from a GPU run (pid 13019).
+
+    So the reader is checked against what the C++ writes, not only against
+    frames these tests build; its 59 records are the status's
+    ``delivered_records``.
+    """
     trace = load_cupti_trace(HELPER_TRACE)
 
     assert sum(1 for _ in iter_records(HELPER_TRACE)) == 59  # delivered_records
@@ -330,6 +336,11 @@ def test_a_missing_status_is_refused(tmp_path: Path) -> None:
 
 
 def test_counted_losses_reach_the_import_summary(tmp_path: Path) -> None:
+    """The helper's loss counters and the reader's own counts both reach the summary.
+
+    Refused buffers and the output limit come from the status; the kernel
+    without timestamps is counted by the reader, in ``not_imported``.
+    """
     path = _trace(
         tmp_path,
         [_frame([_api(1, 1_000), _kernel(1, 5_000), _kernel(2, None)])],
