@@ -130,6 +130,16 @@ class InferenceProfiler:
         prober: Callable[[str], ServerProbe] | None = None,
         on_phase: Callable[[PhaseEvent], None] | None = None,
     ) -> None:
+        """Build the run's clients and samplers, and check the config.
+
+        Nothing is sent and no artifact is opened yet. ``run_id`` overrides the
+        config's; without either, a new one is made. ``on_warning`` and
+        ``on_notice`` each receive one line at a time. ``prober`` takes the
+        server's description at a phase, by default with the configured HTTP
+        probe. A setting the run cannot honour, such as a server description of
+        another run or ``--trace cupti`` over several cases, raises
+        ``ValueError`` here.
+        """
         self.config = config
         self.on_warning = on_warning
         # What the run is doing when it would otherwise seem stuck.
@@ -319,6 +329,12 @@ class InferenceProfiler:
             )
 
     def _check_trace_windows(self) -> None:
+        """Refuse ``--trace cupti`` for more than one case.
+
+        Each server process's helper gives one window, as its stop writes the
+        trace and ends the helper, so a second case would find nothing to
+        trace. Raises ``ValueError``.
+        """
         trace = self.config.trace
         if trace is not None and trace.mode == CUPTI and len(self.config.cases()) > 1:
             raise ValueError(

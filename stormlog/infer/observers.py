@@ -367,6 +367,11 @@ def _trace_phase(
     windows: list[Mapping[str, Any]],
     imported: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """A measured phase's trace health, from its own window and imports.
+
+    Inactive when no measured window for the phase's case started; otherwise
+    healthy only when ``_trace_reasons`` finds nothing wrong.
+    """
     window = next(
         (
             w
@@ -384,6 +389,12 @@ def _trace_phase(
 def _trace_reasons(
     window: Mapping[str, Any], imported: list[Mapping[str, Any]]
 ) -> list[str]:
+    """What is wrong with a started window's trace; empty when nothing is.
+
+    The stop must have come back without an error and with a time, the window
+    must have found a trace file, an import must have read it, and the imported
+    trace must pass ``_content_reasons``.
+    """
     reasons = []
     if window.get("stop_error") or not is_number(window.get("stopped_at_ns")):
         reasons.append("the trace did not stop cleanly")
