@@ -994,17 +994,18 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   time. The stop's cost grows with the window: on an NVIDIA L4 (vLLM 0.30.0,
   Qwen2.5-0.5B, eager), a 5 s window added 1.7 GiB of server RSS and stalled
   serving for 33 s at the stop, and a 20 s window added 7.3 GiB and stalled it
-  for 138 s ([issue #118 evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239)).
+  for 138 s ([issue #118 decision record](https://github.com/Silas-Asamoah/stormlog/blob/research/native-probe-protocol-two/benchmarks/native_probes/decision_2026-10-05.md)).
   Keep windows short with `--trace-max-seconds`.
 
 ### Experimental: direct CUPTI traces
 
 `--trace cupti` captures CUDA runtime, driver and kernel activity with
 Stormlog's own CUPTI helper (`native/cupti`), instead of vLLM's profiler. It is
-**experimental and off by default**: the [issue #118
-evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239) deferred adopting
-it. Use it only when you accept these measured limits (one NVIDIA L4, vLLM
-0.30.0, Qwen2.5-0.5B):
+**experimental and off by default**: the issue #118 evaluation deferred
+adopting it ([decision record](https://github.com/Silas-Asamoah/stormlog/blob/research/native-probe-protocol-two/benchmarks/native_probes/decision_2026-10-05.md);
+its protocols, per-trial results and host scripts are kept at the
+`research/native-probe-protocol-two` tag). Use it only when you accept these
+measured limits (one NVIDIA L4, vLLM 0.30.0, Qwen2.5-0.5B):
 
 - **CUDA graphs (vLLM's default):** p95 latency during the window rose 1.0%
   at a 20 s window, 1.6% at 80 s and 5.2% at 220 s. The server's memory grew
