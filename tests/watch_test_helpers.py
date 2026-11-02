@@ -6,7 +6,6 @@ import json
 import select
 import socket
 import threading
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -83,9 +82,21 @@ class FakeMetrics:
 
 @contextmanager
 def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
-    """Serve ``metrics`` on a free local port; yields the base URL."""
+    """Serve ``metrics`` on a free local port; yields the base URL.
+
+    On the way out every answer still being sent, a trickling one say, is
+    cut off and its thread joined, so a scrape still reading it ends with
+    the server instead of running on into later tests.
+    """
+    # Readable once the server is leaving: wakes every waiting answer.
+    leaving, wake = socket.socketpair()
+    answering: list[threading.Thread] = []
 
     class Handler(BaseHTTPRequestHandler):
+        def setup(self) -> None:
+            answering.append(threading.current_thread())
+            super().setup()
+
         def do_GET(self) -> None:  # noqa: N802 (http.server's name)
             metrics.enter()
             try:
@@ -96,7 +107,8 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
                 metrics.leave()
 
         def _answer(self) -> None:
-            time.sleep(metrics.delay)
+            if metrics.delay and self._wait(metrics.delay):
+                return
             if metrics.status != 200:
                 self.send_response(metrics.status)
                 self.send_header("Content-Length", "0")
@@ -113,12 +125,15 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
             for index in range(len(body)):
                 self.wfile.write(body[index : index + 1])
                 self.wfile.flush()
-                if self._hung_up(metrics.dribble):
+                if self._wait(metrics.dribble):
                     return  # in flight no longer, as the watcher sees it
 
-        def _hung_up(self, seconds: float) -> bool:
-            """Wait ``seconds``; True at once if the client closes meanwhile."""
-            readable, _, _ = select.select([self.connection], [], [], seconds)
+        def _wait(self, seconds: float) -> bool:
+            """Wait ``seconds``; True at once if the client closes or the
+            server is leaving meanwhile."""
+            readable, _, _ = select.select([self.connection, leaving], [], [], seconds)
+            if leaving in readable:
+                return True
             return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
         def log_message(self, *args: Any) -> None:
@@ -130,9 +145,14 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
+        wake.send(b"x")
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        for answer in list(answering):
+            answer.join(timeout=5)
+        leaving.close()
+        wake.close()
 
 
 def watch_config(base_url: str, **overrides: Any) -> dict[str, Any]:
