@@ -35,6 +35,7 @@ HELPER_TRACE = (
 
 
 def _frame(records: list[dict[str, Any]]) -> bytes:
+    """One trace frame holding ``records``, encoded as the helper writes it."""
     raw = b"".join(json.dumps(r).encode() + b"\n" for r in records)
     encoded = zlib.compress(raw)
     return struct.pack("<III", len(encoded), len(raw), len(records)) + encoded
@@ -56,6 +57,11 @@ def _api(correlation: int, start: int, name: str | None = "cudaLaunchKernel") ->
 
 
 def _kernel(correlation: int, start: int | None, graph: str | None = None) -> dict:
+    """A kernel record as the helper writes it, its IDs as decimal strings.
+
+    ``start=None`` gives a kernel without device times; ``graph`` sets its
+    graph ID and a graph node ID.
+    """
     return {
         "activity_kind": "kernel",
         "correlation_id": str(correlation),
@@ -94,6 +100,12 @@ def _trace(
     tail: bytes = END,
     status: dict[str, Any] | None = None,
 ) -> Path:
+    """Write a trace and its status into ``directory``; return the trace's path.
+
+    By default: a frame with a launched kernel, then one with a graph launch,
+    its graph kernel and a kernel whose launch is not in the trace. ``tail``
+    replaces the end frame, and ``status`` the clean, finalized default.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     if frames is None:
         frames = [

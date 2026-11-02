@@ -490,6 +490,7 @@ def test_compact_accounting_keeps_conflicts_runs_and_device_clock_dimensions() -
     original = [*events, *variants]
 
     def roundtrip(values: list[Any]) -> list[Any]:
+        """The events through the compact encoding and back, as a reader sees them."""
         encoder = CorrelationRecordEncoder()
         rows = [row for event in values for row in encoder.encode(event.to_record())]
         return [parse_inference_record(row) for row in expand_inference_records(rows)]

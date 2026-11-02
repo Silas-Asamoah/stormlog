@@ -1299,6 +1299,10 @@ def test_a_trace_dir_unreadable_at_the_start_is_not_searched_later(
     calls = {"n": 0}
 
     def first_call_fails(directory: Path, mode: str) -> list[tuple[str, Path]]:
+        """``_worker_traces``, refused (EACCES) on its first call only.
+
+        The first call is the snapshot taken before the start.
+        """
         calls["n"] += 1
         if calls["n"] == 1:
             raise PermissionError(13, "Permission denied")
@@ -1419,6 +1423,13 @@ class _FakeHelper:
         self.server.close()
 
     def _serve(self) -> None:
+        """Answer as the CUPTI helper does, until stopped or told to quit.
+
+        Each ``STRT`` gets ``start_reply``. ``STOP``, or any other command but
+        ``QUIT``, waits ``stop_seconds``, writes a finalized trace and status,
+        answers ``OK`` and removes the socket. ``QUIT`` ends the helper
+        unstopped.
+        """
         while True:
             client, _ = self.server.accept()
             with client:
