@@ -6,6 +6,7 @@ import json
 import select
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -153,6 +154,33 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
             answer.join(timeout=5)
         leaving.close()
         wake.close()
+
+
+# How long a test's threads get to finish before they count as left behind.
+THREAD_GRACE_SECONDS = 5.0
+
+
+@contextmanager
+def leaves_no_threads(grace: float = THREAD_GRACE_SECONDS) -> Iterator[None]:
+    """Fail if the block leaves a new stormlog-named or non-daemon thread.
+
+    Each new thread is joined first, all within ``grace`` in total, so one
+    that is just finishing is not counted; one left behind would make later
+    tests depend on the order they run in.
+    """
+    before = set(threading.enumerate())
+    yield
+    deadline = time.monotonic() + grace
+    new = [thread for thread in threading.enumerate() if thread not in before]
+    for thread in new:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    left = [
+        f"{thread.name} (daemon={thread.daemon})"
+        for thread in new
+        if thread.is_alive()
+        and (thread.name.startswith("stormlog") or not thread.daemon)
+    ]
+    assert not left, f"threads left behind: {', '.join(left)}"
 
 
 def watch_config(base_url: str, **overrides: Any) -> dict[str, Any]:

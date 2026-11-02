@@ -46,11 +46,29 @@ from tests import watch_fixture_helpers as fixtures
 from tests.vllm_scrape_helpers import exposition, scrape
 from tests.watch_test_helpers import (
     FakeMetrics,
+    leaves_no_threads,
     of_type,
     read_ledger,
     serve_metrics,
     watch_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_threads_left_behind() -> Iterator[None]:
+    with leaves_no_threads():
+        yield
+
+
+def test_a_thread_left_behind_fails_the_test() -> None:
+    """The guard above, on a stormlog thread still waiting at its end."""
+    release = threading.Event()
+    with pytest.raises(AssertionError, match="stormlog-test-leak"):
+        with leaves_no_threads(grace=0.1):
+            threading.Thread(
+                target=release.wait, name="stormlog-test-leak", daemon=True
+            ).start()
+    release.set()
 
 
 class _Observer:
