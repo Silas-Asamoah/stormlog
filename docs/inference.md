@@ -1029,9 +1029,11 @@ lost 39% of kernel timestamps without reporting a drop. The runtime is often
 loaded after the helper, so the versions are compared when the window starts,
 and again when it stops; a process whose CUDA runtime cannot be found by then
 is not captured. The helper looks the runtime up among the process's global
-symbols, so the target must load `libcudart.so` into them, as PyTorch (and so
-vLLM) does. A program linked against the static runtime, nvcc's default, is
-refused with "CUDA runtime version unavailable".
+symbols, then in a `libcudart.so.<major>` the process has already loaded, so
+it finds the shared runtime whether the target loads it globally, as PyTorch
+(and so vLLM) does, or privately (`RTLD_LOCAL`). A program linked against the
+static runtime, nvcc's default, is refused with "CUDA runtime version
+unavailable".
 
 ```bash
 cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release

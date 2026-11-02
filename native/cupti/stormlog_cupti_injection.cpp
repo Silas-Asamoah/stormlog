@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.2";
+constexpr char kHelperVersion[] = "0.4.3";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -298,20 +298,46 @@ void SetSystemError(std::string_view operation) {
                          std::strerror(saved_errno));
 }
 
-std::string QueryCudaVersion(const char* symbol_name) {
+// The version that `symbol_name` reports, from the process's global symbols,
+// or else from `library` if the process has already loaded it; empty when
+// neither has it. A library opened with RTLD_LOCAL keeps its symbols out of
+// the global scope: cudart opens libcuda.so.1 that way, so
+// cuDriverGetVersion is never global, and a target can load libcudart the
+// same way. RTLD_NOLOAD never loads a library the target did not load.
+std::string QueryCudaVersion(const char* symbol_name, const char* library) {
   using VersionFunction = int (*)(int*);
+  void* handle = nullptr;
   void* symbol = dlsym(RTLD_DEFAULT, symbol_name);
   if (symbol == nullptr) {
-    return {};
+    handle = dlopen(library, RTLD_LAZY | RTLD_NOLOAD);
+    if (handle != nullptr) {
+      symbol = dlsym(handle, symbol_name);
+    }
   }
-  static_assert(sizeof(VersionFunction) == sizeof(symbol));
-  VersionFunction version_function = nullptr;
-  std::memcpy(&version_function, &symbol, sizeof(version_function));
   int version = 0;
-  if (version_function(&version) != 0 || version <= 0) {
-    return {};
+  bool answered = false;
+  if (symbol != nullptr) {
+    static_assert(sizeof(VersionFunction) == sizeof(symbol));
+    VersionFunction version_function = nullptr;
+    std::memcpy(&version_function, &symbol, sizeof(version_function));
+    answered = version_function(&version) == 0 && version > 0;
   }
-  return std::to_string(version);
+  if (handle != nullptr) {
+    dlclose(handle);
+  }
+  return answered ? std::to_string(version) : std::string();
+}
+
+std::string QueryDriverVersion() {
+  return QueryCudaVersion("cuDriverGetVersion", "libcuda.so.1");
+}
+
+// The shared runtime of the CUDA major version the helper is built for; a
+// runtime of another major is refused anyway.
+std::string QueryRuntimeVersion() {
+  const std::string library =
+      "libcudart.so." + std::to_string(CUDA_VERSION / 1000);
+  return QueryCudaVersion("cudaRuntimeGetVersion", library.c_str());
 }
 
 void AppendU32(std::string* output, std::uint32_t value) {
@@ -821,7 +847,7 @@ bool WriteStatus() {
 // timestamps without reporting a drop (issue #118, protocol v2).
 std::string RuntimeMismatch() {
   if (g_state.runtime_version.empty()) {
-    g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
+    g_state.runtime_version = QueryRuntimeVersion();
   }
   if (g_state.runtime_version.empty()) {
     return "CUDA runtime version unavailable; cannot confirm CUPTI matches it";
@@ -1224,8 +1250,8 @@ void Initialize() {
     WriteStatus();
     return;
   }
-  g_state.driver_version = QueryCudaVersion("cuDriverGetVersion");
-  g_state.runtime_version = QueryCudaVersion("cudaRuntimeGetVersion");
+  g_state.driver_version = QueryDriverVersion();
+  g_state.runtime_version = QueryRuntimeVersion();
   // The runtime is often loaded after CUDA initializes, when this runs; an
   // unknown version is checked again when capture starts and at finalize.
   if (!g_state.runtime_version.empty()) {
