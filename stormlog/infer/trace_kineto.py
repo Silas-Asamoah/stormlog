@@ -632,6 +632,13 @@ def _summary(
     detail: Detail,
     path: str | Path,
 ) -> dict[str, Any]:
+    """The import summary of one trace: what it is, what it held, what linked.
+
+    GPU events are counted as linked to an iteration or unresolved, by reason.
+    ``path`` is resolved, as trace health matches it against a window's
+    ``trace_paths``. ``event_loss`` is None when the format reports no dropped
+    records, and ``event_loss_note`` then says so.
+    """
     reasons: Counter[str] = Counter()
     linked = 0
     for key, members in groups.items():
