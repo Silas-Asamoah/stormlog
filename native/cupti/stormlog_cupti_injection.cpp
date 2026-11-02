@@ -1001,19 +1001,34 @@ void Finalize() {
       }
     }
     g_state.finalized = g_state.initialized && !HasInitializationError();
-    if (!WriteStatus() && g_state.finalized) {
-      // The importer refuses a trace whose status does not say it
-      // finalized, so STOP must not answer OK, and the trace goes back to
-      // its .partial name like any other it cannot vouch for. That status
-      // cannot hold the error, so the server's log gets it.
-      g_state.finalized = false;
-      SetSystemError("could not write the final cupti_status.json");
-      if (renameat(g_state.directory_fd, kTraceFilename, g_state.directory_fd,
-                   kTracePartialFilename) == 0) {
-        fsync(g_state.directory_fd);
+    // Without a directory there is no status to write, and initialization
+    // already printed why.
+    if (g_state.directory_fd >= 0 && !WriteStatus()) {
+      // Before any allocation, which may set errno.
+      const int saved_errno = errno;
+      // That status cannot hold the error, so the server's log gets it.
+      std::string message =
+          std::string("could not write the final cupti_status.json: ") +
+          std::strerror(saved_errno);
+      if (g_state.finalized) {
+        // The importer refuses a trace whose status does not say it
+        // finalized, so STOP must not answer OK, and the trace goes back
+        // to its .partial name like any other it cannot vouch for.
+        g_state.finalized = false;
+        SetInitializationError(message);
+        if (renameat(g_state.directory_fd, kTraceFilename,
+                     g_state.directory_fd, kTracePartialFilename) == 0) {
+          fsync(g_state.directory_fd);
+        }
+      } else {
+        // The status left on disk is an earlier one, which may not name
+        // the error the capture failed with.
+        const std::string error = InitializationError();
+        if (!error.empty()) {
+          message += "; the capture had already failed: " + error;
+        }
       }
-      WriteAll(STDERR_FILENO,
-               "stormlog-cupti: " + InitializationError() + "\n");
+      WriteAll(STDERR_FILENO, "stormlog-cupti: " + message + "\n");
     }
     const int control_fd = g_state.control_fd.exchange(-1);
     if (control_fd >= 0) {

@@ -1077,7 +1077,11 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   `cupti_status.json`, and Stormlog's start error quotes it. A helper that
   fails before it makes its directory, for example because
   `STORMLOG_CUPTI_MAX_BYTES` (which has no default) is unset or invalid, prints
-  a `stormlog-cupti: not capturing:` line on the server's stderr instead.
+  a `stormlog-cupti: not capturing:` line on the server's stderr instead. A
+  helper that cannot write its final `cupti_status.json` prints a
+  `stormlog-cupti: could not write the final cupti_status.json:` line there,
+  with the capture's earlier error if it had one, and its trace keeps the
+  `.partial` name.
   Without `STORMLOG_CUPTI_DEFER_START=1` the helper captures from the moment
   the process starts, until it exits, and refuses Stormlog's start.
 - **One window per server process.** The stop writes `activity.sclz` and ends
