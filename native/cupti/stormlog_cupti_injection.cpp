@@ -146,6 +146,9 @@ CaptureState& g_state = *new CaptureState();
 std::once_flag g_initialize_once;
 std::once_flag g_finalize_once;
 
+// `value` as a quoted JSON string. Quotes, backslashes and control
+// characters are escaped; other bytes are copied as they are, so UTF-8 passes
+// through unchecked.
 std::string JsonString(std::string_view value) {
   std::ostringstream output;
   output << '"';
@@ -186,6 +189,8 @@ std::string JsonString(std::string_view value) {
   return output.str();
 }
 
+// CUPTI's message for `result`, or "CUPTI error <code>" when CUPTI has
+// none.
 std::string CuptiError(CUptiResult result) {
   const char* message = nullptr;
   if (cuptiGetResultString(result, &message) == CUPTI_SUCCESS &&
@@ -201,6 +206,9 @@ bool StartsWithDigit(const char* value) {
   return value != nullptr && *value >= '0' && *value <= '9';
 }
 
+// Parses a decimal setting into `result`. False, with `result` untouched,
+// for a null, signed, space-padded, out-of-range, zero or partly numeric
+// value.
 bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
   if (!StartsWithDigit(value)) {
     return false;
@@ -215,6 +223,7 @@ bool ParsePositiveInteger(const char* value, std::uint64_t* result) {
   return true;
 }
 
+// As ParsePositiveInteger, but 0 is accepted.
 bool ParseNonnegativeInteger(const char* value, std::uint64_t* result) {
   if (!StartsWithDigit(value)) {
     return false;
@@ -229,6 +238,8 @@ bool ParseNonnegativeInteger(const char* value, std::uint64_t* result) {
   return true;
 }
 
+// The comma-separated names in `value`, empty ones skipped; names are not
+// trimmed or checked here. Empty for a null `value`.
 std::vector<std::string> SplitActivities(const char* value) {
   std::vector<std::string> activities;
   if (value == nullptr) {
@@ -250,6 +261,7 @@ std::vector<std::string> SplitActivities(const char* value) {
   return activities;
 }
 
+// Whether STORMLOG_CUPTI_ACTIVITIES named the activity kind `name`.
 bool IsRequested(std::string_view name) {
   for (const std::string& requested : g_state.requested_activities) {
     if (requested == name) {
@@ -259,6 +271,9 @@ bool IsRequested(std::string_view name) {
   return false;
 }
 
+// Writes all of `content` to `descriptor`, retrying short writes and EINTR.
+// False on any other failure, possibly after part of it was written; errno is
+// write()'s, and unset when write() wrote nothing without an error.
 bool WriteAll(int descriptor, std::string_view content) {
   std::size_t offset = 0;
   while (offset < content.size()) {
@@ -275,6 +290,8 @@ bool WriteAll(int descriptor, std::string_view content) {
   return true;
 }
 
+// Records `message` as the capture's error unless one is recorded already:
+// the first failure is the one reported. Takes error_mutex.
 void SetInitializationError(std::string message) {
   std::lock_guard<std::mutex> lock(g_state.error_mutex);
   if (g_state.initialization_error.empty()) {
@@ -340,6 +357,8 @@ std::string QueryRuntimeVersion() {
   return QueryCudaVersion("cudaRuntimeGetVersion", library.c_str());
 }
 
+// Appends `value` to `output` as 4 little-endian bytes, the frame header's
+// encoding.
 void AppendU32(std::string* output, std::uint32_t value) {
   for (int index = 0; index < 4; ++index) {
     output->push_back(static_cast<char>((value >> (index * 8)) & 0xffU));
@@ -353,6 +372,13 @@ void DropBufferedRecords() {
   g_state.frame_records = 0;
 }
 
+// Compresses the buffered records into one frame and appends it to the
+// trace; the caller holds output_mutex. A frame that would leave no room for
+// the end frame under STORMLOG_CUPTI_MAX_BYTES is dropped, and so is one whose
+// length does not fit 32 bits or that cannot be compressed or fully written;
+// its records count as dropped and output_limit_reached stops every later
+// write. Only a length, compression or write failure is the capture's error.
+// A partial write is truncated away, so the trace stays whole frames.
 void FlushFrame() {
   if (g_state.frame_buffer.empty()) {
     return;
@@ -408,6 +434,10 @@ void FlushFrame() {
   g_state.frame_records = 0;
 }
 
+// Appends one JSON line to the frame being built, flushing frames at
+// 64 KiB. A record that comes after the trace is closed, or once the output
+// limit is reached, is counted as dropped and not written. Takes
+// output_mutex.
 void WriteRecord(std::string record) {
   record.push_back('\n');
   std::lock_guard<std::mutex> lock(g_state.output_mutex);
@@ -437,6 +467,10 @@ void WriteRecord(std::string record) {
   }
 }
 
+// A record's opening fields, through the clock fields, with no closing
+// brace. `start` and `end` are CUPTI timestamps in nanoseconds, written as the
+// device interval when `device_interval` and as the CPU interval otherwise; the
+// 0/0 pair CUPTI leaves when it has no timing is written as nulls.
 std::string RecordPrefix(std::string_view activity_kind,
                          std::string_view record_id, std::uint64_t start,
                          std::uint64_t end, bool device_interval) {
@@ -463,6 +497,8 @@ std::string RecordPrefix(std::string_view activity_kind,
   return output.str();
 }
 
+// `value` as a JSON decimal string, or null for 0, which CUPTI uses for
+// "none".
 std::string OptionalIdentifier(std::uint64_t value) {
   return value == 0 ? "null" : JsonString(std::to_string(value));
 }
@@ -471,6 +507,9 @@ std::string NextRecordId() {
   return "cupti-" + std::to_string(g_state.next_record_id.fetch_add(1));
 }
 
+// Writes a runtime or driver API record. Its name is CUPTI's callback name,
+// or null when CUPTI cannot name the callback; the importer then names it by
+// cbid.
 void WriteApiRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const CUpti_ActivityAPI*>(record);
   const bool driver = record->kind == CUPTI_ACTIVITY_KIND_DRIVER;
@@ -497,6 +536,8 @@ void WriteApiRecord(const CUpti_Activity* record) {
   WriteRecord(output.str());
 }
 
+// Writes a kernel record. A kernel CUPTI gave no timestamps is still
+// written, with null device times, and counted in kernels_without_timestamps.
 void WriteKernelRecord(const CUpti_Activity* record) {
   const auto* activity = reinterpret_cast<const KernelRecord*>(record);
   if (activity->start == 0 && activity->end == 0) {
@@ -559,6 +600,8 @@ void WriteMemsetRecord(const CUpti_Activity* record) {
   WriteRecord(output.str());
 }
 
+// Writes a synchronization record, a CPU interval. Its stream is null when
+// CUPTI reports its invalid-value sentinel instead of a stream.
 void WriteSynchronizationRecord(const CUpti_Activity* record) {
   const auto* activity =
       reinterpret_cast<const CUpti_ActivitySynchronization*>(record);
@@ -583,6 +626,8 @@ void WriteSynchronizationRecord(const CUpti_Activity* record) {
   WriteRecord(output.str());
 }
 
+// Writes one decoded CUPTI record; kinds the helper does not export are
+// skipped.
 void ProcessActivityRecord(const CUpti_Activity* record) {
   switch (record->kind) {
     case CUPTI_ACTIVITY_KIND_DRIVER:
@@ -606,6 +651,13 @@ void ProcessActivityRecord(const CUpti_Activity* record) {
   }
 }
 
+// CUPTI's request for an activity buffer, on CUPTI's threads, which may
+// call it concurrently. Allocates STORMLOG_CUPTI_BUFFER_BYTES unless the bytes
+// outstanding would pass STORMLOG_CUPTI_MAX_BUFFER_BYTES; the bytes are
+// reserved by compare-and-swap, without a lock. A refusal, a null buffer, makes
+// CUPTI drop the records it would have held and is counted in buffer_refusals:
+// a writer that falls behind costs records, not memory. A failed allocation is
+// refused too, and is the capture's error.
 void CUPTIAPI BufferRequested(std::uint8_t** buffer, std::size_t* size,
                               std::size_t* maximum_records) {
   const std::uint64_t bytes = g_state.activity_buffer_bytes;
@@ -681,6 +733,9 @@ void ConsumeBuffer(std::uint8_t* buffer, std::size_t valid_size) {
           .count()));
 }
 
+// The writer thread: consumes completed buffers in the order they came until
+// StopWriter is called and the queue is empty. Holds queue_mutex only to take
+// a buffer, never while decoding or writing it.
 void WriterLoop() {
   std::unique_lock<std::mutex> lock(g_state.queue_mutex);
   while (true) {
@@ -710,6 +765,11 @@ void StopWriter() {
   }
 }
 
+// CUPTI's return of a filled buffer: adds CUPTI's drop count, then queues
+// the buffer for the writer, so the callback neither decodes nor writes. Once
+// StopWriter has run, the buffer is consumed on the calling thread instead,
+// and WriteRecord counts its records as dropped once the trace is closed. A
+// null buffer, one BufferRequested refused, is ignored.
 void CUPTIAPI BufferCompleted(CUcontext context, std::uint32_t stream_id,
                               std::uint8_t* buffer, std::size_t /*size*/,
                               std::size_t valid_size) {
@@ -734,6 +794,7 @@ void CUPTIAPI BufferCompleted(CUcontext context, std::uint32_t stream_id,
   ConsumeBuffer(buffer, valid_size);
 }
 
+// `values` as a JSON array of strings.
 std::string JsonStringArray(const std::vector<std::string>& values) {
   std::ostringstream output;
   output << '[';
@@ -860,6 +921,7 @@ std::string RuntimeMismatch() {
   return {};
 }
 
+// Whether EnableActivities enabled the activity kind `name`.
 bool IsEnabled(std::string_view name) {
   for (const std::string& enabled : g_state.enabled_activities) {
     if (enabled == name) {
@@ -931,6 +993,14 @@ bool EnableActivities() {
 // control threads do not exist, so it must leave the capture alone.
 bool InForkedChild() { return getpid() != g_state.owner_pid; }
 
+// Ends the capture, once per process: at exit, or on STOP from the control
+// thread. Disables collection, force-flushes CUPTI and writes every buffer,
+// then closes the trace. Only a capture that started, matched the target's
+// CUDA runtime and wrote everything gets the end frame and the activity.sclz
+// name; any other keeps its .partial name. Then writes the final status,
+// whose finalized flag is true only for such a capture (a failed status write
+// undoes it and is printed to stderr), and removes the control socket. Does
+// nothing in a fork()ed child.
 void Finalize() {
   if (InForkedChild()) {
     return;
@@ -1043,6 +1113,9 @@ void Finalize() {
   });
 }
 
+// At exit, waits for the control thread unless it is the caller or this is
+// a fork()ed child. Registered before Finalize, so it runs after it, once
+// Finalize has shut the socket down and the loop has returned.
 void JoinControl() {
   if (InForkedChild()) {
     return;
@@ -1070,6 +1143,13 @@ void SendReply(int client, std::string_view reply) {
   }
 }
 
+// The control thread: one 4-byte command per connection on stop.sock. STRT
+// enables collection for a deferred start and answers OK, or ERR when the
+// start is not deferred, has already run or fails; the status is rewritten
+// either way. STOP finalizes the capture, answers OK only if it finalized
+// cleanly, and ends the loop. Anything else, or nothing within 5 s, answers
+// ERR. Accept wakes every second, so the loop ends once Finalize closes the
+// socket.
 void ControlLoop() {
   while (g_state.control_fd >= 0) {
     const int client = accept4(g_state.control_fd, nullptr, nullptr, SOCK_CLOEXEC);
@@ -1104,6 +1184,10 @@ void ControlLoop() {
   }
 }
 
+// Creates the control socket, stop.sock with mode 0600, in the process
+// directory, binding it through the directory's /proc/self/fd path, and starts
+// the control thread. False, with the capture's error set, on failure;
+// Finalize then closes a socket already created.
 bool StartControl() {
   g_state.control_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (g_state.control_fd < 0) {
@@ -1135,6 +1219,14 @@ bool StartControl() {
   return true;
 }
 
+// Sets the capture up at injection, once (InitializeInjection). Checks the
+// STORMLOG_CUPTI_* settings; creates a private pid-<pid>-XXXXXX directory under
+// the output root, which must be this user's with no group or other
+// permissions; opens activity.sclz.partial; registers the buffer callbacks;
+// subscribes to CUPTI; and, unless the start is deferred, enables the requested
+// activities. Then starts the writer and control threads and registers
+// Finalize at exit. A failure records the first error and returns with nothing
+// collecting; once the process directory is open, the status file says why.
 void Initialize() {
   g_state.owner_pid = getpid();
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
@@ -1370,6 +1462,11 @@ void ReportUnrecordedError() {
 #define STORMLOG_EXPORT
 #endif
 
+// The entry point CUDA calls in a process whose CUDA_INJECTION64_PATH names
+// this library. Starts the capture once; an exception is recorded as the
+// capture's error, and an error with no status file to go in is printed.
+// Always returns 1, so a failed capture never stops the target from
+// starting.
 extern "C" STORMLOG_EXPORT int InitializeInjection() {
   try {
     std::call_once(g_initialize_once, Initialize);
