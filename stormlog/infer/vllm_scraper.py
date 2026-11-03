@@ -52,6 +52,8 @@ MAX_SCRAPE_BYTES = 8 * 1024 * 1024
 MAX_SCRAPE_SERIES = 20_000
 # The most of a response one socket read takes, between deadline checks.
 READ_CHUNK_BYTES = 64 * 1024
+# The most of a server's own text a failed scrape's error quotes.
+MAX_ERROR_QUOTE = 200
 
 
 def resolve_metrics_url(endpoint: str, requested: str | None) -> str | None:
@@ -277,9 +279,7 @@ def fetch_metrics(
                 # an http.client error, not an OSError: still a failed
                 # scrape, never the run's end.
                 elapsed = (time.perf_counter() - started) * 1000.0
-                return FetchResult(
-                    None, status, f"{type(exc).__name__}: {exc}", elapsed
-                )
+                return FetchResult(None, status, _quoted_error(exc), elapsed)
             elapsed = (time.perf_counter() - started) * 1000.0
             if len(raw) > max_bytes:
                 error = f"oversized: the response is over {max_bytes} bytes"
@@ -295,7 +295,13 @@ def fetch_metrics(
         return FetchResult(None, exc.code, _http_error_text(exc), elapsed)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
-        return FetchResult(None, None, f"{type(exc).__name__}: {exc}", elapsed)
+        return FetchResult(None, None, _quoted_error(exc), elapsed)
+    except http.client.HTTPException as exc:
+        # A status line or header http.client cannot parse (BadStatusLine,
+        # LineTooLong) is raised from the open, and urllib passes it on as it
+        # is: neither a URLError nor an OSError.
+        elapsed = (time.perf_counter() - started) * 1000.0
+        return FetchResult(None, None, _quoted_error(exc), elapsed)
 
 
 class BodyDeadlineExceeded(Exception):
@@ -337,11 +343,27 @@ def _read_capped(response: Any, max_bytes: int, deadline: float) -> bytes:
     return raw
 
 
+def _capped(text: str) -> str:
+    """``text`` cut to ``MAX_ERROR_QUOTE`` characters, for server text that a
+    failed scrape's error quotes."""
+    if len(text) <= MAX_ERROR_QUOTE:
+        return text
+    return text[:MAX_ERROR_QUOTE] + "..."
+
+
+def _quoted_error(exc: BaseException) -> str:
+    """``Name: message``, the message capped: some quote what the server sent,
+    such as a bad status line (the whole line, up to 64 KiB) or a proxy's
+    refusal of an https tunnel (its reason phrase)."""
+    return f"{type(exc).__name__}: {_capped(str(exc).strip())}"
+
+
 def _http_error_text(exc: urllib.error.HTTPError) -> str:
     """``HTTP 503``, or for a refused redirect also where it pointed."""
     location = exc.headers.get("Location") if exc.headers is not None else None
     if 300 <= exc.code < 400 and location:
-        return f"HTTP {exc.code}: redirect to {redact_url(location) or location} not followed"
+        target = _capped(redact_url(location) or location)
+        return f"HTTP {exc.code}: redirect to {target} not followed"
     return f"HTTP {exc.code}"
 
 

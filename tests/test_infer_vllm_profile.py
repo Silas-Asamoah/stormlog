@@ -175,6 +175,34 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
+def _answering(answer: bytes) -> Iterator[str]:
+    """A loopback server that reads one request, sends ``answer`` as it is,
+    whether or not it is HTTP, and closes; yields its origin."""
+    listener = socket.create_server(("127.0.0.1", 0))
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            connection, _address = listener.accept()
+            with connection:
+                connection.settimeout(5)
+                request = b""
+                while b"\r\n\r\n" not in request:
+                    chunk = connection.recv(65536)
+                    if not chunk:
+                        break
+                    request += chunk
+                connection.sendall(answer)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+    finally:
+        listener.close()
+        thread.join(timeout=5)
+
+
+@contextlib.contextmanager
 def _serving(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
     """One handler class on a loopback port; yields its origin."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -900,6 +928,49 @@ class TestScraperUnits:
         assert result.http_status == 200
         assert result.error is not None and "IncompleteRead" in result.error
         assert "972 more expected" in result.error
+
+    def test_an_answer_that_is_not_http_is_a_failed_scrape(self) -> None:
+        # http.client raises BadStatusLine from urllib's open, and urllib
+        # passes it on: neither a URLError nor an OSError. It ended the run.
+        with _answering(b"GARBAGE\r\n\r\n") as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.text is None
+        assert result.http_status is None
+        assert result.error == "BadStatusLine: GARBAGE"
+
+    def test_a_header_line_past_http_client_s_limit_is_a_failed_scrape(
+        self,
+    ) -> None:
+        answer = b"HTTP/1.1 200 OK\r\nX-Long: " + b"a" * 70_000 + b"\r\n\r\n"
+        with _answering(answer) as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.text is None
+        assert result.http_status is None
+        assert result.error is not None and result.error.startswith("LineTooLong:")
+
+    def test_a_failed_scrape_quotes_little_of_a_bad_status_line(self) -> None:
+        # The error is BadStatusLine's message, which is the whole line the
+        # server sent: up to 64 KiB in every record of a failed scrape.
+        with _answering(b"x" * 60_000 + b"\r\n\r\n") as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.error is not None
+        assert result.error.startswith("BadStatusLine: xxx")
+        assert len(result.error) <= len("BadStatusLine: ") + 200 + len("...")
+
+    def test_a_refused_redirect_quotes_little_of_its_location(self) -> None:
+        location = b"http://127.0.0.1:1/" + b"a" * 60_000
+        answer = (
+            b"HTTP/1.1 301 Moved Permanently\r\nLocation: "
+            + location
+            + b"\r\nContent-Length: 0\r\n\r\n"
+        )
+        with _answering(answer) as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.http_status == 301
+        assert result.error is not None
+        assert result.error.startswith("HTTP 301: redirect to http://127.0.0.1:1/aaa")
+        assert result.error.endswith("... not followed")
+        assert len(result.error) < 300
 
     def test_a_trickling_response_ends_the_fetch_at_its_timeout(self) -> None:
         # The timeout bounded each socket read only: a body arriving a byte
