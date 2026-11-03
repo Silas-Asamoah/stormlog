@@ -323,6 +323,11 @@ def _exchange(
         raise TimeoutError(f"no complete answer within {deadline:g} s")
     if "error" in outcome:
         raise outcome["error"]
+    if "raw" not in outcome:
+        # run() never ran, so nothing was sent: the thread died as it started
+        # (a tracer that failed to install, for one). A failed route, not a
+        # KeyError; no retry, since the probe asks each route at most once.
+        raise OSError("the server probe's worker thread ended without answering")
     return outcome["raw"], outcome["status"], outcome.get("date")
 
 

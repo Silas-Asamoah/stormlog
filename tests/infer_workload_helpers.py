@@ -16,14 +16,20 @@ class SleepingClient:
     """Answers each request after a delay and tracks concurrency.
 
     ``first_latencies`` are used for the first calls, in order, and
-    ``latency_seconds`` for every call after them.
+    ``latency_seconds`` for every call after them. With ``release``,
+    each call instead stays in flight until that event is set (at most
+    ``latency_seconds``), so a test needs no timing to catch it there.
     """
 
     def __init__(
-        self, latency_seconds: float, first_latencies: tuple[float, ...] = ()
+        self,
+        latency_seconds: float,
+        first_latencies: tuple[float, ...] = (),
+        release: threading.Event | None = None,
     ) -> None:
         self.latency_seconds = latency_seconds
         self.first_latencies = list(first_latencies)
+        self.release = release
         self.calls = 0
         self.finished_at: list[float] = []
         # The extra headers each call was given, by X-Request-Id.
@@ -57,7 +63,10 @@ class SleepingClient:
                 if self.first_latencies
                 else self.latency_seconds
             )
-        time.sleep(latency)
+        if self.release is None:
+            time.sleep(latency)
+        else:
+            self.release.wait(latency)
         with self.lock:
             self.active -= 1
             self.finished_at.append(time.time())

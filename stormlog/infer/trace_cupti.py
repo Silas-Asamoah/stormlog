@@ -79,6 +79,7 @@ def _read_frame(source: BinaryIO) -> list[bytes] | None:
 
 
 def _parse_record(line: bytes) -> dict[str, Any]:
+    """One record line as a JSON object; ``ValueError`` if it is not one."""
     try:
         record = json.loads(line)
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -89,6 +90,11 @@ def _parse_record(line: bytes) -> dict[str, Any]:
 
 
 def _decode_frame(encoded: bytes, raw_size: int) -> bytes:
+    """A frame's zlib payload, inflated to exactly ``raw_size`` bytes.
+
+    Raises ``ValueError`` when the stream is corrupt, inflates to another size,
+    carries bytes past its end, or does not end with a record's newline.
+    """
     decoder = zlib.decompressobj()
     try:
         # Never decode past the declared size, whatever the stream says.
@@ -139,6 +145,9 @@ def load_cupti_trace(path: str | Path) -> KinetoTrace:
         cupti_version=_text(status.get("cupti_version")),
         device_names={},
         source="stormlog-cupti",
+        # The traced process, also when no API record names it: two
+        # GPU-only traces must not read as one process.
+        process_ids={_status_pid(status)},
     )
     for number, record in enumerate(iter_records(path), 1):
         _add_checked_record(trace, record, number)
@@ -159,6 +168,10 @@ def load_cupti_trace(path: str | Path) -> KinetoTrace:
 def _add_checked_record(
     trace: KinetoTrace, record: dict[str, Any], number: int
 ) -> None:
+    """Add one record to the trace; any defect in it is a ``ValueError``.
+
+    The error names the record's 1-based position in the trace.
+    """
     try:
         _add_record(trace, record)
     except (AttributeError, KeyError, TypeError, ValueError) as exc:
@@ -166,6 +179,12 @@ def _add_checked_record(
 
 
 def _add_record(trace: KinetoTrace, record: dict[str, Any]) -> None:
+    """Add a record as a launch or a GPU event, by its ``activity_kind``.
+
+    A kind the reader does not import (synchronization, say) is counted in
+    ``not_imported``, not refused. Raises ``ValueError`` when ``metadata`` is
+    not an object or the correlation ID is not an integer.
+    """
     kind = record.get("activity_kind")
     metadata = record.get("metadata") or {}
     if not isinstance(metadata, dict):
@@ -186,6 +205,12 @@ def _add_gpu_event(
     metadata: dict[str, Any],
     correlation: int | None,
 ) -> None:
+    """Add a kernel, memcpy or memset with its device times in nanoseconds.
+
+    One without both timestamps, or ending before it starts, is counted in
+    ``not_imported`` instead. A correlation or graph ID of 0, CUPTI's "none",
+    is stored as None.
+    """
     start, end = record.get("device_start_ns"), record.get("device_end_ns")
     if not _is_int(start) or not _is_int(end):
         _not_imported(trace, f"{kind}_without_timestamps")
@@ -217,6 +242,13 @@ def _add_launch(
     correlation: int | None,
     start: Any,
 ) -> None:
+    """Add a runtime or driver API call as the launch its correlation ID names.
+
+    Keyed by ``(None, correlation)``, with its CPU start in microseconds. A
+    call without a nonzero correlation ID or an integer start is counted in
+    ``not_imported``; one whose metadata lacks a process or thread ID raises
+    ``ValueError``.
+    """
     if not correlation:
         _not_imported(trace, f"{kind}_without_correlation")
         return
@@ -241,13 +273,26 @@ def _is_int(value: Any) -> TypeGuard[int]:
 
 
 def _required_int(metadata: dict[str, Any], key: str) -> int:
+    """The ID ``metadata`` must hold under ``key``; ``ValueError`` if absent."""
     value = _optional_int(metadata.get(key))
     if value is None:
         raise ValueError(f"metadata lacks {key}")
     return value
 
 
+def _status_pid(status: dict[str, Any]) -> int:
+    """The traced process's ID; ``ValueError`` unless a positive integer."""
+    pid = status.get("pid")
+    if not _is_int(pid) or pid <= 0:
+        raise ValueError(f"{STATUS_FILENAME} has an invalid pid")
+    return pid
+
+
 def _event_loss(status: dict[str, Any]) -> dict[str, int]:
+    """The helper's loss counters by name, 0 for one the status omits.
+
+    Raises ``ValueError`` for a count that is negative or not an integer.
+    """
     loss = {}
     for name in LOSS_COUNTERS:
         value = status.get(name, 0)
@@ -258,15 +303,22 @@ def _event_loss(status: dict[str, Any]) -> dict[str, int]:
 
 
 def _optional_int(value: Any) -> int | None:
+    """An identifier: a JSON integer, or the decimal string the helper writes.
+
+    Anything else is refused, not converted: ``int()`` would truncate 1.5 to
+    1 and link the record to another launch.
+    """
     if value is None or isinstance(value, bool):
         return None
-    try:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
         return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"expected an integer identifier, got {value!r}") from exc
+    raise ValueError(f"expected an integer identifier, got {value!r}")
 
 
 def _text(value: Any) -> str | None:
+    """The value as text, keeping None as None."""
     return None if value is None else str(value)
 
 

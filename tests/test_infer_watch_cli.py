@@ -17,7 +17,12 @@ from typing import Any
 import pytest
 
 from stormlog.infer.cli import main as infer_main
-from tests.watch_test_helpers import FakeMetrics, serve_metrics, watch_config
+from tests.watch_test_helpers import (
+    FakeMetrics,
+    leaves_no_threads,
+    serve_metrics,
+    watch_config,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -31,6 +36,12 @@ def _restore_signals() -> Iterator[None]:
     yield
     for signum, handler in previous.items():
         signal.signal(signum, handler)
+
+
+@pytest.fixture(autouse=True)
+def _no_threads_left_behind() -> Iterator[None]:
+    with leaves_no_threads():
+        yield
 
 
 class _SignalledWatch:

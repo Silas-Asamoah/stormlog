@@ -367,6 +367,11 @@ def _trace_phase(
     windows: list[Mapping[str, Any]],
     imported: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """A measured phase's trace health, from its own window and imports.
+
+    Inactive when no measured window for the phase's case started; otherwise
+    healthy only when ``_trace_reasons`` finds nothing wrong.
+    """
     window = next(
         (
             w
@@ -384,11 +389,17 @@ def _trace_phase(
 def _trace_reasons(
     window: Mapping[str, Any], imported: list[Mapping[str, Any]]
 ) -> list[str]:
+    """What is wrong with a started window's trace; empty when nothing is.
+
+    The stop must have come back without an error and with a time, the window
+    must have found a trace file, an import must have read it, and the imported
+    trace must pass ``_content_reasons``.
+    """
     reasons = []
     if window.get("stop_error") or not is_number(window.get("stopped_at_ns")):
         reasons.append("the trace did not stop cleanly")
     files = [str(name) for name in window.get("trace_files") or []]
-    own = _own_traces(files, imported)
+    own = _own_traces(window, imported)
     if not files:
         reasons.append("no trace file was written")
     elif not own:
@@ -403,31 +414,29 @@ def _content_reasons(own: list[Mapping[str, Any]]) -> list[str]:
     if lost:
         reasons.append(f"its trace lost records: {lost}")
     # A profiler that never had CUPTI (another client held it) still writes
-    # its CPU events, so an empty trace imports without an error.
-    if own and all(trace.get("gpu_events") == 0 for trace in own):
-        reasons.append("its trace has no GPU activity")
+    # its CPU events, so an empty trace imports without an error. A summary
+    # without the count shows no GPU activity either.
+    counts = [trace.get("gpu_events") for trace in own]
+    if own and not any(is_number(count) and count > 0 for count in counts):
+        reasons.append(
+            "its trace has no GPU activity"
+            if all(is_number(count) for count in counts)
+            else "its trace does not count its GPU events"
+        )
     return reasons
 
 
 def _own_traces(
-    files: list[str], imported: list[Mapping[str, Any]]
+    window: Mapping[str, Any], imported: list[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
-    """The imported traces that are one of the window's ``files``."""
-    return [trace for trace in imported if any(_is_file(trace, f) for f in files)]
+    """The imported traces that are the window's own files.
 
-
-def _is_file(trace: Mapping[str, Any], name: str) -> bool:
-    """Whether an imported trace is the window's file ``name``.
-
-    ``name`` is the file's path below the trace dir. Matching on that path,
-    not the base name, keeps one process's ``pid-*/activity.sclz`` from
-    standing for another's: every CUPTI trace has the same base name.
+    Matched on the absolute path the window recorded. Every CUPTI trace is
+    named ``activity.sclz``, and the same path below another directory (a
+    copy, another server's trace dir) is another file.
     """
-    for key in ("path", "file"):
-        value = str(trace.get(key) or "")
-        if value and (value == name or value.endswith(f"/{name}")):
-            return True
-    return False
+    paths = {str(path) for path in window.get("trace_paths") or []}
+    return [trace for trace in imported if str(trace.get("path") or "") in paths]
 
 
 def _lost_records(traces: list[Mapping[str, Any]]) -> str:

@@ -1299,6 +1299,10 @@ def test_a_trace_dir_unreadable_at_the_start_is_not_searched_later(
     calls = {"n": 0}
 
     def first_call_fails(directory: Path, mode: str) -> list[tuple[str, Path]]:
+        """``_worker_traces``, refused (EACCES) on its first call only.
+
+        The first call is the snapshot taken before the start.
+        """
         calls["n"] += 1
         if calls["n"] == 1:
             raise PermissionError(13, "Permission denied")
@@ -1393,6 +1397,7 @@ class _FakeHelper:
 
         self.directory = root / f"pid-{pid}-abcdef"
         self.directory.mkdir()
+        self.pid = pid
         self.start_reply = start_reply
         self.stop_seconds = stop_seconds
         self.commands: list[bytes] = []
@@ -1418,6 +1423,13 @@ class _FakeHelper:
         self.server.close()
 
     def _serve(self) -> None:
+        """Answer as the CUPTI helper does, until stopped or told to quit.
+
+        Each ``STRT`` gets ``start_reply``. ``STOP``, or any other command but
+        ``QUIT``, waits ``stop_seconds``, writes a finalized trace and status,
+        answers ``OK`` and removes the socket. ``QUIT`` ends the helper
+        unstopped.
+        """
         while True:
             client, _ = self.server.accept()
             with client:
@@ -1464,7 +1476,9 @@ class _FakeHelper:
             + struct.pack("<III", 0, 0, 0)
         )
         (self.directory / "cupti_status.json").write_text(
-            json.dumps({"finalized": True, "initialization_error": None})
+            json.dumps(
+                {"pid": self.pid, "finalized": True, "initialization_error": None}
+            )
         )
 
 
@@ -1516,8 +1530,15 @@ def test_cupti_control_every_helper_refusing_is_a_rejected_start(
     assert start_outcome(result) == START_REJECTED
 
 
-def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path) -> None:
-    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=0.5) for n in (1, 2, 3)]
+# 40: past the 32 threads the stops were once limited to.
+@pytest.mark.parametrize("count", [3, 40])
+def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path, count: int) -> None:
+    """Every helper's stop arrives before the first answer to one.
+
+    Each fake takes a second to answer ``STOP``, so stops sent one by one would
+    arrive only after the previous helper had answered.
+    """
+    helpers = [_FakeHelper(cupti_dir, n, stop_seconds=1.0) for n in range(1, count + 1)]
     control = CuptiControl(cupti_dir, timeout=5)
     assert control.post("/start_profile") == ControlResult(200)
 
@@ -1544,6 +1565,11 @@ def _dead_socket(root: Path, pid: int) -> Path:
 
 
 def test_cupti_control_skips_sockets_nobody_listens_on(cupti_dir: Path) -> None:
+    """A killed process's socket refuses the connection and is skipped.
+
+    The live helper's start is then a clean 200, not a start that may have
+    taken effect.
+    """
     _dead_socket(cupti_dir, 7)
     helper = _FakeHelper(cupti_dir, 8)
     control = CuptiControl(cupti_dir, timeout=5)
@@ -1622,6 +1648,11 @@ def test_cupti_control_says_why_an_undeferred_helper_refuses_to_start(
 def test_a_finished_undeferred_run_is_not_reported_as_capturing(
     cupti_dir: Path,
 ) -> None:
+    """An undeferred helper that finalized still has ``activities_enabled`` set.
+
+    Only one that has not finalized is capturing, so this one's status must not
+    suggest ``STORMLOG_CUPTI_DEFER_START``.
+    """
     # What an undeferred helper leaves behind when its process exits.
     earlier = cupti_dir / "pid-6-old000"
     earlier.mkdir()
@@ -1646,6 +1677,10 @@ def test_a_finished_undeferred_run_is_not_reported_as_capturing(
 def test_a_cupti_window_is_not_spoiled_by_a_killed_servers_socket(
     cupti_dir: Path,
 ) -> None:
+    """A dead socket beside a live helper leaves the window started and stopped.
+
+    Only the live helper's trace is found.
+    """
     _dead_socket(cupti_dir, 7)
     helper = _FakeHelper(cupti_dir, 8)
     windows = TraceWindows(_config(cupti_dir, mode="cupti"))
@@ -1659,6 +1694,11 @@ def test_a_cupti_window_is_not_spoiled_by_a_killed_servers_socket(
 def test_a_cupti_window_finds_and_imports_each_process_trace(
     cupti_dir: Path,
 ) -> None:
+    """Every process names its trace ``activity.sclz``, one per directory.
+
+    The window records each relative to the trace dir and by real path, and the
+    real paths are what trace health matches to the import summaries.
+    """
     helpers = [_FakeHelper(cupti_dir, 1), _FakeHelper(cupti_dir, 2)]
     from stormlog.infer.trace_import import TraceFileCollector
 
@@ -1676,6 +1716,8 @@ def test_a_cupti_window_finds_and_imports_each_process_trace(
     capture = TraceFileCollector(window.files).collect(run_id="r", session_id="s")
     summaries = (capture.summary or {})["traces"]
     assert [s["format"] for s in summaries] == ["stormlog-cupti"] * 2
+    # Trace health matches the window's files to their imports by these.
+    assert record["trace_paths"] == [s["path"] for s in summaries]
 
 
 def test_cupti_tracing_needs_a_trace_dir() -> None:

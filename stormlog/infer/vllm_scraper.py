@@ -48,6 +48,8 @@ INTERRUPT_SCRAPE_TIMEOUT_SECONDS = 2.0
 # vLLM 0.30.0 response for one model is about 90 KB and 360 series.
 MAX_SCRAPE_BYTES = 8 * 1024 * 1024
 MAX_SCRAPE_SERIES = 20_000
+# The most of a response one socket read takes, between deadline checks.
+READ_CHUNK_BYTES = 64 * 1024
 
 
 def resolve_metrics_url(endpoint: str, requested: str | None) -> str | None:
@@ -145,7 +147,11 @@ def fetch_metrics(
     """GET the metrics text; every failure becomes a result, never an exception.
 
     The body is read at most ``max_bytes + 1`` bytes far: a longer response
-    is a failed scrape, and the rest of it is never read.
+    is a failed scrape, and the rest of it is never read. It is read within
+    ``timeout_seconds`` of the start, too, not only within that much per
+    socket read, so a body that trickles in ends the fetch at that deadline
+    plus at most one read's timeout: a fetch the watcher gave up on cannot
+    hold its thread, and every later scrape, for as long as the server likes.
     """
     headers = {"Accept": "text/plain"}
     if api_key:
@@ -156,7 +162,10 @@ def fetch_metrics(
         with _OPENER.open(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             try:
-                raw = _read_capped(response, max_bytes)
+                raw = _read_capped(response, max_bytes, started + timeout_seconds)
+            except BodyDeadlineExceeded as exc:
+                elapsed = (time.perf_counter() - started) * 1000.0
+                return FetchResult(None, status, str(exc), elapsed)
             except http.client.HTTPException as exc:
                 # A body cut short of its Content-Length (IncompleteRead) is
                 # an http.client error, not an OSError: still a failed
@@ -179,14 +188,33 @@ def fetch_metrics(
         return FetchResult(None, None, f"{type(exc).__name__}: {exc}", elapsed)
 
 
-def _read_capped(response: Any, max_bytes: int) -> bytes:
-    """At most ``max_bytes + 1`` bytes of the body.
+class BodyDeadlineExceeded(Exception):
+    """The body was still arriving at the fetch's overall deadline."""
 
-    A bounded read returns short at EOF instead of raising, so a body cut
-    short of its Content-Length is raised here as ``IncompleteRead``, as an
-    unbounded read would.
+
+def _read_capped(response: Any, max_bytes: int, deadline: float) -> bytes:
+    """At most ``max_bytes + 1`` bytes of the body, read by ``deadline`` (a
+    ``time.perf_counter`` time).
+
+    The body is read as it arrives, a chunk at a time, so the deadline is
+    checked between socket reads. A bounded read returns short at EOF instead
+    of raising, so a body cut short of its Content-Length is raised here as
+    ``IncompleteRead``, as an unbounded read would.
     """
-    raw = bytes(response.read(max_bytes + 1))
+    read = getattr(response, "read1", None) or response.read
+    chunks: list[bytes] = []
+    size = 0
+    while size <= max_bytes:
+        if time.perf_counter() >= deadline:
+            raise BodyDeadlineExceeded(
+                f"deadline: the body was still arriving after {size} bytes"
+            )
+        chunk = bytes(read(min(READ_CHUNK_BYTES, max_bytes + 1 - size)))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    raw = b"".join(chunks)
     remaining = getattr(response, "length", None)
     if len(raw) <= max_bytes and remaining:
         raise http.client.IncompleteRead(raw, remaining)
@@ -364,8 +392,8 @@ class VllmMetricsScraper:
 
     def fetching(self) -> bool:
         """A fetch is still running on its thread, one whose caller gave up
-        waiting for it included: a socket timeout bounds each read, not the
-        whole response, so a trickling one can run on for long."""
+        waiting for it included: it ends at its timeout plus at most one
+        socket read's timeout, however slowly the response trickles in."""
         with self._fetching_lock:
             return self._fetching > 0
 

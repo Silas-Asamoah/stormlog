@@ -104,6 +104,12 @@ class TraceCaptureConfig:
     settle_seconds: float = 2.0
 
     def __post_init__(self) -> None:
+        """Refuse a setting the capture cannot run with, before anything is sent.
+
+        Raises ``ValueError``, worded for the CLI flags, for an unknown mode or
+        phase, a time or byte bound that is not positive, or a CUPTI setup
+        ``_check_cupti`` refuses.
+        """
         if self.mode not in TRACE_MODES:
             raise ValueError(f"--trace must be one of {', '.join(TRACE_MODES)}")
         if self.phase not in TRACE_PHASES:
@@ -116,6 +122,14 @@ class TraceCaptureConfig:
                 raise ValueError(f"trace {name} must be > 0")
 
     def _check_cupti(self) -> None:
+        """Refuse ``--trace cupti`` where Stormlog could not reach the helpers.
+
+        That is without a trace dir (the helper's
+        ``STORMLOG_CUPTI_OUTPUT_DIR``), on a platform without Unix sockets, or
+        with a trace dir so long that a helper's socket below it might not fit
+        in ``sun_path``. The check takes the longest directory name a process
+        can get, so it holds for every process the server starts.
+        """
         if self.trace_dir is None:
             raise ValueError(
                 "--trace cupti needs --trace-dir: the helper's "
@@ -234,6 +248,13 @@ class CuptiControl:
         self._sockets: list[Path] = []
 
     def post(self, route: str) -> ControlResult:
+        """Send ``STRT`` to the helpers for a start, ``STOP`` for any other route.
+
+        A start goes to every helper socket found now; a stop goes to the
+        helpers that answered that start. A stop answers 200 only when each of
+        them answered ``OK``, and no status otherwise, as also when there was
+        no helper to stop.
+        """
         if route == "/start_profile":
             return self._start()
         answers = self._send_all(b"STOP", self._sockets)
@@ -242,6 +263,14 @@ class CuptiControl:
         return ControlResult(None, _failures(answers) or "no CUPTI helper to stop")
 
     def _start(self) -> ControlResult:
+        """Send ``STRT`` to every helper socket under the directory.
+
+        The helpers that answered are kept for the stop. 200 when all answered
+        ``OK``; 404 when no socket had a listener, or every helper answered
+        ``ERR``, so none started; no status otherwise, since some may have
+        started. The error names each helper that did not answer ``OK``, with
+        the reason its status file gives.
+        """
         found = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
         answers = {
             path: answer
@@ -260,6 +289,13 @@ class CuptiControl:
         )
 
     def _no_helper(self, stale: int) -> str:
+        """Why no helper answered a start, for a 404's error.
+
+        ``stale`` is the number of sockets found with no listener. The message
+        adds any helper errors from the status files under the directory, or,
+        without one, where a helper that failed before writing a status says
+        why.
+        """
         message = f"no CUPTI helper socket under {self.directory}"
         if stale:
             message = (
@@ -281,14 +317,23 @@ class CuptiControl:
 
         Each stop waits for its helper to write its trace; sent one by one,
         the last process would keep tracing for the sum of the others' writes.
+        One thread per helper: with fewer, the rest would wait their turn.
         """
         if len(paths) < 2:
             return {path: self._send(path, command) for path in paths}
-        with ThreadPoolExecutor(max_workers=min(len(paths), 32)) as pool:
+        with ThreadPoolExecutor(max_workers=len(paths)) as pool:
             replies = pool.map(lambda path: self._send(path, command), paths)
             return dict(zip(paths, replies))
 
     def _send(self, path: Path, command: bytes) -> str:
+        """One helper's reply to ``command``: ``OK``, ``ERR`` or other text.
+
+        Never raises for a socket error. A socket that refuses the connection
+        or has gone answers ``_NO_HELPER``; another ``OSError``, a timeout
+        included, answers its type and message; an empty reply answers ``no
+        reply``. The connection waits up to ``timeout`` seconds, as a stop
+        returns only once the helper has written its trace.
+        """
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             # A stop waits for the helper to flush and write its trace.
             connection.settimeout(self.timeout)
@@ -311,6 +356,7 @@ _NO_HELPER = "no helper listening"
 
 
 def _failures(answers: dict[Path, str]) -> str:
+    """``pid-dir: answer`` for each helper not answering ``OK``; empty if all did."""
     return "; ".join(
         f"{path.parent.name}: {answer}"
         for path, answer in answers.items()
@@ -338,6 +384,13 @@ def _helper_errors(directory: Path, answered: dict[Path, str] | None = None) -> 
 
 
 def _status_error(path: Path) -> str | None:
+    """Why the helper whose status is at ``path`` refuses to start, or None.
+
+    That is its ``initialization_error``, or, for a helper not started with
+    ``STORMLOG_CUPTI_DEFER_START=1``, that it is still capturing (activities
+    enabled, trace not finalized), as it has been since its process started. A
+    status that cannot be read or parsed gives None.
+    """
     try:
         status = json.loads(path.read_text(encoding="utf-8"))
         error = status.get("initialization_error")
@@ -391,6 +444,13 @@ class TraceWindow:
     def to_record(
         self, *, session_id: str, trace_dir: Path | None = None
     ) -> dict[str, Any]:
+        """The window as a schema-1 ``infer.trace_window`` record.
+
+        Trace files are named relative to ``trace_dir``, or by file name
+        without one, and listed again as real paths in ``trace_paths``. The
+        control URL is redacted. Times are wall-clock nanoseconds; a call's
+        status and error are None when it was not made.
+        """
         return {
             "schema_version": 1,
             "event_type": "infer.trace_window",
@@ -414,6 +474,11 @@ class TraceWindow:
                 str(path.relative_to(trace_dir)) if trace_dir else path.name
                 for path in self.files
             ],
+            # Resolved as an import's summary records its trace's path, so
+            # trace health can tell this window's files from same-named ones.
+            # Path.resolve() there is os.path.realpath plus a symlink-loop
+            # check, so the two agree for every file a window finds.
+            "trace_paths": [os.path.realpath(path) for path in self.files],
             "note": self.note,
         }
 
@@ -429,6 +494,13 @@ class TraceWindows:
         control: ProfilerControl | None = None,
         on_warning: Callable[[str], None] | None = None,
     ) -> None:
+        """Drive windows through ``control``, or else the mode's own control.
+
+        Without ``control``, ``--trace cupti`` talks to the helpers' sockets
+        under the trace dir, and vLLM's profiler is called over HTTP at
+        ``config.control_url`` with ``api_key``. ``on_warning`` receives one
+        line per problem a window meets; without it, warnings are dropped.
+        """
         self.config = config
         if control is not None:
             self.control = control
@@ -606,6 +678,12 @@ class TraceWindows:
             return []
 
     def _snapshot(self, window: TraceWindow) -> dict[str, int] | None:
+        """Sizes in bytes of the worker traces already present, keyed by path.
+
+        Empty when there is no trace dir or it does not exist yet. None, with a
+        note on the window, when the directory cannot be read: new traces then
+        cannot be told from old ones, so none is looked for.
+        """
         directory = self.config.trace_dir
         if directory is None or not directory.is_dir():
             return {}
@@ -622,6 +700,12 @@ class TraceWindows:
             return None
 
     def _wrote_before_stop(self, before: dict[str, int] | None) -> bool:
+        """Whether a worker trace not in ``before`` has appeared before the stop.
+
+        A profile with ``max_iterations`` stops itself and writes its trace.
+        False when ``before`` is unknown or there is no trace dir; an
+        ``OSError`` reading the directory propagates.
+        """
         directory = self.config.trace_dir
         if before is None or directory is None or not directory.is_dir():
             return False

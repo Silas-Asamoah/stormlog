@@ -18,14 +18,24 @@ from stormlog.infer.correlation_events import (
     CorrelationContext,
     load_inference_artifact,
 )
+from stormlog.infer.errors import InferUsageError
 from stormlog.infer.trace_cupti import iter_records, load_cupti_trace
 from stormlog.infer.trace_import import TraceFileCollector
 
 MAGIC = b"SLCPTZ1\n"
 END = struct.pack("<III", 0, 0, 0)
+# Written by helper 0.4.2 on an NVIDIA A10 (CUDA 12.8, torch 2.7.1): one
+# deferred window around a 64x64 matmul, a relu (a clamp kernel), a copy to
+# the host and a zero fill, with every activity kind requested. CI has no
+# GPU, so this is the parser's check against the helper's own output;
+# regenerate it when the helper's record or frame format changes.
+HELPER_TRACE = (
+    Path(__file__).parent / "fixtures" / "cupti" / "pid-13019-aNTdcf" / "activity.sclz"
+)
 
 
 def _frame(records: list[dict[str, Any]]) -> bytes:
+    """One trace frame holding ``records``, encoded as the helper writes it."""
     raw = b"".join(json.dumps(r).encode() + b"\n" for r in records)
     encoded = zlib.compress(raw)
     return struct.pack("<III", len(encoded), len(raw), len(records)) + encoded
@@ -47,6 +57,11 @@ def _api(correlation: int, start: int, name: str | None = "cudaLaunchKernel") ->
 
 
 def _kernel(correlation: int, start: int | None, graph: str | None = None) -> dict:
+    """A kernel record as the helper writes it, its IDs as decimal strings.
+
+    ``start=None`` gives a kernel without device times; ``graph`` sets its
+    graph ID and a graph node ID.
+    """
     return {
         "activity_kind": "kernel",
         "correlation_id": str(correlation),
@@ -85,6 +100,12 @@ def _trace(
     tail: bytes = END,
     status: dict[str, Any] | None = None,
 ) -> Path:
+    """Write a trace and its status into ``directory``; return the trace's path.
+
+    By default: a frame with a launched kernel, then one with a graph launch,
+    its graph kernel and a kernel whose launch is not in the trace. ``tail``
+    replaces the end frame, and ``status`` the clean, finalized default.
+    """
     directory.mkdir(parents=True, exist_ok=True)
     if frames is None:
         frames = [
@@ -146,6 +167,40 @@ def test_reads_launches_kernels_and_graph_ids(tmp_path: Path) -> None:
     }
 
 
+def test_reads_a_trace_the_helper_wrote() -> None:
+    """The fixture is the helper's own output from a GPU run (pid 13019).
+
+    So the reader is checked against what the C++ writes, not only against
+    frames these tests build; its 59 records are the status's
+    ``delivered_records``.
+    """
+    trace = load_cupti_trace(HELPER_TRACE)
+
+    assert sum(1 for _ in iter_records(HELPER_TRACE)) == 59  # delivered_records
+    launched = [
+        (event.kind, trace.launches[(None, event.correlation or 0)].name)
+        for event in trace.gpu_events
+    ]
+    assert launched == [
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+        ("gpu_memcpy", "cudaMemcpyAsync_v3020"),
+        ("gpu_kernel", "cudaLaunchKernel_v7000"),
+    ]
+    assert trace.gpu_events[0].name == "ampere_sgemm_32x128_nn"
+    assert {(event.device, event.stream) for event in trace.gpu_events} == {(0, 7)}
+    assert all(event.end_ns > event.start_ns for event in trace.gpu_events)
+    assert trace.pids() == {13019}
+    # Synchronization records are read but not imported.
+    assert trace.not_imported == {"synchronization": 2}
+    assert trace.event_loss == {
+        "cupti_dropped_records": 0,
+        "local_dropped_records": 0,
+        "buffer_refusals": 0,
+        "kernels_without_timestamps": 0,
+    }
+
+
 def test_an_api_record_without_a_name_falls_back_to_its_callback_id(
     tmp_path: Path,
 ) -> None:
@@ -185,6 +240,9 @@ def test_an_api_record_without_a_timestamp_is_counted(tmp_path: Path) -> None:
     [
         ({**_api(1, 1_000), "metadata": {"thread_id": 7}}, "lacks process_id"),
         ({**_api(1, 1_000), "metadata": ["not", "a", "dict"]}, "not an object"),
+        # Truncated, either would link the record to launch 1.
+        ({**_kernel(1, 9_000), "correlation_id": 1.5}, "got 1.5"),
+        ({**_kernel(1, 9_000), "correlation_id": " 1"}, "got ' 1'"),
     ],
 )
 def test_a_malformed_record_is_refused_with_its_number(
@@ -258,6 +316,8 @@ def test_a_file_without_the_magic_is_not_a_trace(tmp_path: Path) -> None:
             "another CUPTI client",
         ),
         (_status(buffer_refusals=-1), "invalid buffer_refusals"),
+        (_status(pid=None), "invalid pid"),
+        (_status(pid=True), "invalid pid"),
     ],
 )
 def test_an_unvouched_status_is_refused(
@@ -276,6 +336,11 @@ def test_a_missing_status_is_refused(tmp_path: Path) -> None:
 
 
 def test_counted_losses_reach_the_import_summary(tmp_path: Path) -> None:
+    """The helper's loss counters and the reader's own counts both reach the summary.
+
+    Refused buffers and the output limit come from the status; the kernel
+    without timestamps is counted by the reader, in ``not_imported``.
+    """
     path = _trace(
         tmp_path,
         [_frame([_api(1, 1_000), _kernel(1, 5_000), _kernel(2, None)])],
@@ -293,6 +358,20 @@ def test_counted_losses_reach_the_import_summary(tmp_path: Path) -> None:
     assert summary["not_imported"] == {"kernel_without_timestamps": 1}
     assert any("buffer_refusals=3" in note for note in summary["notes"])
     assert any("STORMLOG_CUPTI_MAX_BYTES" in note for note in summary["notes"])
+
+
+def test_a_gpu_only_trace_keeps_the_process_its_status_names(tmp_path: Path) -> None:
+    first = _trace(tmp_path / "pid-42-abc", [_frame([_kernel(1, 5_000)])])
+    second = _trace(
+        tmp_path / "pid-43-def", [_frame([_kernel(1, 6_000)])], status=_status(pid=43)
+    )
+
+    assert load_cupti_trace(first).pids() == {42}
+    # Without API records, both traces had no process, so one shared ordinal
+    # was applied to both although each process may map it to another GPU.
+    collector = TraceFileCollector([first, second], device_uuids={0: "GPU-A"})
+    with pytest.raises(InferUsageError, match="several processes use device 0"):
+        collector.collect(run_id="r", session_id="s")
 
 
 def test_cli_imports_a_trace_into_an_artifact(

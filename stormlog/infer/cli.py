@@ -376,7 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
             "it; when the run ends, its final scheduler steps are imported and "
-            "its worker hellos name the GPU of each traced process"
+            "its worker hellos name the GPU of each traced process (not for "
+            "--trace cupti, whose traces name no host: give --trace-device-uuid)"
         ),
     )
     profile_parser.add_argument(
@@ -733,7 +734,9 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
             "name the GPU of each traced process (by host, pid and lifetime), so "
-            "--device-uuid is only needed where that leaves a gap"
+            "--device-uuid is only needed where that leaves a gap. A Stormlog "
+            "CUPTI trace (.sclz) names no host and has no wall clock, so it "
+            "always needs --device-uuid"
         ),
     )
     import_parser.add_argument(
@@ -982,6 +985,13 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
+    """The trace capture ``--trace`` asks for, or None without ``--trace``.
+
+    For ``--trace cupti`` with a trace dir, the control URL recorded is the
+    trace dir's ``file://`` URI, since the helpers' sockets there are the
+    control. Otherwise it is ``--trace-control-url``, or the endpoint's scheme
+    and host.
+    """
     if args.trace is None:
         return None
     if args.trace == CUPTI and args.trace_dir:
@@ -1002,6 +1012,12 @@ def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig
 
 
 def _validate_trace_arguments(args: argparse.Namespace) -> None:
+    """Refuse ``--trace-*`` options given without ``--trace``.
+
+    An option counts as given when it differs from its default. Raises
+    ``ValueError`` naming every such flag; with ``--trace``, the options are
+    checked by ``_validate_requested_trace``.
+    """
     if args.trace is not None:
         _validate_requested_trace(args)
         return
@@ -1020,6 +1036,13 @@ def _validate_trace_arguments(args: argparse.Namespace) -> None:
 
 
 def _validate_requested_trace(args: argparse.Namespace) -> None:
+    """Refuse ``--trace`` options that cannot work together.
+
+    Raises ``ValueError`` for ``--trace-control-url`` with ``--trace cupti``, a
+    control URL that is not http(s), or ``--trace-phase warmup`` without warmup
+    requests. A ``--trace-dir`` that does not exist yet only warns: the server
+    may create it.
+    """
     if args.trace == CUPTI and args.trace_control_url is not None:
         raise ValueError("--trace cupti is controlled through --trace-dir")
     _validate_http_url(args.trace_control_url, "--trace-control-url")

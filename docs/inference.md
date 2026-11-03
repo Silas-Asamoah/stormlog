@@ -959,7 +959,10 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   when the window was requested, when the `/start_profile` call itself was
   sent and answered (`start_requested_at_ns`, `start_returned_at_ns`), the
   `start_outcome`, when the start was confirmed, start and stop HTTP status or
-  error, why it stopped, and the trace files found. A cancelled run
+  error, why it stopped, and the trace files found: `trace_files` below
+  `--trace-dir`, and `trace_paths` resolved, as the import summary records
+  each trace's `path`. Trace health counts only the imports whose `path` is
+  one of the window's `trace_paths`. A cancelled run
   does not import its traces; import the listed files with
   `stormlog infer import-trace`. If `--trace` was requested and no trace could
   be imported, the trace collector's `infer.capabilities` record says so, with
@@ -991,17 +994,18 @@ stormlog infer profile --base-url http://server:8000/v1 --model MODEL \
   time. The stop's cost grows with the window: on an NVIDIA L4 (vLLM 0.30.0,
   Qwen2.5-0.5B, eager), a 5 s window added 1.7 GiB of server RSS and stalled
   serving for 33 s at the stop, and a 20 s window added 7.3 GiB and stalled it
-  for 138 s ([issue #118 evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239)).
+  for 138 s ([issue #118 decision record](https://github.com/Silas-Asamoah/stormlog/blob/research/native-probe-protocol-two/benchmarks/native_probes/decision_2026-10-05.md)).
   Keep windows short with `--trace-max-seconds`.
 
 ### Experimental: direct CUPTI traces
 
 `--trace cupti` captures CUDA runtime, driver and kernel activity with
 Stormlog's own CUPTI helper (`native/cupti`), instead of vLLM's profiler. It is
-**experimental and off by default**: the [issue #118
-evaluation](https://github.com/Silas-Asamoah/stormlog/pull/239) deferred adopting
-it. Use it only when you accept these measured limits (one NVIDIA L4, vLLM
-0.30.0, Qwen2.5-0.5B):
+**experimental and off by default**: the issue #118 evaluation deferred
+adopting it ([decision record](https://github.com/Silas-Asamoah/stormlog/blob/research/native-probe-protocol-two/benchmarks/native_probes/decision_2026-10-05.md);
+its protocols, per-trial results and host scripts are kept at the
+`research/native-probe-protocol-two` tag). Use it only when you accept these
+measured limits (one NVIDIA L4, vLLM 0.30.0, Qwen2.5-0.5B):
 
 - **CUDA graphs (vLLM's default):** p95 latency during the window rose 1.0%
   at a 20 s window, 1.6% at 80 s and 5.2% at 220 s. The server's memory grew
@@ -1026,9 +1030,11 @@ lost 39% of kernel timestamps without reporting a drop. The runtime is often
 loaded after the helper, so the versions are compared when the window starts,
 and again when it stops; a process whose CUDA runtime cannot be found by then
 is not captured. The helper looks the runtime up among the process's global
-symbols, so the target must load `libcudart.so` into them, as PyTorch (and so
-vLLM) does. A program linked against the static runtime, nvcc's default, is
-refused with "CUDA runtime version unavailable".
+symbols, then in a `libcudart.so.<major>` the process has already loaded, so
+it finds the shared runtime whether the target loads it globally, as PyTorch
+(and so vLLM) does, or privately (`RTLD_LOCAL`). A program linked against the
+static runtime, nvcc's default, is refused with "CUDA runtime version
+unavailable".
 
 ```bash
 cmake -S native/cupti -B build/cupti -DCMAKE_BUILD_TYPE=Release
@@ -1072,7 +1078,11 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   `cupti_status.json`, and Stormlog's start error quotes it. A helper that
   fails before it makes its directory, for example because
   `STORMLOG_CUPTI_MAX_BYTES` (which has no default) is unset or invalid, prints
-  a `stormlog-cupti: not capturing:` line on the server's stderr instead.
+  a `stormlog-cupti: not capturing:` line on the server's stderr instead. A
+  helper that cannot write its final `cupti_status.json` prints a
+  `stormlog-cupti: could not write the final cupti_status.json:` line there,
+  with the capture's earlier error if it had one, and its trace keeps the
+  `.partial` name.
   Without `STORMLOG_CUPTI_DEFER_START=1` the helper captures from the moment
   the process starts, until it exits, and refuses Stormlog's start.
 - **One window per server process.** The stop writes `activity.sclz` and ends
@@ -1090,12 +1100,14 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   Do not also start vLLM's profiler in a server with the helper loaded: it
   still writes a trace, but with CPU operators and no GPU activity. The trace
   itself does not say why; Stormlog's import adds a note to the summary when a
-  trace has CPU events and no GPU activity. Under Nsight Systems, the helper refuses to
+  trace has timed events and no GPU activity. Under Nsight Systems, the helper refuses to
   capture. If another profiler takes the slot first, the helper is meant to
   report that error, but that case has not been tested on hardware.
 - **Clock and devices.** Timestamps are CUPTI's, not converted to wall time.
   The trace does not name GPU UUIDs, so give `--trace-device-uuid` to measure
-  devices. The helper emits no iteration ranges.
+  devices (`--device-uuid` with `import-trace`). The vLLM execution hook's
+  worker hellos cannot name them either: they are matched by host and wall
+  time, which the trace does not record. The helper emits no iteration ranges.
 
 A finished `activity.sclz` can also be imported later with
 `stormlog infer import-trace ARTIFACT TRACE...`. Name the run's own traces: its

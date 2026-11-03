@@ -845,6 +845,29 @@ def test_fallback_token_counts_never_run_on_the_event_loop(tmp_path: Path) -> No
     assert all(name.startswith("stormlog-infer") for name in counted + answers)
 
 
+async def _wait_for_in_flight(
+    client: SleepingClient,
+    count: int,
+    run: asyncio.Task[dict[str, Any]],
+    timeout_seconds: float = 30.0,
+) -> None:
+    """Return once ``count`` requests are inside the client.
+
+    The client holds each request until the test releases it, so they stay
+    in flight however slowly a loaded runner dispatches the rest.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while client.active < count:
+        if run.done():
+            pytest.fail(f"the run ended before {count} requests were in flight")
+        if time.monotonic() > deadline:
+            pytest.fail(
+                f"{client.active} requests in flight after {timeout_seconds:g} s, "
+                f"expected {count}"
+            )
+        await asyncio.sleep(0.005)
+
+
 @pytest.mark.parametrize(
     ("rate", "in_flight"),
     [
@@ -864,11 +887,15 @@ def test_cancelling_a_run_records_the_requests_in_flight(
         request_count=3,
     )
     profiler = InferenceProfiler(config)
-    profiler.client = SleepingClient(1.0)  # type: ignore[assignment]
+    release = threading.Event()
+    client = SleepingClient(60.0, release=release)
+    profiler.client = client  # type: ignore[assignment]
 
     async def interrupt() -> None:
         run = asyncio.create_task(profiler._run_async())
-        await asyncio.sleep(0.25)
+        # Wait for the state under test, not a fixed time: a loaded runner
+        # can take far longer than the arrival schedule to dispatch.
+        await _wait_for_in_flight(client, in_flight, run)
         run.cancel()
         with pytest.raises(asyncio.CancelledError):
             await run
@@ -876,6 +903,7 @@ def test_cancelling_a_run_records_the_requests_in_flight(
     try:
         asyncio.run(interrupt())
     finally:
+        release.set()
         profiler.request_executor.shutdown(wait=True)
     lines = (tmp_path / "infer.jsonl").read_text().splitlines()
     records = [json.loads(line) for line in lines]

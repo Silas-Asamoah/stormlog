@@ -327,6 +327,11 @@ def _shared_device_message(scope: str | None, index: int) -> str:
 
 
 def _load(path: Path, file_format: str) -> KinetoTrace:
+    """Read a trace file in its detected ``file_format`` as the in-memory trace.
+
+    Any format but Nsight Systems SQLite and Stormlog CUPTI is read as Kineto
+    JSON. What a reader raises for a malformed or refused trace passes through.
+    """
     if file_format == "nsys-sqlite":
         return load_nsys_sqlite(path)
     if file_format == "stormlog-cupti":

@@ -576,7 +576,14 @@ def test_a_trace_with_cpu_events_but_no_gpu_activity_says_so(
     trace = load_kineto_trace(_write(tmp_path, document))
 
     assert trace.notes == [
-        "the trace has 6 CPU events but no GPU kernels, copies or memsets; "
+        "the trace has 6 timed events but no GPU kernels, copies or memsets; "
         "the profiler may not have had CUPTI"
     ]
     assert load_kineto_trace(_write(tmp_path, _trace_document())).notes == []
+    # A GPU-side annotation is a timed event, but not a CPU one.
+    annotation = {"ph": "X", "cat": "gpu_user_annotation", "name": "a", "ts": 1}
+    document["traceEvents"] = [{**annotation, "dur": 1, "pid": 0, "tid": 7}]
+    assert load_kineto_trace(_write(tmp_path, document)).notes == [
+        "the trace has 1 timed event but no GPU kernels, copies or memsets; "
+        "the profiler may not have had CUPTI"
+    ]
