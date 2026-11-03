@@ -994,9 +994,10 @@ void DisableActivities() {
 }
 
 // Enables every requested activity kind, or none: a kind CUPTI refused would
-// be missing from the trace with no drop to show for it. Runs once.
+// be missing from the trace with no drop to show for it. Runs once, and not
+// after the capture has failed, since such a capture can never finalize.
 bool EnableActivities() {
-  if (g_state.activities_enabled.load()) {
+  if (g_state.activities_enabled.load() || HasInitializationError()) {
     return false;
   }
   // A deferred start runs after the target has used CUDA, so its runtime
@@ -1191,7 +1192,8 @@ void SendReply(int client, std::string_view reply) {
 
 // The control thread: one 4-byte command per connection on stop.sock. STRT
 // enables collection for a deferred start and answers OK, or ERR when the
-// start is not deferred, has already run or fails; the status is rewritten
+// start is not deferred, has already run, fails or follows a failure (an
+// earlier failed start, for one); the status is rewritten
 // either way. STOP finalizes the capture, answers OK only if it finalized
 // cleanly, and ends the loop. Anything else, or nothing within 5 s, answers
 // ERR. Accept wakes every second, so the loop ends once Finalize closes the

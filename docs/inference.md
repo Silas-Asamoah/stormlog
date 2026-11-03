@@ -1088,7 +1088,8 @@ stormlog infer profile --base-url http://127.0.0.1:8000/v1 --model MODEL \
   the process starts, until it exits, and refuses Stormlog's start.
 - **One window per server process.** The stop writes `activity.sclz` and ends
   the helper, so a run must have a single case. Restart the server for another
-  window.
+  window. A helper whose start failed refuses any later start too, since its
+  trace could no longer be imported.
 - **Loss is reported, not hidden.** The import summary's `event_loss` counts
   records CUPTI dropped, records past `STORMLOG_CUPTI_MAX_BYTES`, activity
   buffers refused while the writer was behind (`STORMLOG_CUPTI_MAX_BUFFER_BYTES`,
