@@ -1391,6 +1391,7 @@ class _FakeHelper:
         pid: int,
         *,
         start_reply: bytes = b"OK\n",
+        start_seconds: float = 0.0,
         stop_seconds: float = 0.0,
     ) -> None:
         import socket
@@ -1399,6 +1400,7 @@ class _FakeHelper:
         self.directory.mkdir()
         self.pid = pid
         self.start_reply = start_reply
+        self.start_seconds = start_seconds
         self.stop_seconds = stop_seconds
         self.commands: list[bytes] = []
         # When each STOP arrived and was answered (time.monotonic()).
@@ -1425,10 +1427,10 @@ class _FakeHelper:
     def _serve(self) -> None:
         """Answer as the CUPTI helper does, until stopped or told to quit.
 
-        Each ``STRT`` gets ``start_reply``. ``STOP``, or any other command but
-        ``QUIT``, waits ``stop_seconds``, writes a finalized trace and status,
-        answers ``OK`` and removes the socket. ``QUIT`` ends the helper
-        unstopped.
+        Each ``STRT`` gets ``start_reply``, after ``start_seconds``. ``STOP``,
+        or any other command but ``QUIT``, waits ``stop_seconds``, writes a
+        finalized trace and status, answers ``OK`` and removes the socket.
+        ``QUIT`` ends the helper unstopped.
         """
         while True:
             client, _ = self.server.accept()
@@ -1438,6 +1440,7 @@ class _FakeHelper:
                     return
                 self.commands.append(command)
                 if command == b"STRT":
+                    time.sleep(self.start_seconds)
                     client.sendall(self.start_reply)
                     continue
                 self.stop_times.append(time.monotonic())
@@ -1549,6 +1552,57 @@ def test_cupti_control_stops_every_helper_at_once(cupti_dir: Path, count: int) -
     # Sent one by one, a helper's stop would arrive only after the previous
     # helper had answered.
     assert max(arrived) < min(answered)
+
+
+def _fail_one_pool_thread(monkeypatch: pytest.MonkeyPatch, after: int) -> None:
+    """Refuse the pool thread after the first ``after``, as an exhausted
+    process would ("can't start new thread"); every later one starts.
+
+    Only ``ThreadPoolExecutor`` workers count, not the event loop's
+    ``asyncio`` executor threads.
+    """
+    real = threading.Thread.start
+    started = {"n": 0}
+
+    def start(thread: threading.Thread) -> None:
+        if thread.name.startswith("ThreadPoolExecutor-"):
+            started["n"] += 1
+            if started["n"] == after + 1:
+                raise RuntimeError("can't start new thread")
+        real(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start)
+
+
+@pytest.mark.parametrize("after", [1, 2])
+def test_a_start_cut_short_by_thread_creation_still_stops_its_helpers(
+    cupti_dir: Path, monkeypatch: pytest.MonkeyPatch, after: int
+) -> None:
+    """A pool thread that cannot start makes the start raise partway.
+
+    The helpers that already got ``STRT`` must still get the window's
+    ``STOP``, or they collect until their process exits. The window reads the
+    raised start as one that may have taken effect, and stops at once.
+    """
+    # Each start held 0.2 s, so no pool thread is idle, and reused instead of
+    # a new one, while the start is still being dispatched.
+    helpers = [_FakeHelper(cupti_dir, n, start_seconds=0.2) for n in range(1, 5)]
+    windows = TraceWindows(_config(cupti_dir, mode="cupti"))
+    _fail_one_pool_thread(monkeypatch, after)
+
+    window = _run_window(windows)
+
+    assert window.start_outcome == START_UNKNOWN
+    assert window.start.error == "RuntimeError: can't start new thread"
+    assert window.stop_reason == "start_unknown"
+    started = [helper for helper in helpers if b"STRT" in helper.commands]
+    assert len(started) >= after
+    for helper in started:
+        helper.thread.join(5)
+        assert helper.commands == [b"STRT", b"STOP"]
+    # A helper the start never reached gets the stop too, which ends it.
+    for helper in helpers:
+        assert helper.commands in ([b"STRT", b"STOP"], [b"STOP"])
 
 
 def _dead_socket(root: Path, pid: int) -> Path:
