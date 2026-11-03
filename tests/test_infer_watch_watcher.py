@@ -93,13 +93,18 @@ def _watch(
     options: WatchOptions | None = None,
     observer: _Observer | None = None,
     stop_after: float | None = None,
+    fetch_timeout_seconds: float | None = None,
 ) -> WatchOutcome:
+    """Run a watch; ``fetch_timeout_seconds`` gives each fetch its own
+    deadline instead of the scrape timeout, to outlive the watcher's."""
     watcher = Watcher(
         resolve_watch_config(payload),
         root,
         options=options or WatchOptions(duration_seconds=2.0),
         observer=observer,
     )
+    if fetch_timeout_seconds is not None:
+        watcher.scraper.timeout_seconds = fetch_timeout_seconds
 
     async def main() -> WatchOutcome:
         stop = asyncio.Event()
@@ -876,7 +881,11 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     """A /metrics answering a byte every 0.2 s never times out per read: it
     held the watch for minutes, deaf to SIGTERM and to --duration. Now each
     scrape has its timeout in all, the fetch it gives up on is the only one
-    in flight, and the ticks meanwhile still run."""
+    in flight, and the ticks meanwhile still run.
+
+    The fetch itself now ends at the same 0.5 s, racing the watcher's give-up;
+    its 5 s deadline here keeps it reading past the give-up, so the ticks
+    still find it in flight, as with a server slower than any deadline."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     payload = watch_config("", scrape_timeout_seconds=0.5)
@@ -892,6 +901,7 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
             payload,
             options=options,
             stop_after=1.2 if ends_by == "stop" else None,
+            fetch_timeout_seconds=5.0,
         )
         elapsed = time.monotonic() - started
     assert elapsed < 4.0
@@ -940,7 +950,10 @@ def test_an_abandoned_scrape_stops_reading_soon_after_its_timeout(
 def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None:
     """The watcher stamps a scrape's start on its own clock. The one it gave
     up on ended on the real clock, so with the watcher's clock behind it the
-    abandoned record lasted 11 days instead of its 0.3 s timeout."""
+    abandoned record lasted 11 days instead of its 0.3 s timeout.
+
+    The fetch's own deadline is 5 s here, so it is still reading when the
+    watcher gives up, rather than racing it to the same 0.3 s."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     behind = 10**15  # about 11.6 days
@@ -949,6 +962,7 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+        watcher.scraper.timeout_seconds = 5.0
 
         async def scrape() -> Any:
             return await watcher._scrape(clock.wall_ns(), asyncio.Event())
@@ -958,6 +972,7 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
         finally:
             watcher.close()
     assert record is not None and record.status == "error"
+    assert record.error is not None and record.error.startswith("abandoned: ")
     assert record.completed_at_ns is not None
     took = record.completed_at_ns - record.observed_at_ns
     assert 0.25 * 1e9 <= took < 5 * 1e9
@@ -965,7 +980,8 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
 
 def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
     """The watcher's clock steps back a minute during the scrape timeout:
-    the scrape it gives up on ends at its start, not 60 s before it."""
+    the scrape it gives up on ends at its start, not 60 s before it. The
+    fetch's own 5 s deadline keeps it reading past the give-up."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     step = [0]
@@ -974,6 +990,7 @@ def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+        watcher.scraper.timeout_seconds = 5.0
 
         async def scrape() -> Any:
             started = clock.wall_ns()
@@ -985,6 +1002,7 @@ def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
         finally:
             watcher.close()
     assert record is not None and record.status == "error"
+    assert record.error is not None and record.error.startswith("abandoned: ")
     assert record.completed_at_ns == record.observed_at_ns
 
 

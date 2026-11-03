@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.3";
+constexpr char kHelperVersion[] = "0.4.4";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -189,6 +189,50 @@ std::string JsonString(std::string_view value) {
   return output.str();
 }
 
+// Whether `value` is well-formed UTF-8, as a strict decoder (Python's) reads
+// it: no overlong forms, surrogates or code points past U+10FFFF.
+bool IsValidUtf8(std::string_view value) {
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const auto lead = static_cast<unsigned char>(value[index]);
+    if (lead < 0x80U) {
+      ++index;
+      continue;
+    }
+    std::size_t length = 0;
+    std::uint32_t code_point = 0;
+    if (lead >= 0xC2U && lead <= 0xDFU) {
+      length = 2;
+      code_point = lead & 0x1FU;
+    } else if (lead >= 0xE0U && lead <= 0xEFU) {
+      length = 3;
+      code_point = lead & 0x0FU;
+    } else if (lead >= 0xF0U && lead <= 0xF4U) {
+      length = 4;
+      code_point = lead & 0x07U;
+    } else {
+      return false;
+    }
+    if (value.size() - index < length) {
+      return false;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto next = static_cast<unsigned char>(value[index + offset]);
+      if ((next & 0xC0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (next & 0x3FU);
+    }
+    if ((length == 3 && code_point < 0x800U) ||
+        (length == 4 && (code_point < 0x10000U || code_point > 0x10FFFFU)) ||
+        (code_point >= 0xD800U && code_point <= 0xDFFFU)) {
+      return false;
+    }
+    index += length;
+  }
+  return true;
+}
+
 // CUPTI's message for `result`, or "CUPTI error <code>" when CUPTI has
 // none.
 std::string CuptiError(CUptiResult result) {
@@ -297,6 +341,16 @@ void SetInitializationError(std::string message) {
   if (g_state.initialization_error.empty()) {
     g_state.initialization_error = std::move(message);
   }
+}
+
+// Adds `message` to the capture's error, after the one recorded already:
+// for a later failure the status must show too. Takes error_mutex.
+void AppendInitializationError(const std::string& message) {
+  std::lock_guard<std::mutex> lock(g_state.error_mutex);
+  if (!g_state.initialization_error.empty()) {
+    g_state.initialization_error += "; ";
+  }
+  g_state.initialization_error += message;
 }
 
 bool HasInitializationError() {
@@ -808,7 +862,8 @@ std::string JsonStringArray(const std::vector<std::string>& values) {
   return output.str();
 }
 
-// Whether the status reached cupti_status.json; on failure, errno says why.
+// Whether the status reached cupti_status.json and the directory was synced
+// after the rename; on failure, errno says why.
 bool WriteStatus() {
   if (g_state.directory_fd < 0) {
     errno = EBADF;
@@ -899,8 +954,9 @@ bool WriteStatus() {
     errno = failure;
     return false;
   }
-  fsync(g_state.directory_fd);
-  return true;
+  // The rename lasts only once the directory is synced: a final status that
+  // may be lost cannot vouch for the trace.
+  return fsync(g_state.directory_fd) == 0;
 }
 
 // Why the capture cannot be trusted against the target's CUDA runtime, or
@@ -947,10 +1003,31 @@ void DisableActivities() {
   }
 }
 
+// Disables again the kinds a refused start enabled. A kind CUPTI will not
+// disable keeps collecting, so it stays in enabled_activities, and its
+// failure is added to the refusal, which stays the error reported first.
+void UndoEnabledActivities() {
+  std::vector<std::string> still_enabled;
+  for (const ActivitySelection& activity : kSupportedActivities) {
+    if (!IsEnabled(activity.name)) {
+      continue;
+    }
+    const CUptiResult result = cuptiActivityDisable(activity.kind);
+    if (result != CUPTI_SUCCESS) {
+      AppendInitializationError(std::string("activity ") + activity.name +
+                                " could not be disabled: " +
+                                CuptiError(result));
+      still_enabled.emplace_back(activity.name);
+    }
+  }
+  g_state.enabled_activities = std::move(still_enabled);
+}
+
 // Enables every requested activity kind, or none: a kind CUPTI refused would
-// be missing from the trace with no drop to show for it. Runs once.
+// be missing from the trace with no drop to show for it. Runs once, and not
+// after the capture has failed, since such a capture can never finalize.
 bool EnableActivities() {
-  if (g_state.activities_enabled.load()) {
+  if (g_state.activities_enabled.load() || HasInitializationError()) {
     return false;
   }
   // A deferred start runs after the target has used CUDA, so its runtime
@@ -978,8 +1055,7 @@ bool EnableActivities() {
       // The refusal is the error reported; then undo the kinds enabled.
       SetInitializationError(std::string("activity ") + activity.name +
                              " could not be enabled: " + CuptiError(result));
-      DisableActivities();
-      g_state.enabled_activities.clear();
+      UndoEnabledActivities();
       return false;
     }
     g_state.enabled_activities.emplace_back(activity.name);
@@ -1145,7 +1221,8 @@ void SendReply(int client, std::string_view reply) {
 
 // The control thread: one 4-byte command per connection on stop.sock. STRT
 // enables collection for a deferred start and answers OK, or ERR when the
-// start is not deferred, has already run or fails; the status is rewritten
+// start is not deferred, has already run, fails or follows a failure (an
+// earlier failed start, for one); the status is rewritten
 // either way. STOP finalizes the capture, answers OK only if it finalized
 // cleanly, and ends the loop. Anything else, or nothing within 5 s, answers
 // ERR. Accept wakes every second, so the loop ends once Finalize closes the
@@ -1232,6 +1309,12 @@ void Initialize() {
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
   if (output_directory == nullptr || output_directory[0] != '/') {
     SetInitializationError("output directory must be absolute");
+    return;
+  }
+  // The status file names the process directory, and Stormlog reads it as
+  // UTF-8, so a capture under any other name could never be imported.
+  if (!IsValidUtf8(output_directory)) {
+    SetInitializationError("output directory must be valid UTF-8");
     return;
   }
   if (!ParsePositiveInteger(std::getenv(kMaximumBytesEnv),

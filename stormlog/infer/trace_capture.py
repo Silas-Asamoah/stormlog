@@ -265,13 +265,19 @@ class CuptiControl:
     def _start(self) -> ControlResult:
         """Send ``STRT`` to every helper socket under the directory.
 
-        The helpers that answered are kept for the stop. 200 when all answered
-        ``OK``; 404 when no socket had a listener, or every helper answered
-        ``ERR``, so none started; no status otherwise, since some may have
-        started. The error names each helper that did not answer ``OK``, with
-        the reason its status file gives.
+        The helpers that answered are kept for the stop, or every socket
+        found if the dispatch raises. 200 when all answered ``OK``; 404 when
+        no socket had a listener, or every helper answered ``ERR``, so none
+        started; no status otherwise, since some may have started. The error
+        names each helper that did not answer ``OK``, with the reason its
+        status file gives.
         """
         found = sorted(self.directory.glob(CUPTI_SOCKET_GLOB))
+        # Kept before the dispatch: a pool thread that cannot start raises
+        # out of _send_all after some helpers took STRT, and the window's stop
+        # must still reach them. A helper that never got STRT may then get
+        # the STOP, which ends it untraced; a server process has one window.
+        self._sockets = found
         answers = {
             path: answer
             for path, answer in self._send_all(b"STRT", found).items()
