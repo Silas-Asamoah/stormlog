@@ -343,6 +343,16 @@ void SetInitializationError(std::string message) {
   }
 }
 
+// Adds `message` to the capture's error, after the one recorded already:
+// for a later failure the status must show too. Takes error_mutex.
+void AppendInitializationError(const std::string& message) {
+  std::lock_guard<std::mutex> lock(g_state.error_mutex);
+  if (!g_state.initialization_error.empty()) {
+    g_state.initialization_error += "; ";
+  }
+  g_state.initialization_error += message;
+}
+
 bool HasInitializationError() {
   std::lock_guard<std::mutex> lock(g_state.error_mutex);
   return !g_state.initialization_error.empty();
@@ -993,6 +1003,26 @@ void DisableActivities() {
   }
 }
 
+// Disables again the kinds a refused start enabled. A kind CUPTI will not
+// disable keeps collecting, so it stays in enabled_activities, and its
+// failure is added to the refusal, which stays the error reported first.
+void UndoEnabledActivities() {
+  std::vector<std::string> still_enabled;
+  for (const ActivitySelection& activity : kSupportedActivities) {
+    if (!IsEnabled(activity.name)) {
+      continue;
+    }
+    const CUptiResult result = cuptiActivityDisable(activity.kind);
+    if (result != CUPTI_SUCCESS) {
+      AppendInitializationError(std::string("activity ") + activity.name +
+                                " could not be disabled: " +
+                                CuptiError(result));
+      still_enabled.emplace_back(activity.name);
+    }
+  }
+  g_state.enabled_activities = std::move(still_enabled);
+}
+
 // Enables every requested activity kind, or none: a kind CUPTI refused would
 // be missing from the trace with no drop to show for it. Runs once, and not
 // after the capture has failed, since such a capture can never finalize.
@@ -1025,8 +1055,7 @@ bool EnableActivities() {
       // The refusal is the error reported; then undo the kinds enabled.
       SetInitializationError(std::string("activity ") + activity.name +
                              " could not be enabled: " + CuptiError(result));
-      DisableActivities();
-      g_state.enabled_activities.clear();
+      UndoEnabledActivities();
       return false;
     }
     g_state.enabled_activities.emplace_back(activity.name);
