@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import http.client
+import io
+import socket
 import threading
 import time
 import urllib.error
@@ -134,7 +136,105 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect())
+class ResponseDeadlineExceeded(Exception):
+    """The response was still arriving at the fetch's overall deadline.
+
+    Not an ``OSError``, so neither urllib nor http.client takes it for a
+    connection error on the way out.
+    """
+
+
+class _DeadlineReader(io.RawIOBase):
+    """A response's socket, each read waiting only until the deadline.
+
+    http.client reads the status line, the headers and every chunk-size line
+    with ``readline``, many socket reads for one line, so a bound between
+    body reads cannot end a line that trickles in. Every read here sets the
+    socket's timeout to what is left of the deadline (a ``time.perf_counter``
+    time) first, on the fetch's own thread: a plain socket and an SSLSocket
+    alike, with no thread of its own.
+    """
+
+    def __init__(self, sock: socket.socket, deadline: float) -> None:
+        super().__init__()
+        self._sock = sock
+        self._raw = sock.makefile("rb", buffering=0)
+        self._deadline = deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer: Any) -> int | None:
+        left = self._deadline - time.perf_counter()
+        if left <= 0:
+            raise ResponseDeadlineExceeded
+        self._sock.settimeout(left)
+        try:
+            return self._raw.readinto(buffer)
+        except TimeoutError as exc:
+            raise ResponseDeadlineExceeded from exc
+
+    def close(self) -> None:
+        # Drops this reader's hold on the socket, as http.client's own does.
+        self._raw.close()
+        super().close()
+
+
+class _DeadlineResponse(http.client.HTTPResponse):
+    """An ``HTTPResponse`` that reads its socket through ``_DeadlineReader``."""
+
+    def __init__(
+        self, sock: socket.socket, *args: Any, deadline: float, **kwargs: Any
+    ) -> None:
+        super().__init__(sock, *args, **kwargs)
+        # Nothing has been read yet: swap the plain reader for a bounded one.
+        self.fp.close()
+        self.fp = io.BufferedReader(_DeadlineReader(sock, deadline))
+
+
+class _DeadlineRequest(urllib.request.Request):
+    """A request whose response must have arrived by ``deadline``."""
+
+    def __init__(self, *args: Any, deadline: float, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.deadline = deadline
+
+
+class _DeadlineOpen:
+    """Read the response of a ``_DeadlineRequest`` by its deadline.
+
+    Mixed into urllib's http and https handlers: the connection, its proxy
+    tunnel and TLS set-up are urllib's own, and only the response is read
+    through ``_DeadlineReader``.
+    """
+
+    def do_open(
+        self, http_class: Any, req: urllib.request.Request, **kwargs: Any
+    ) -> Any:
+        deadline = getattr(req, "deadline", None)
+
+        def connection(*args: Any, **conn_kwargs: Any) -> http.client.HTTPConnection:
+            made: http.client.HTTPConnection = http_class(*args, **conn_kwargs)
+            if deadline is not None:
+                # http.client builds it as response_class(sock, method=...).
+                bounded: Any = partial(_DeadlineResponse, deadline=deadline)
+                made.response_class = bounded
+            return made
+
+        return super().do_open(connection, req, **kwargs)  # type: ignore[misc]
+
+
+class _DeadlineHTTPHandler(_DeadlineOpen, urllib.request.HTTPHandler):
+    pass
+
+
+class _DeadlineHTTPSHandler(_DeadlineOpen, urllib.request.HTTPSHandler):
+    pass
+
+
+_OPENER = urllib.request.build_opener(
+    _NoRedirect(), _DeadlineHTTPHandler(), _DeadlineHTTPSHandler()
+)
 
 
 def fetch_metrics(
@@ -147,22 +247,28 @@ def fetch_metrics(
     """GET the metrics text; every failure becomes a result, never an exception.
 
     The body is read at most ``max_bytes + 1`` bytes far: a longer response
-    is a failed scrape, and the rest of it is never read. It is read within
-    ``timeout_seconds`` of the start, too, not only within that much per
-    socket read, so a body that trickles in ends the fetch at that deadline
-    plus at most one read's timeout: a fetch the watcher gave up on cannot
-    hold its thread, and every later scrape, for as long as the server likes.
+    is a failed scrape, and the rest of it is never read. The whole response,
+    status line, headers, chunk-size lines and body, must arrive within
+    ``timeout_seconds`` of the start, not only within that much per socket
+    read: each read waits only for what is left of it, so an answer that
+    trickles in ends the fetch at that deadline, as a failure whose error
+    starts with ``deadline``. A fetch the watcher gave up on cannot hold its
+    thread, and every later scrape, for as long as the server likes. The
+    connection itself (the connect, a TLS handshake) is bounded per step by
+    ``timeout_seconds``, and its time counts against the deadline. The
+    deadline costs no thread: the reads run on the caller's.
     """
     headers = {"Accept": "text/plain"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    request = urllib.request.Request(url, headers=headers, method="GET")
     started = time.perf_counter()
+    deadline = started + timeout_seconds
+    request = _DeadlineRequest(url, headers=headers, method="GET", deadline=deadline)
     try:
         with _OPENER.open(request, timeout=timeout_seconds) as response:
             status = int(response.status)
             try:
-                raw = _read_capped(response, max_bytes, started + timeout_seconds)
+                raw = _read_capped(response, max_bytes, deadline)
             except BodyDeadlineExceeded as exc:
                 elapsed = (time.perf_counter() - started) * 1000.0
                 return FetchResult(None, status, str(exc), elapsed)
@@ -180,6 +286,10 @@ def fetch_metrics(
                 return FetchResult(None, status, error, elapsed)
             body = raw.decode("utf-8", errors="replace")
             return FetchResult(body, status, None, elapsed)
+    except ResponseDeadlineExceeded:
+        elapsed = (time.perf_counter() - started) * 1000.0
+        error = "deadline: the status line and headers were still arriving"
+        return FetchResult(None, None, error, elapsed)
     except urllib.error.HTTPError as exc:
         elapsed = (time.perf_counter() - started) * 1000.0
         return FetchResult(None, exc.code, _http_error_text(exc), elapsed)
@@ -197,7 +307,8 @@ def _read_capped(response: Any, max_bytes: int, deadline: float) -> bytes:
     ``time.perf_counter`` time).
 
     The body is read as it arrives, a chunk at a time, so the deadline is
-    checked between socket reads. A bounded read returns short at EOF instead
+    checked between reads as well as inside each (``_DeadlineReader``). A
+    bounded read returns short at EOF instead
     of raising, so a body cut short of its Content-Length is raised here as
     ``IncompleteRead``, as an unbounded read would.
     """
@@ -209,7 +320,12 @@ def _read_capped(response: Any, max_bytes: int, deadline: float) -> bytes:
             raise BodyDeadlineExceeded(
                 f"deadline: the body was still arriving after {size} bytes"
             )
-        chunk = bytes(read(min(READ_CHUNK_BYTES, max_bytes + 1 - size)))
+        try:
+            chunk = bytes(read(min(READ_CHUNK_BYTES, max_bytes + 1 - size)))
+        except ResponseDeadlineExceeded:
+            raise BodyDeadlineExceeded(
+                f"deadline: the body was still arriving after {size} bytes"
+            ) from None
         if not chunk:
             break
         chunks.append(chunk)
@@ -392,8 +508,10 @@ class VllmMetricsScraper:
 
     def fetching(self) -> bool:
         """A fetch is still running on its thread, one whose caller gave up
-        waiting for it included: it ends at its timeout plus at most one
-        socket read's timeout, however slowly the response trickles in."""
+        waiting for it included. However slowly the response trickles in,
+        it ends at its deadline, or as soon as its connection is set up if
+        that took longer (the connect and a TLS handshake are each bounded
+        by the timeout)."""
         with self._fetching_lock:
             return self._fetching > 0
 

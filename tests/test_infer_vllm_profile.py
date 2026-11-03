@@ -5,10 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import shutil
 import signal
 import socket
+import ssl
+import subprocess
 import threading
 import time
+import urllib.request
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -182,6 +186,118 @@ def _serving(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+# What a trickling server sends at once, then the byte it repeats: the line
+# it is in the middle of never ends, so each read returns well within any
+# socket timeout and only a bound on the whole response can end the fetch.
+_TRICKLES = {
+    "status line": (b"HTTP/1.1 200 O", b"K"),
+    "headers": (b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nX-Pad: ", b"a"),
+    "chunk-size line": (
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+        b"0",
+    ),
+}
+_TRICKLE_PAUSE = 0.02
+# A trickling server gives up after this long, so an unbounded fetch ends.
+_TRICKLE_SECONDS = 4.0
+
+
+@pytest.fixture(scope="module")
+def tls_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    """A throwaway certificate and key for 127.0.0.1, made with ``openssl``."""
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        pytest.skip("needs the openssl command to make a certificate")
+    directory = tmp_path_factory.mktemp("tls")
+    cert, key = directory / "cert.pem", directory / "key.pem"
+    subprocess.run(
+        [
+            openssl,
+            "req",
+            "-x509",
+            "-newkey",
+            "ec",
+            "-pkeyopt",
+            "ec_paramgen_curve:prime256v1",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    return cert, key
+
+
+def _read_head(sock: socket.socket) -> None:
+    """Read a request up to the blank line ending its headers."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return
+        data += chunk
+
+
+@contextlib.contextmanager
+def _trickling(
+    part: str, tls: tuple[Path, Path] | None = None
+) -> Iterator[tuple[str, threading.Event]]:
+    """A real socket that answers one GET with ``part`` trickling in.
+
+    Yields the origin (https with ``tls``) and an event set once the client
+    hung up. After ``_TRICKLE_SECONDS`` the server closes the connection.
+    """
+    prefix, byte = _TRICKLES[part]
+    context = None
+    if tls is not None:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(*tls)
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+    server.settimeout(5.0)
+    stop = threading.Event()
+    hung_up = threading.Event()
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            conn, _ = server.accept()
+            with contextlib.closing(conn):
+                sock = conn
+                if context is not None:
+                    sock = context.wrap_socket(conn, server_side=True)
+                _read_head(sock)
+                sock.sendall(prefix)
+                ends = time.monotonic() + _TRICKLE_SECONDS
+                try:
+                    while time.monotonic() < ends:
+                        if stop.wait(_TRICKLE_PAUSE):
+                            return
+                        sock.sendall(byte)
+                except OSError:
+                    hung_up.set()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    scheme = "http" if tls is None else "https"
+    try:
+        yield f"{scheme}://127.0.0.1:{server.getsockname()[1]}", hung_up
+    finally:
+        stop.set()
+        thread.join(5)
+        server.close()
 
 
 class _RedirectingHandler(BaseHTTPRequestHandler):
@@ -800,6 +916,54 @@ class TestScraperUnits:
         assert result.error is not None
         assert result.error.startswith("deadline: the body was still arriving")
         assert 0 < body.taken < 100
+
+    @pytest.mark.parametrize("part", sorted(_TRICKLES))
+    def test_a_response_trickling_in_ends_at_the_fetchs_timeout(
+        self, part: str
+    ) -> None:
+        # http.client reads the status line, the headers and every chunk-size
+        # line with readline, which only the per-read timeout bounded: one
+        # trickling a byte every 20 ms held the fetch for as long as it went on.
+        with _trickling(part) as (origin, _):
+            before = set(threading.enumerate())
+            started = time.perf_counter()
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=0.5)
+            took = time.perf_counter() - started
+            # The deadline costs the scrape no thread of its own.
+            assert set(threading.enumerate()) <= before
+        assert took < 0.5 + 0.5, f"{part}: the fetch took {took:.2f} s"
+        assert result.text is None
+        assert result.error is not None and result.error.startswith(
+            "deadline"
+        ), result.error
+
+    @pytest.mark.parametrize("part", ["status line", "chunk-size line"])
+    def test_a_tls_response_trickling_in_ends_at_the_fetchs_timeout(
+        self,
+        part: str,
+        tls_files: tuple[Path, Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The opener trusts the throwaway certificate; nothing else about the
+        # https fetch changes. It is rebuilt rather than given SSL_CERT_FILE:
+        # since Python 3.12 urllib's https handler loads the trusted
+        # certificates when the opener is built, at import.
+        trusting = ssl.create_default_context(cafile=str(tls_files[0]))
+        opener = urllib.request.build_opener(
+            vllm_scraper._NoRedirect(),
+            vllm_scraper._DeadlineHTTPHandler(),
+            vllm_scraper._DeadlineHTTPSHandler(context=trusting),
+        )
+        monkeypatch.setattr(vllm_scraper, "_OPENER", opener)
+        with _trickling(part, tls=tls_files) as (origin, _):
+            started = time.perf_counter()
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=0.5)
+            took = time.perf_counter() - started
+        assert took < 0.5 + 0.5, f"{part}: the fetch took {took:.2f} s"
+        assert result.text is None
+        assert result.error is not None and result.error.startswith(
+            "deadline"
+        ), result.error
 
     def test_a_response_over_the_byte_cap_is_read_no_further(self) -> None:
         body = _EndlessBody(give_up_after=10 * 64 * 1024)
