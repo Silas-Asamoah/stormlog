@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr char kHelperVersion[] = "0.4.3";
+constexpr char kHelperVersion[] = "0.4.4";
 constexpr char kTraceEncoding[] = "stormlog-zlib-frames-v1";
 constexpr char kTraceMagic[] = "SLCPTZ1\n";
 constexpr std::size_t kFrameBufferBytes = 64U * 1024U;
@@ -187,6 +187,50 @@ std::string JsonString(std::string_view value) {
   }
   output << '"';
   return output.str();
+}
+
+// Whether `value` is well-formed UTF-8, as a strict decoder (Python's) reads
+// it: no overlong forms, surrogates or code points past U+10FFFF.
+bool IsValidUtf8(std::string_view value) {
+  std::size_t index = 0;
+  while (index < value.size()) {
+    const auto lead = static_cast<unsigned char>(value[index]);
+    if (lead < 0x80U) {
+      ++index;
+      continue;
+    }
+    std::size_t length = 0;
+    std::uint32_t code_point = 0;
+    if (lead >= 0xC2U && lead <= 0xDFU) {
+      length = 2;
+      code_point = lead & 0x1FU;
+    } else if (lead >= 0xE0U && lead <= 0xEFU) {
+      length = 3;
+      code_point = lead & 0x0FU;
+    } else if (lead >= 0xF0U && lead <= 0xF4U) {
+      length = 4;
+      code_point = lead & 0x07U;
+    } else {
+      return false;
+    }
+    if (value.size() - index < length) {
+      return false;
+    }
+    for (std::size_t offset = 1; offset < length; ++offset) {
+      const auto next = static_cast<unsigned char>(value[index + offset]);
+      if ((next & 0xC0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (next & 0x3FU);
+    }
+    if ((length == 3 && code_point < 0x800U) ||
+        (length == 4 && (code_point < 0x10000U || code_point > 0x10FFFFU)) ||
+        (code_point >= 0xD800U && code_point <= 0xDFFFU)) {
+      return false;
+    }
+    index += length;
+  }
+  return true;
 }
 
 // CUPTI's message for `result`, or "CUPTI error <code>" when CUPTI has
@@ -1232,6 +1276,12 @@ void Initialize() {
   const char* output_directory = std::getenv(kOutputDirectoryEnv);
   if (output_directory == nullptr || output_directory[0] != '/') {
     SetInitializationError("output directory must be absolute");
+    return;
+  }
+  // The status file names the process directory, and Stormlog reads it as
+  // UTF-8, so a capture under any other name could never be imported.
+  if (!IsValidUtf8(output_directory)) {
+    SetInitializationError("output directory must be valid UTF-8");
     return;
   }
   if (!ParsePositiveInteger(std::getenv(kMaximumBytesEnv),
