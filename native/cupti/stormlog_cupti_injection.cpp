@@ -852,7 +852,8 @@ std::string JsonStringArray(const std::vector<std::string>& values) {
   return output.str();
 }
 
-// Whether the status reached cupti_status.json; on failure, errno says why.
+// Whether the status reached cupti_status.json and the directory was synced
+// after the rename; on failure, errno says why.
 bool WriteStatus() {
   if (g_state.directory_fd < 0) {
     errno = EBADF;
@@ -943,8 +944,9 @@ bool WriteStatus() {
     errno = failure;
     return false;
   }
-  fsync(g_state.directory_fd);
-  return true;
+  // The rename lasts only once the directory is synced: a final status that
+  // may be lost cannot vouch for the trace.
+  return fsync(g_state.directory_fd) == 0;
 }
 
 // Why the capture cannot be trusted against the target's CUDA runtime, or
