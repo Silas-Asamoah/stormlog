@@ -70,6 +70,7 @@ from .distributed_diagnostics import (
     load_distributed_artifacts,
     parse_rank_filter,
 )
+from .markdown_warmup import warm_markdown_url_caches
 from .monitor import TrackerEventView, TrackerSession, TrackerUnavailableError
 from .profiles import (
     clear_pytorch_profiles,
@@ -313,6 +314,8 @@ class GPUMemoryProfilerTUI(App):
             raise ValueError("framework must be pytorch or mlx")
         self.framework = framework
         self._mlx_artifact_path: str | None = None
+        # Before any Markdown widget parses in Textual's thread pool.
+        warm_markdown_url_caches()
         super().__init__(*args, **kwargs)
 
     def _overview_markdown(self) -> str:

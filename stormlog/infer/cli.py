@@ -87,7 +87,13 @@ from .slo import (
     parse_slo_flags,
     require_measured_window,
 )
-from .trace_capture import TRACE_MODES, TRACE_PHASES, TraceCaptureConfig, server_root
+from .trace_capture import (
+    CUPTI,
+    TRACE_MODES,
+    TRACE_PHASES,
+    TraceCaptureConfig,
+    server_root,
+)
 from .trace_import import import_traces_into_artifact, parse_device_uuids
 from .vllm_execution_import import import_execution_into_artifact
 from .vllm_scraper import AUTO_METRICS_URL, resolve_metrics_url
@@ -370,7 +376,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR as this host sees "
             "it; when the run ends, its final scheduler steps are imported and "
-            "its worker hellos name the GPU of each traced process"
+            "its worker hellos name the GPU of each traced process (not for "
+            "--trace cupti, whose traces name no host: give --trace-device-uuid)"
         ),
     )
     profile_parser.add_argument(
@@ -691,8 +698,10 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         "traces",
         nargs="+",
         help=(
-            "Kineto Chrome traces (.json, .json.gz) or Nsight Systems SQLite "
-            "exports (.sqlite); an .nsys-rep report is registered only"
+            "Kineto Chrome traces (.json, .json.gz), Nsight Systems SQLite "
+            "exports (.sqlite) or experimental Stormlog CUPTI traces "
+            "(activity.sclz, read with the cupti_status.json beside it); an "
+            ".nsys-rep report is registered only"
         ),
     )
     import_parser.add_argument(
@@ -725,7 +734,9 @@ def _add_import_trace_parser(subparsers: Any) -> None:
         help=(
             "The vLLM execution hook's STORMLOG_VLLM_HOOK_DIR; its worker hellos "
             "name the GPU of each traced process (by host, pid and lifetime), so "
-            "--device-uuid is only needed where that leaves a gap"
+            "--device-uuid is only needed where that leaves a gap. A Stormlog "
+            "CUPTI trace (.sclz) names no host and has no wall clock, so it "
+            "always needs --device-uuid"
         ),
     )
     import_parser.add_argument(
@@ -909,9 +920,13 @@ def _add_cache_arguments(parser: argparse.ArgumentParser) -> None:
 def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group(
         "profiler trace",
-        "Bounded vLLM torch-profiler windows. The server must be started with "
-        "--profiler-config.profiler=torch and torch_profiler_dir; Stormlog only "
-        "starts and stops the profiler and imports the worker traces.",
+        "Bounded profiler windows. vllm-torch: start the server with "
+        "--profiler-config.profiler=torch and torch_profiler_dir; keep windows "
+        "short with --trace-max-seconds, since the trace is written while "
+        "serving stalls. cupti (experimental, Linux NVIDIA): start the server "
+        "with Stormlog's CUPTI helper (docs/inference.md); one window per "
+        "server process, from the server's host. Stormlog only starts and stops "
+        "the profiler and imports the worker traces.",
     )
     group.add_argument(
         "--trace", choices=TRACE_MODES, default=None, help="Capture a profiler trace"
@@ -921,13 +936,17 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "The server's torch_profiler_dir as this host sees it; without it the "
-            "traces stay on the server for `stormlog infer import-trace`"
+            "traces stay on the server for `stormlog infer import-trace`. With "
+            "--trace cupti (required): the helper's STORMLOG_CUPTI_OUTPUT_DIR"
         ),
     )
     group.add_argument(
         "--trace-control-url",
         default=None,
-        help="Server root for /start_profile and /stop_profile (default: endpoint host)",
+        help=(
+            "Server root for /start_profile and /stop_profile (default: endpoint "
+            "host); not used by --trace cupti"
+        ),
     )
     group.add_argument(
         "--trace-phase",
@@ -945,7 +964,10 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
         "--trace-max-bytes",
         type=int,
         default=None,
-        help="Register but do not import a trace file larger than this",
+        help=(
+            "Register but do not import a trace file larger than this many "
+            "bytes on disk (compressed, for .gz and .sclz traces)"
+        ),
     )
     group.add_argument(
         "--trace-device-uuid",
@@ -963,11 +985,23 @@ def _add_trace_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig | None:
+    """The trace capture ``--trace`` asks for, or None without ``--trace``.
+
+    For ``--trace cupti`` with a trace dir, the control URL recorded is the
+    trace dir's ``file://`` URI, since the helpers' sockets there are the
+    control. Otherwise it is ``--trace-control-url``, or the endpoint's scheme
+    and host.
+    """
     if args.trace is None:
         return None
+    if args.trace == CUPTI and args.trace_dir:
+        # The helper's sockets are the control; record where they were.
+        control_url = Path(args.trace_dir).resolve().as_uri()
+    else:
+        control_url = args.trace_control_url or server_root(endpoint)
     return TraceCaptureConfig(
         mode=args.trace,
-        control_url=args.trace_control_url or server_root(endpoint),
+        control_url=control_url,
         trace_dir=Path(args.trace_dir) if args.trace_dir else None,
         phase=args.trace_phase,
         max_seconds=args.trace_max_seconds,
@@ -978,18 +1012,14 @@ def _trace_config(args: argparse.Namespace, endpoint: str) -> TraceCaptureConfig
 
 
 def _validate_trace_arguments(args: argparse.Namespace) -> None:
+    """Refuse ``--trace-*`` options given without ``--trace``.
+
+    An option counts as given when it differs from its default. Raises
+    ``ValueError`` naming every such flag; with ``--trace``, the options are
+    checked by ``_validate_requested_trace``.
+    """
     if args.trace is not None:
-        _validate_http_url(args.trace_control_url, "--trace-control-url")
-        if args.trace_phase == "warmup" and args.warmup_requests < 1:
-            raise ValueError(
-                "--trace-phase warmup needs --warmup-requests >= 1; without "
-                "warmup requests there is no warmup phase to profile"
-            )
-        if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
-            _print_warning(
-                f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
-                "only if the server creates it and this host can read it"
-            )
+        _validate_requested_trace(args)
         return
     options: tuple[tuple[str, object, object], ...] = (
         ("--trace-dir", args.trace_dir, None),
@@ -1003,6 +1033,29 @@ def _validate_trace_arguments(args: argparse.Namespace) -> None:
     given = [flag for flag, value, default in options if value != default]
     if given:
         raise ValueError(f"{', '.join(given)} needs --trace")
+
+
+def _validate_requested_trace(args: argparse.Namespace) -> None:
+    """Refuse ``--trace`` options that cannot work together.
+
+    Raises ``ValueError`` for ``--trace-control-url`` with ``--trace cupti``, a
+    control URL that is not http(s), or ``--trace-phase warmup`` without warmup
+    requests. A ``--trace-dir`` that does not exist yet only warns: the server
+    may create it.
+    """
+    if args.trace == CUPTI and args.trace_control_url is not None:
+        raise ValueError("--trace cupti is controlled through --trace-dir")
+    _validate_http_url(args.trace_control_url, "--trace-control-url")
+    if args.trace_phase == "warmup" and args.warmup_requests < 1:
+        raise ValueError(
+            "--trace-phase warmup needs --warmup-requests >= 1; without "
+            "warmup requests there is no warmup phase to profile"
+        )
+    if args.trace_dir is not None and not Path(args.trace_dir).is_dir():
+        _print_warning(
+            f"--trace-dir {args.trace_dir} does not exist yet; traces are found "
+            "only if the server creates it and this host can read it"
+        )
 
 
 def cmd_profile(args: argparse.Namespace) -> int:

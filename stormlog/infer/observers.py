@@ -18,10 +18,15 @@ as one shorter than a sample interval.
 The execution hook is requested when the client imports its log, and also
 when the ``before`` description shows it enabled in the server's
 environment: it observes the server either way.
+
+A profiler trace is healthy in a phase when its window stopped cleanly, the
+window's own trace files were imported, their collector counted no dropped
+records, and they hold GPU activity.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -36,6 +41,13 @@ TREATMENTS_EVENT = "infer.treatments"
 SAMPLE_RATE_FLOOR = 0.9
 SCRAPE_GAP_FACTOR = 2.0
 SPAN_JOIN_FLOOR = 0.99
+# Counters in a trace's event_loss that mean records are missing from its
+# timeline. Kernels without timestamps are counted but not dropped.
+TRACE_DROP_COUNTERS = (
+    "cupti_dropped_records",
+    "local_dropped_records",
+    "buffer_refusals",
+)
 _NOT_DELIVERED = frozenset({"dropped", "unreachable", "delivery_unknown", "rejected"})
 _SPAN_PROBLEMS = (
     "decode_failures",
@@ -351,8 +363,15 @@ def _traces(
 
 
 def _trace_phase(
-    phase: Phase, windows: list[Mapping[str, Any]], imported: set[str]
+    phase: Phase,
+    windows: list[Mapping[str, Any]],
+    imported: list[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    """A measured phase's trace health, from its own window and imports.
+
+    Inactive when no measured window for the phase's case started; otherwise
+    healthy only when ``_trace_reasons`` finds nothing wrong.
+    """
     window = next(
         (
             w
@@ -367,20 +386,71 @@ def _trace_phase(
     return _phase(True, not reasons, reasons)
 
 
-def _trace_reasons(window: Mapping[str, Any], imported: set[str]) -> list[str]:
+def _trace_reasons(
+    window: Mapping[str, Any], imported: list[Mapping[str, Any]]
+) -> list[str]:
+    """What is wrong with a started window's trace; empty when nothing is.
+
+    The stop must have come back without an error and with a time, the window
+    must have found a trace file, an import must have read it, and the imported
+    trace must pass ``_content_reasons``.
+    """
     reasons = []
     if window.get("stop_error") or not is_number(window.get("stopped_at_ns")):
         reasons.append("the trace did not stop cleanly")
-    files = [_base(name) for name in window.get("trace_files") or []]
+    files = [str(name) for name in window.get("trace_files") or []]
+    own = _own_traces(window, imported)
     if not files:
         reasons.append("no trace file was written")
-    elif not any(name in imported for name in files):
+    elif not own:
         reasons.append("its trace was not imported")
+    return reasons + _content_reasons(own)
+
+
+def _content_reasons(own: list[Mapping[str, Any]]) -> list[str]:
+    """What is wrong with what the window's imported traces hold."""
+    reasons = []
+    lost = _lost_records(own)
+    if lost:
+        reasons.append(f"its trace lost records: {lost}")
+    # A profiler that never had CUPTI (another client held it) still writes
+    # its CPU events, so an empty trace imports without an error. A summary
+    # without the count shows no GPU activity either.
+    counts = [trace.get("gpu_events") for trace in own]
+    if own and not any(is_number(count) and count > 0 for count in counts):
+        reasons.append(
+            "its trace has no GPU activity"
+            if all(is_number(count) for count in counts)
+            else "its trace does not count its GPU events"
+        )
     return reasons
 
 
-def _base(name: Any) -> str:
-    return str(name).rsplit("/", 1)[-1]
+def _own_traces(
+    window: Mapping[str, Any], imported: list[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """The imported traces that are the window's own files.
+
+    Matched on the absolute path the window recorded. Every CUPTI trace is
+    named ``activity.sclz``, and the same path below another directory (a
+    copy, another server's trace dir) is another file.
+    """
+    paths = {str(path) for path in window.get("trace_paths") or []}
+    return [trace for trace in imported if str(trace.get("path") or "") in paths]
+
+
+def _lost_records(traces: list[Mapping[str, Any]]) -> str:
+    """The records the collectors counted as dropped, summed over ``traces``."""
+    totals: Counter[str] = Counter()
+    for trace in traces:
+        loss = trace.get("event_loss")
+        if not isinstance(loss, Mapping):
+            continue
+        for name in TRACE_DROP_COUNTERS:
+            count = loss.get(name)
+            if is_number(count) and count > 0:
+                totals[name] += int(count)
+    return ", ".join(f"{name}={count}" for name, count in totals.items())
 
 
 def _execution(
@@ -554,27 +624,21 @@ def _otlp_configured(records: Sequence[Mapping[str, Any]]) -> bool | None:
     return None
 
 
-def _imported_traces(records: Sequence[Mapping[str, Any]]) -> set[str]:
-    """The file names of every trace an import read."""
-    names: set[str] = set()
+def _imported_traces(records: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    """The summary of every trace an import read."""
+    traces: list[Mapping[str, Any]] = []
     for record in records:
         if (
             record.get("event_type") == "infer.capabilities"
             and record.get("component") == "trace_collector"
         ):
             summary = (record.get("metadata") or {}).get("summary") or {}
-            names.update(_trace_names(summary.get("traces") or []))
-    return names
-
-
-def _trace_names(traces: list[Any]) -> set[str]:
-    return {
-        _base(trace[key])
-        for trace in traces
-        if isinstance(trace, Mapping) and not trace.get("skipped")
-        for key in ("path", "file")
-        if trace.get(key)
-    }
+            traces.extend(
+                trace
+                for trace in summary.get("traces") or []
+                if isinstance(trace, Mapping) and not trace.get("skipped")
+            )
+    return traces
 
 
 def _execution_summary(
