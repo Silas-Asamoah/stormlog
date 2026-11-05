@@ -289,7 +289,7 @@ def test_interrupted_phase_does_not_start_a_final_scrape(monkeypatch):
     async def sample(append, case, phase, marker):
         calls.append(marker)
         if marker == "phase_end":
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(5)
 
     monkeypatch.setattr(capture, "sample", sample)
 
@@ -307,7 +307,9 @@ def test_interrupted_phase_does_not_start_a_final_scrape(monkeypatch):
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert time.perf_counter() - started < 0.15
+        # The end scrape would sleep 5 s: far apart, so a GC pause on a
+        # loaded runner cannot decide the test.
+        assert time.perf_counter() - started < 2.5
 
     asyncio.run(run())
     assert calls == ["phase_start"]
@@ -407,7 +409,7 @@ def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
     def fetch(case, phase, marker):
         if marker == "interval":
             entered.set()
-            release.wait(timeout=0.6)
+            release.wait(timeout=10)
         return original(case, phase, marker)
 
     monkeypatch.setattr(capture, "fetch", fetch)
@@ -427,7 +429,9 @@ def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
     started = time.perf_counter()
     try:
         asyncio.run(run())
-        assert time.perf_counter() - started < 0.3
+        # The fetch blocks for 10 s: far apart, so a GC pause on a loaded
+        # runner cannot decide the test.
+        assert time.perf_counter() - started < 5
     finally:
         release.set()
     assert [r["marker"] for r in records] == ["phase_start", "interval"]
@@ -441,9 +445,9 @@ def test_stats_header_trickle_cannot_outlive_the_scrape_deadline():
         def do_GET(self):
             try:
                 self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
-                for _ in range(30):
+                for _ in range(100):
                     self.connection.sendall(b"x")
-                    time.sleep(0.03)
+                    time.sleep(0.05)
                 self.connection.sendall(b"\r\nContent-Length: 2\r\n\r\n{}")
             except OSError:
                 pass
@@ -466,7 +470,9 @@ def test_stats_header_trickle_cannot_outlive_the_scrape_deadline():
         )
         started = time.perf_counter()
         record = capture.observe("case", "measured", "phase_start")
-        assert time.perf_counter() - started < 0.5
+        # A 5 s trickle against a 0.1 s deadline: far apart, so a GC pause
+        # on a loaded runner cannot decide the test.
+        assert time.perf_counter() - started < 2.5
         assert record["status"] == "error"
     finally:
         http.shutdown()
