@@ -161,14 +161,18 @@ identity and sample timestamps without importing MLX or server packages.
 Repeat `--mlx-server-evidence` for separate captures. Identical copies are
 deduplicated; conflicting identities or contents fail validation.
 
-Matching run IDs and endpoints produce `declared_direct` association. For this
-declaration only, `localhost` (case-insensitive, with an optional trailing dot)
-and literal IPv4/IPv6 loopback addresses are equivalent. Matching stays offline:
-it performs no DNS lookup and preserves the scheme and port. Wildcard bind
-addresses such as `0.0.0.0` are not loopback aliases. Overlapping captures using
-these aliases remain ambiguous. Alias matching alone never upgrades a capture
-to `verified`; listener verification still requires the literal declared origin
-as well as its existing process and host/boot proof.
+Matching run IDs and endpoints produce `declared_direct` association. Matching
+stays offline: it performs no DNS lookup and requires the same scheme and port.
+Hosts match when they name the same host or address, ignoring case, IPv6
+brackets and a trailing dot (`endpoint_match: "literal"`). `localhost` also
+matches `127.0.0.1` and `::1`, the addresses it resolves to
+(`endpoint_match: "loopback_alias"`). Two different addresses never
+match: a server bound to `127.0.0.1` accepts no connection to `::1` or
+`127.0.0.2`, and a wildcard bind address such as `0.0.0.0` is not an alias.
+Overlapping captures a client could have reached through `localhost` are
+ambiguous. An alias match never upgrades a capture to `verified`; listener
+verification still requires a literal match as well as its existing process
+and host/boot proof.
 
 A controlled launcher with an observed literal-loopback listener owned by its
 sampled PID and matching host/boot can establish `verified` process

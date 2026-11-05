@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -185,12 +186,21 @@ raise SystemExit(main(['analyze', sys.argv[1], '--mlx-server-evidence', sys.argv
 
 
 @pytest.mark.parametrize(
-    "host", ["localhost", "LOCALHOST", "localhost.", "127.0.0.2", "[::1]"]
+    ("host", "match"),
+    [
+        ("localhost", "loopback_alias"),
+        ("LOCALHOST", "loopback_alias"),
+        ("localhost.", "loopback_alias"),
+        ("127.0.0.1", "literal"),
+        ("[::ffff:127.0.0.1]", "literal"),
+    ],
 )
-def test_declared_loopback_aliases_match_without_dns(native, host, monkeypatch):
+def test_declared_loopback_aliases_match_without_dns(
+    native: Path, host: str, match: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import socket
 
-    def no_dns(*args, **kwargs):
+    def no_dns(*args: object, **kwargs: object) -> None:
         pytest.fail("offline association must not resolve DNS")
 
     monkeypatch.setattr(socket, "getaddrinfo", no_dns)
@@ -199,6 +209,7 @@ def test_declared_loopback_aliases_match_without_dns(native, host, monkeypatch):
     records[1]["endpoint"] = f"http://{host}:8000/v1/completions"
     state = mlx_evidence_report(records, [native])["processes"][0]["association"]
     assert state["state"] == "declared_direct"
+    assert state["endpoint_match"] == match
     assert state["request_ownership"] == "unavailable"
 
 
@@ -210,6 +221,9 @@ def test_declared_loopback_aliases_match_without_dns(native, host, monkeypatch):
         "http://0.0.0.0:8000",
         "http://example.test:8000",
         "http://localhost..:8000",
+        # A server bound to 127.0.0.1 accepts neither: they are other sockets.
+        "http://127.0.0.2:8000",
+        "http://[::1]:8000",
     ],
 )
 def test_declared_endpoint_aliases_preserve_port_scheme_and_host_boundaries(
@@ -219,6 +233,7 @@ def test_declared_endpoint_aliases_preserve_port_scheme_and_host_boundaries(
     records[1]["endpoint"] = origin + "/v1/completions"
     state = mlx_evidence_report(records, [native])["processes"][0]["association"]
     assert state["state"] == "unjoined"
+    assert state["endpoint_match"] is None
 
 
 def test_loopback_alias_does_not_turn_listener_proof_into_routing_proof(native):
@@ -239,6 +254,20 @@ def test_loopback_alias_does_not_turn_listener_proof_into_routing_proof(native):
     records[1]["endpoint"] = "http://localhost:8000/v1/completions"
     state = mlx_evidence_report(records, [native])["processes"][0]["association"]
     assert state["state"] == "declared_direct"
+    assert state["endpoint_match"] == "loopback_alias"
+
+
+def test_localhost_aliases_only_the_addresses_it_resolves_to(native: Path) -> None:
+    # A server bound to 127.0.0.2 is loopback, but localhost never reaches it.
+    item = load_evidence(native)
+    manifest = copy.deepcopy(item.manifest)
+    manifest["endpoint"]["host"] = "127.0.0.2"
+    write_manifest(native, manifest)
+    records = client(load_evidence(native))
+    records[1]["endpoint"] = "http://localhost:8000/v1/completions"
+    state = mlx_evidence_report(records, [native])["processes"][0]["association"]
+    assert state["state"] == "unjoined"
+    assert state["endpoint_match"] is None
 
 
 def test_overlapping_alias_endpoints_remain_ambiguous(native, monkeypatch):
@@ -255,3 +284,30 @@ def test_overlapping_alias_endpoints_remain_ambiguous(native, monkeypatch):
         mlx_evidence_report(client(item), [native])["association_counts"]["ambiguous"]
         == 2
     )
+
+
+@pytest.mark.parametrize(
+    ("host", "states"),
+    [
+        ("127.0.0.1", ["declared_direct", "unjoined"]),
+        ("[::1]", ["unjoined", "declared_direct"]),
+        # localhost can resolve to either listener, so neither is proven.
+        ("localhost", ["ambiguous", "ambiguous"]),
+    ],
+)
+def test_dual_stack_captures_join_only_the_listener_the_client_named(
+    native: Path, host: str, states: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import stormlog.infer.mlx_report as module
+
+    item = load_evidence(native)
+    manifest = copy.deepcopy(item.manifest)
+    manifest["endpoint"]["host"] = "::1"
+    manifest["process"]["pid"] += 1
+    manifest["process"]["session_id"] = "other-process"
+    other = replace(item, manifest=manifest)
+    monkeypatch.setattr(module, "load_all_evidence", lambda _: [item, other])
+    records = client(item)
+    records[1]["endpoint"] = f"http://{host}:8000/v1/completions"
+    report = mlx_evidence_report(records, [native])
+    assert [p["association"]["state"] for p in report["processes"]] == states
