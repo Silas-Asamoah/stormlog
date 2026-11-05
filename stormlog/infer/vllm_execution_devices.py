@@ -118,8 +118,7 @@ class WorkerIndex:
         # Launch calls carry the launching process; a multi-process format
         # (Nsight Systems) also stamps its GPU events.
         pids = sorted(
-            {launch.pid for launch in trace.launches.values()}
-            | {e.pid for e in trace.gpu_events if e.pid is not None}
+            trace.pids() | {e.pid for e in trace.gpu_events if e.pid is not None}
         )
         if window is None:
             return TraceBinding(STATUS_NO_WINDOW, unmatched=pids)

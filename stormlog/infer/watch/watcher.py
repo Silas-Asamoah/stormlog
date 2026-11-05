@@ -91,6 +91,8 @@ FAST_EXIT_SECONDS = 5.0
 # and after a hurry alike, and the ledger the rest: a stalled store must not
 # leave the ledger, which closes in milliseconds, no time at all.
 STORE_SHARE = 2 / 3
+# How long ``Watcher.close`` waits for each writer to stop.
+CLOSE_SECONDS = 5.0
 LOCK_FILENAME = ".watch.lock"
 TEST_TRIGGER_FILE = "test-trigger"
 CONTROL_POLL_SECONDS = 0.1
@@ -599,10 +601,21 @@ class Watcher:
             hurried.cancel()
         return result.done() and bool(result.result())
 
-    def close(self) -> None:
-        """Let another watcher own the root; the watch is over."""
+    def close(self, timeout: float = CLOSE_SECONDS) -> bool:
+        """Stop the writers, then let another watcher own the root; the
+        watch is over. True once the root is free.
+
+        A watcher that never ran has idle writers, which stop at once. One
+        that does not stop within ``timeout`` is left behind, a daemon, and
+        the root stays locked, since it may still write there.
+        """
+        drained = self._store_worker.close(timeout)
+        closed = self.ledger.close(timeout)
+        if not (drained and closed):
+            return False
         self.store.close()
         self._release_root()
+        return True
 
     def _release_root(self) -> None:
         fd, self._lock = self._lock, None

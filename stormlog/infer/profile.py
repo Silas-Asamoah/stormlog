@@ -82,7 +82,7 @@ from .server_probe import (
 )
 from .slo import slo_record
 from .tokens import TokenCount, TokenCounter, build_token_counter
-from .trace_capture import TraceCaptureConfig, TraceWindows
+from .trace_capture import CUPTI, TraceCaptureConfig, TraceWindows
 from .trace_context import OFF, TRACEPARENT, TraceIds, new_trace_ids, traceparent
 from .vllm_execution_devices import WorkerIndex
 from .vllm_execution_import import (
@@ -130,6 +130,16 @@ class InferenceProfiler:
         prober: Callable[[str], ServerProbe] | None = None,
         on_phase: Callable[[PhaseEvent], None] | None = None,
     ) -> None:
+        """Build the run's clients and samplers, and check the config.
+
+        Nothing is sent and no artifact is opened yet. ``run_id`` overrides the
+        config's; without either, a new one is made. ``on_warning`` and
+        ``on_notice`` each receive one line at a time. ``prober`` takes the
+        server's description at a phase, by default with the configured HTTP
+        probe. A setting the run cannot honour, such as a server description of
+        another run or ``--trace cupti`` over several cases, raises
+        ``ValueError`` here.
+        """
         self.config = config
         self.on_warning = on_warning
         # What the run is doing when it would otherwise seem stuck.
@@ -154,6 +164,7 @@ class InferenceProfiler:
         # Built now so a bad setting fails before the artifact is opened.
         self.prompt_spec = config.prompt_spec()
         self._check_schedules()
+        self._check_trace_windows()
         # The repeated prompt by (seed, length): it is the same in every phase.
         self._repeated_prompts: dict[tuple[int, int], Prompt] = {}
         client_type: type[OpenAIChatCompletionsClient] = (
@@ -315,6 +326,20 @@ class InferenceProfiler:
                 f"--describe-server was taken {age / 3600:.1f} h ago by the "
                 "server's clock; describe the server again so it shows the "
                 "server this run measures"
+            )
+
+    def _check_trace_windows(self) -> None:
+        """Refuse ``--trace cupti`` for more than one case.
+
+        Each server process's helper gives one window, as its stop writes the
+        trace and ends the helper, so a second case would find nothing to
+        trace. Raises ``ValueError``.
+        """
+        trace = self.config.trace
+        if trace is not None and trace.mode == CUPTI and len(self.config.cases()) > 1:
+            raise ValueError(
+                "--trace cupti traces one window per server process; "
+                "profile one case (a single --concurrency or --rate value)"
             )
 
     def _check_schedules(self) -> None:

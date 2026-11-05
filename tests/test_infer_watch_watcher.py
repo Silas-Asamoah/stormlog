@@ -46,11 +46,29 @@ from tests import watch_fixture_helpers as fixtures
 from tests.vllm_scrape_helpers import exposition, scrape
 from tests.watch_test_helpers import (
     FakeMetrics,
+    leaves_no_threads,
     of_type,
     read_ledger,
     serve_metrics,
     watch_config,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_threads_left_behind() -> Iterator[None]:
+    with leaves_no_threads():
+        yield
+
+
+def test_a_thread_left_behind_fails_the_test() -> None:
+    """The guard above, on a stormlog thread still waiting at its end."""
+    release = threading.Event()
+    with pytest.raises(AssertionError, match="stormlog-test-leak"):
+        with leaves_no_threads(grace=0.1):
+            threading.Thread(
+                target=release.wait, name="stormlog-test-leak", daemon=True
+            ).start()
+    release.set()
 
 
 class _Observer:
@@ -75,13 +93,18 @@ def _watch(
     options: WatchOptions | None = None,
     observer: _Observer | None = None,
     stop_after: float | None = None,
+    fetch_timeout_seconds: float | None = None,
 ) -> WatchOutcome:
+    """Run a watch; ``fetch_timeout_seconds`` gives each fetch its own
+    deadline instead of the scrape timeout, to outlive the watcher's."""
     watcher = Watcher(
         resolve_watch_config(payload),
         root,
         options=options or WatchOptions(duration_seconds=2.0),
         observer=observer,
     )
+    if fetch_timeout_seconds is not None:
+        watcher.scraper.timeout_seconds = fetch_timeout_seconds
 
     async def main() -> WatchOutcome:
         stop = asyncio.Event()
@@ -686,6 +709,42 @@ def test_one_watcher_owns_a_root_and_a_second_is_refused(tmp_path: Path) -> None
     assert (tmp_path / LOCK_FILENAME).exists()
 
 
+def _writer_threads(watcher: Watcher) -> list[threading.Thread]:
+    return [watcher._store_worker._thread, watcher.ledger._worker._thread]
+
+
+def test_closing_a_watcher_stops_its_writers(tmp_path: Path) -> None:
+    """close() freed the root but left the store's and the ledger's worker
+    threads waiting for work forever: each watcher made and closed without
+    a run left two threads behind."""
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    watcher = Watcher(config, tmp_path)
+    threads = _writer_threads(watcher)
+    assert all(thread.is_alive() for thread in threads)
+    assert watcher.close() is True
+    assert not any(thread.is_alive() for thread in threads)
+    assert watcher.close() is True  # closing twice is harmless
+    Watcher(config, tmp_path).close()  # and the root is free
+
+
+def test_a_writer_that_will_not_stop_keeps_the_root(tmp_path: Path) -> None:
+    """A writer still busy at close() may write under the root, so the root
+    stays locked until it has stopped."""
+    config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
+    watcher = Watcher(config, tmp_path)
+    release = threading.Event()
+    assert watcher._store_worker.submit(release.wait)
+    try:
+        assert watcher.close(timeout=0.2) is False
+        with pytest.raises(InferUsageError, match="another watcher"):
+            Watcher(config, tmp_path)
+    finally:
+        release.set()
+    assert watcher.close() is True
+    assert not any(thread.is_alive() for thread in _writer_threads(watcher))
+    Watcher(config, tmp_path).close()
+
+
 def test_a_store_another_process_owns_is_refused(tmp_path: Path) -> None:
     other = IncidentStore(tmp_path)
     config = resolve_watch_config(watch_config("http://127.0.0.1:9"))
@@ -822,7 +881,11 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     """A /metrics answering a byte every 0.2 s never times out per read: it
     held the watch for minutes, deaf to SIGTERM and to --duration. Now each
     scrape has its timeout in all, the fetch it gives up on is the only one
-    in flight, and the ticks meanwhile still run."""
+    in flight, and the ticks meanwhile still run.
+
+    The fetch itself now ends at the same 0.5 s, racing the watcher's give-up;
+    its 5 s deadline here keeps it reading past the give-up, so the ticks
+    still find it in flight, as with a server slower than any deadline."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     payload = watch_config("", scrape_timeout_seconds=0.5)
@@ -838,6 +901,7 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
             payload,
             options=options,
             stop_after=1.2 if ends_by == "stop" else None,
+            fetch_timeout_seconds=5.0,
         )
         elapsed = time.monotonic() - started
     assert elapsed < 4.0
@@ -855,10 +919,41 @@ def test_a_trickling_scrape_is_given_up_and_the_watch_still_ends_on_time(
     assert stats["ticks_missed_total"] >= 1
 
 
+def test_an_abandoned_scrape_stops_reading_soon_after_its_timeout(
+    tmp_path: Path,
+) -> None:
+    """A fetch given up at the 0.3 s scrape timeout read a byte every 0.2 s
+    on its thread until the whole body came, minutes later; until then the
+    watcher started no other scrape. Now it ends within a read of 0.3 s."""
+    metrics = FakeMetrics()
+    metrics.dribble = 0.2
+    payload = watch_config("", scrape_timeout_seconds=0.3)
+    with serve_metrics(metrics) as base_url:
+        payload["server"]["base_url"] = base_url
+        watcher = Watcher(resolve_watch_config(payload), tmp_path)
+
+        async def scrape() -> Any:
+            return await watcher._scrape(watcher.clock.wall_ns(), asyncio.Event())
+
+        try:
+            record = asyncio.run(scrape())
+            given_up = time.monotonic()
+            while watcher.scraper.fetching() and time.monotonic() - given_up < 5:
+                time.sleep(0.01)
+            still_reading = time.monotonic() - given_up
+        finally:
+            watcher.close()
+    assert record is not None and record.status == "error"
+    assert still_reading < 1.0
+
+
 def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None:
     """The watcher stamps a scrape's start on its own clock. The one it gave
     up on ended on the real clock, so with the watcher's clock behind it the
-    abandoned record lasted 11 days instead of its 0.3 s timeout."""
+    abandoned record lasted 11 days instead of its 0.3 s timeout.
+
+    The fetch's own deadline is 5 s here, so it is still reading when the
+    watcher gives up, rather than racing it to the same 0.3 s."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     behind = 10**15  # about 11.6 days
@@ -867,6 +962,7 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+        watcher.scraper.timeout_seconds = 5.0
 
         async def scrape() -> Any:
             return await watcher._scrape(clock.wall_ns(), asyncio.Event())
@@ -876,6 +972,7 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
         finally:
             watcher.close()
     assert record is not None and record.status == "error"
+    assert record.error is not None and record.error.startswith("abandoned: ")
     assert record.completed_at_ns is not None
     took = record.completed_at_ns - record.observed_at_ns
     assert 0.25 * 1e9 <= took < 5 * 1e9
@@ -883,7 +980,8 @@ def test_an_abandoned_scrape_ends_on_the_watcher_s_clock(tmp_path: Path) -> None
 
 def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
     """The watcher's clock steps back a minute during the scrape timeout:
-    the scrape it gives up on ends at its start, not 60 s before it."""
+    the scrape it gives up on ends at its start, not 60 s before it. The
+    fetch's own 5 s deadline keeps it reading past the give-up."""
     metrics = FakeMetrics()
     metrics.dribble = 0.2
     step = [0]
@@ -892,6 +990,7 @@ def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
     with serve_metrics(metrics) as base_url:
         payload["server"]["base_url"] = base_url
         watcher = Watcher(resolve_watch_config(payload), tmp_path, clock=clock)
+        watcher.scraper.timeout_seconds = 5.0
 
         async def scrape() -> Any:
             started = clock.wall_ns()
@@ -903,6 +1002,7 @@ def test_an_abandoned_scrape_never_ends_before_it_began(tmp_path: Path) -> None:
         finally:
             watcher.close()
     assert record is not None and record.status == "error"
+    assert record.error is not None and record.error.startswith("abandoned: ")
     assert record.completed_at_ns == record.observed_at_ns
 
 
@@ -1030,13 +1130,7 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
             tmp_path,
             options=WatchOptions(shutdown_deadline_seconds=30.0),
         )
-        stall = threading.Event()
-
-        def stalled_close(timeout: float) -> bool:
-            stall.wait(timeout)
-            return False
-
-        watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
+        stall = _stall_store(watcher)
 
         async def main() -> WatchOutcome:
             stop = asyncio.Event()
@@ -1046,17 +1140,21 @@ def test_a_second_signal_cuts_the_shutdown_short_and_keeps_the_root(
             return await watcher.run(stop)
 
         started = time.monotonic()
-        outcome = asyncio.run(main())
-        elapsed = time.monotonic() - started
-        stall.set()
+        try:
+            outcome = asyncio.run(main())
+        finally:
+            elapsed = time.monotonic() - started
+            _unstall_store(watcher, stall)
     assert elapsed < 3.0
     assert "store_writer_timeout" in outcome.unsound
     with pytest.raises(InferUsageError, match="another watcher"):
         Watcher(resolve_watch_config(watch_config(base_url)), tmp_path)
-    watcher.close()
+    assert watcher.close() is True
 
 
 def _stall_store(watcher: Watcher) -> threading.Event:
+    """Make the store's writer miss its shutdown time, until the event is
+    set; the real writer is left open, for _unstall_store to close."""
     stall = threading.Event()
 
     def stalled_close(timeout: float) -> bool:
@@ -1065,6 +1163,13 @@ def _stall_store(watcher: Watcher) -> threading.Event:
 
     watcher._store_worker.close = stalled_close  # type: ignore[method-assign,assignment]
     return stall
+
+
+def _unstall_store(watcher: Watcher, stall: threading.Event) -> None:
+    """Undo _stall_store, so watcher.close() stops the real writer: the
+    stalled close never did, and left its thread waiting for work."""
+    stall.set()
+    del watcher._store_worker.close
 
 
 def _slow_ledger(watcher: Watcher, seconds: float) -> None:
@@ -1106,10 +1211,12 @@ def test_a_stalled_store_leaves_the_ledger_its_share(
                 loop.call_later(0.5, watcher.hurry)
             return await watcher.run(stop)
 
-        outcome = asyncio.run(main())
-        stall.set()
+        try:
+            outcome = asyncio.run(main())
+        finally:
+            _unstall_store(watcher, stall)
     assert outcome.unsound == ["store_writer_timeout"]
-    watcher.close()
+    assert watcher.close() is True
 
 
 def test_a_store_operation_that_raises_is_in_the_report(tmp_path: Path) -> None:

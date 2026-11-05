@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import select
+import socket
 import threading
 import time
 from collections.abc import Iterator
@@ -81,9 +83,21 @@ class FakeMetrics:
 
 @contextmanager
 def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
-    """Serve ``metrics`` on a free local port; yields the base URL."""
+    """Serve ``metrics`` on a free local port; yields the base URL.
+
+    On the way out every answer still being sent, a trickling one say, is
+    cut off and its thread joined, so a scrape still reading it ends with
+    the server instead of running on into later tests.
+    """
+    # Readable once the server is leaving: wakes every waiting answer.
+    leaving, wake = socket.socketpair()
+    answering: list[threading.Thread] = []
 
     class Handler(BaseHTTPRequestHandler):
+        def setup(self) -> None:
+            answering.append(threading.current_thread())
+            super().setup()
+
         def do_GET(self) -> None:  # noqa: N802 (http.server's name)
             metrics.enter()
             try:
@@ -94,7 +108,8 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
                 metrics.leave()
 
         def _answer(self) -> None:
-            time.sleep(metrics.delay)
+            if metrics.delay and self._wait(metrics.delay):
+                return
             if metrics.status != 200:
                 self.send_response(metrics.status)
                 self.send_header("Content-Length", "0")
@@ -111,7 +126,16 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
             for index in range(len(body)):
                 self.wfile.write(body[index : index + 1])
                 self.wfile.flush()
-                time.sleep(metrics.dribble)
+                if self._wait(metrics.dribble):
+                    return  # in flight no longer, as the watcher sees it
+
+        def _wait(self, seconds: float) -> bool:
+            """Wait ``seconds``; True at once if the client closes or the
+            server is leaving meanwhile."""
+            readable, _, _ = select.select([self.connection, leaving], [], [], seconds)
+            if leaving in readable:
+                return True
+            return bool(readable) and not self.connection.recv(1, socket.MSG_PEEK)
 
         def log_message(self, *args: Any) -> None:
             return None
@@ -122,9 +146,41 @@ def serve_metrics(metrics: FakeMetrics) -> Iterator[str]:
     try:
         yield f"http://127.0.0.1:{server.server_port}"
     finally:
+        wake.send(b"x")
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        for answer in list(answering):
+            answer.join(timeout=5)
+        leaving.close()
+        wake.close()
+
+
+# How long a test's threads get to finish before they count as left behind.
+THREAD_GRACE_SECONDS = 5.0
+
+
+@contextmanager
+def leaves_no_threads(grace: float = THREAD_GRACE_SECONDS) -> Iterator[None]:
+    """Fail if the block leaves a new stormlog-named or non-daemon thread.
+
+    Each new thread is joined first, all within ``grace`` in total, so one
+    that is just finishing is not counted; one left behind would make later
+    tests depend on the order they run in.
+    """
+    before = set(threading.enumerate())
+    yield
+    deadline = time.monotonic() + grace
+    new = [thread for thread in threading.enumerate() if thread not in before]
+    for thread in new:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    left = [
+        f"{thread.name} (daemon={thread.daemon})"
+        for thread in new
+        if thread.is_alive()
+        and (thread.name.startswith("stormlog") or not thread.daemon)
+    ]
+    assert not left, f"threads left behind: {', '.join(left)}"
 
 
 def watch_config(base_url: str, **overrides: Any) -> dict[str, Any]:

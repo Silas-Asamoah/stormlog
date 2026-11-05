@@ -1,0 +1,325 @@
+"""Import Stormlog CUPTI traces (``activity.sclz``) as inference activity references.
+
+The experimental CUPTI helper (``native/cupti``) writes one directory per
+traced process, holding ``activity.sclz`` and ``cupti_status.json``. The trace
+is a magic line followed by frames: a little-endian header of encoded size,
+decoded size and record count, then that many zlib-compressed JSON lines. An
+all-zero header ends the trace. This reader turns it into the same in-memory
+trace as the Kineto reader, so import and accounting rules are shared.
+
+- A trace whose status is not finalized, or names an error, is refused: the
+  helper could not vouch for what it wrote.
+- Losses the helper counted (CUPTI drops, records past the output limit,
+  refused activity buffers, kernels without timestamps) are carried into the
+  import summary as ``event_loss``.
+- CUPTI timestamps are not converted to wall time, and the trace does not name
+  its host or GPU UUIDs: give ``--device-uuid`` to measure devices.
+- The helper emits no iteration ranges, so GPU work is not linked to
+  iterations.
+"""
+
+from __future__ import annotations
+
+import json
+import struct
+import zlib
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, BinaryIO, TypeGuard
+
+from .trace_kineto import GpuEvent, KinetoTrace, LaunchCall
+
+TRACE_MAGIC = b"SLCPTZ1\n"
+FRAME_HEADER = struct.Struct("<III")
+# The helper flushes a frame at 64 KiB of records; this leaves room for one
+# oversized record without trusting an arbitrary size from the file.
+MAX_FRAME_BYTES = 16 * 1024 * 1024
+STATUS_FILENAME = "cupti_status.json"
+GPU_KINDS = {"kernel": "gpu_kernel", "memcpy": "gpu_memcpy", "memset": "gpu_memset"}
+API_KINDS = frozenset({"runtime", "driver"})
+LOSS_COUNTERS = (
+    "cupti_dropped_records",
+    "local_dropped_records",
+    "buffer_refusals",
+    "kernels_without_timestamps",
+)
+
+
+def iter_records(path: str | Path) -> Iterator[dict[str, Any]]:
+    """Yield a finalized trace's records; raise ``ValueError`` on any defect."""
+    with Path(path).open("rb") as source:
+        if source.read(len(TRACE_MAGIC)) != TRACE_MAGIC:
+            raise ValueError("not a Stormlog CUPTI trace")
+        while (lines := _read_frame(source)) is not None:
+            for line in lines:
+                yield _parse_record(line)
+
+
+def _read_frame(source: BinaryIO) -> list[bytes] | None:
+    """One frame's record lines, or None at a clean end frame."""
+    header = source.read(FRAME_HEADER.size)
+    if len(header) != FRAME_HEADER.size:
+        raise ValueError("trace end frame is missing")
+    encoded_size, raw_size, count = FRAME_HEADER.unpack(header)
+    if (encoded_size, raw_size, count) == (0, 0, 0):
+        if source.read(1):
+            raise ValueError("trace has bytes after its end frame")
+        return None
+    if not 0 < encoded_size <= MAX_FRAME_BYTES:
+        raise ValueError("frame encoded size is invalid")
+    if not 0 < raw_size <= MAX_FRAME_BYTES or count <= 0:
+        raise ValueError("frame decoded size or record count is invalid")
+    encoded = source.read(encoded_size)
+    if len(encoded) != encoded_size:
+        raise ValueError("frame is truncated")
+    lines = _decode_frame(encoded, raw_size).splitlines()
+    if len(lines) != count:
+        raise ValueError("frame record count does not match")
+    return lines
+
+
+def _parse_record(line: bytes) -> dict[str, Any]:
+    """One record line as a JSON object; ``ValueError`` if it is not one."""
+    try:
+        record = json.loads(line)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"malformed record: {exc}") from exc
+    if not isinstance(record, dict):
+        raise ValueError("record is not a JSON object")
+    return record
+
+
+def _decode_frame(encoded: bytes, raw_size: int) -> bytes:
+    """A frame's zlib payload, inflated to exactly ``raw_size`` bytes.
+
+    Raises ``ValueError`` when the stream is corrupt, inflates to another size,
+    carries bytes past its end, or does not end with a record's newline.
+    """
+    decoder = zlib.decompressobj()
+    try:
+        # Never decode past the declared size, whatever the stream says.
+        raw = decoder.decompress(encoded, raw_size + 1)
+    except zlib.error as exc:
+        raise ValueError(f"frame is corrupt: {exc}") from exc
+    if (
+        len(raw) != raw_size
+        or not decoder.eof
+        or decoder.unused_data
+        or decoder.unconsumed_tail
+    ):
+        raise ValueError("frame does not decode to its declared size")
+    if not raw.endswith(b"\n"):
+        raise ValueError("frame lacks its record terminator")
+    return raw
+
+
+def load_status(trace_path: str | Path) -> dict[str, Any]:
+    """The helper's status beside a trace, refused unless it finalized cleanly."""
+    path = Path(trace_path).with_name(STATUS_FILENAME)
+    try:
+        status = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"{STATUS_FILENAME} is missing beside the trace") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{STATUS_FILENAME} is malformed: {exc}") from exc
+    if not isinstance(status, dict):
+        raise ValueError(f"{STATUS_FILENAME} is not a JSON object")
+    if status.get("initialization_error"):
+        raise ValueError(f"the CUPTI helper failed: {status['initialization_error']}")
+    if status.get("finalized") is not True:
+        raise ValueError("the CUPTI helper did not finalize this trace")
+    return status
+
+
+def load_cupti_trace(path: str | Path) -> KinetoTrace:
+    """Read a finalized ``activity.sclz`` and its status."""
+    path = Path(path)
+    status = load_status(path)
+    trace = KinetoTrace(
+        base_ns=0,
+        host=None,
+        trace_id=f"{path.parent.name}/{path.name}",
+        rank=None,
+        world_size=None,
+        engine_version=None,
+        cupti_version=_text(status.get("cupti_version")),
+        device_names={},
+        source="stormlog-cupti",
+        # The traced process, also when no API record names it: two
+        # GPU-only traces must not read as one process.
+        process_ids={_status_pid(status)},
+    )
+    for number, record in enumerate(iter_records(path), 1):
+        _add_checked_record(trace, record, number)
+    trace.event_loss = _event_loss(status)
+    lost = {name: count for name, count in trace.event_loss.items() if count}
+    if lost:
+        trace.notes.append(
+            "the CUPTI helper lost records: "
+            + ", ".join(f"{name}={count}" for name, count in lost.items())
+        )
+    if status.get("output_limit_reached"):
+        trace.notes.append("the trace reached STORMLOG_CUPTI_MAX_BYTES")
+    if not trace.gpu_events:
+        trace.notes.append("the trace records no GPU kernels, copies or memsets")
+    return trace
+
+
+def _add_checked_record(
+    trace: KinetoTrace, record: dict[str, Any], number: int
+) -> None:
+    """Add one record to the trace; any defect in it is a ``ValueError``.
+
+    The error names the record's 1-based position in the trace.
+    """
+    try:
+        _add_record(trace, record)
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        raise ValueError(f"record {number} is malformed: {exc!r}") from exc
+
+
+def _add_record(trace: KinetoTrace, record: dict[str, Any]) -> None:
+    """Add a record as a launch or a GPU event, by its ``activity_kind``.
+
+    A kind the reader does not import (synchronization, say) is counted in
+    ``not_imported``, not refused. Raises ``ValueError`` when ``metadata`` is
+    not an object or the correlation ID is not an integer.
+    """
+    kind = record.get("activity_kind")
+    metadata = record.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata is not an object")
+    correlation = _optional_int(record.get("correlation_id"))
+    if kind in API_KINDS:
+        _add_launch(trace, kind, metadata, correlation, record.get("cpu_start_ns"))
+    elif kind in GPU_KINDS:
+        _add_gpu_event(trace, kind, record, metadata, correlation)
+    else:
+        _not_imported(trace, str(kind))
+
+
+def _add_gpu_event(
+    trace: KinetoTrace,
+    kind: str,
+    record: dict[str, Any],
+    metadata: dict[str, Any],
+    correlation: int | None,
+) -> None:
+    """Add a kernel, memcpy or memset with its device times in nanoseconds.
+
+    One without both timestamps, or ending before it starts, is counted in
+    ``not_imported`` instead. A correlation or graph ID of 0, CUPTI's "none",
+    is stored as None.
+    """
+    start, end = record.get("device_start_ns"), record.get("device_end_ns")
+    if not _is_int(start) or not _is_int(end):
+        _not_imported(trace, f"{kind}_without_timestamps")
+        return
+    if end < start:
+        # The helper writes CUPTI's pair as it came; one end missing reads
+        # as 0. Counted, so one bad record does not refuse the whole trace.
+        _not_imported(trace, f"{kind}_ending_before_start")
+        return
+    trace.gpu_events.append(
+        GpuEvent(
+            start_ns=start,
+            end_ns=end,
+            kind=GPU_KINDS[kind],
+            name=str(metadata.get("name") or ""),
+            device=_optional_int(metadata.get("device_id")),
+            stream=_optional_int(record.get("stream_id")),
+            correlation=correlation or None,
+            graph_id=_optional_int(record.get("graph_id")) or None,
+            graph_node_id=_optional_int(record.get("graph_node_id")),
+        )
+    )
+
+
+def _add_launch(
+    trace: KinetoTrace,
+    kind: str,
+    metadata: dict[str, Any],
+    correlation: int | None,
+    start: Any,
+) -> None:
+    """Add a runtime or driver API call as the launch its correlation ID names.
+
+    Keyed by ``(None, correlation)``, with its CPU start in microseconds. A
+    call without a nonzero correlation ID or an integer start is counted in
+    ``not_imported``; one whose metadata lacks a process or thread ID raises
+    ``ValueError``.
+    """
+    if not correlation:
+        _not_imported(trace, f"{kind}_without_correlation")
+        return
+    if not _is_int(start):
+        _not_imported(trace, f"{kind}_without_timestamps")
+        return
+    trace.launches[(None, correlation)] = LaunchCall(
+        pid=_required_int(metadata, "process_id"),
+        tid=_required_int(metadata, "thread_id"),
+        ts_us=start / 1000,
+        name=str(metadata.get("name") or f"{kind}:cbid={metadata.get('cbid')}"),
+    )
+
+
+def _not_imported(trace: KinetoTrace, reason: str) -> None:
+    trace.not_imported[reason] = trace.not_imported.get(reason, 0) + 1
+
+
+def _is_int(value: Any) -> TypeGuard[int]:
+    """An integer, and not a JSON boolean (which Python reads as one)."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _required_int(metadata: dict[str, Any], key: str) -> int:
+    """The ID ``metadata`` must hold under ``key``; ``ValueError`` if absent."""
+    value = _optional_int(metadata.get(key))
+    if value is None:
+        raise ValueError(f"metadata lacks {key}")
+    return value
+
+
+def _status_pid(status: dict[str, Any]) -> int:
+    """The traced process's ID; ``ValueError`` unless a positive integer."""
+    pid = status.get("pid")
+    if not _is_int(pid) or pid <= 0:
+        raise ValueError(f"{STATUS_FILENAME} has an invalid pid")
+    return pid
+
+
+def _event_loss(status: dict[str, Any]) -> dict[str, int]:
+    """The helper's loss counters by name, 0 for one the status omits.
+
+    Raises ``ValueError`` for a count that is negative or not an integer.
+    """
+    loss = {}
+    for name in LOSS_COUNTERS:
+        value = status.get(name, 0)
+        if not _is_int(value) or value < 0:
+            raise ValueError(f"{STATUS_FILENAME} has an invalid {name}")
+        loss[name] = value
+    return loss
+
+
+def _optional_int(value: Any) -> int | None:
+    """An identifier: a JSON integer, or the decimal string the helper writes.
+
+    Anything else is refused, not converted: ``int()`` would truncate 1.5 to
+    1 and link the record to another launch.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value)
+    raise ValueError(f"expected an integer identifier, got {value!r}")
+
+
+def _text(value: Any) -> str | None:
+    """The value as text, keeping None as None."""
+    return None if value is None else str(value)
+
+
+__all__ = ["iter_records", "load_cupti_trace", "load_status"]

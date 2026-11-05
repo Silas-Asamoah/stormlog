@@ -7,6 +7,7 @@ import io
 import json
 import threading
 import time
+import types
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -321,6 +322,32 @@ class _Recorder:
     def __call__(self, request: Any, timeout: float) -> Any:
         self.urls.append(request.full_url)
         raise OSError("not sent in this test")
+
+
+class _ThreadThatNeverRuns(threading.Thread):
+    """Ends at once without calling its target, as a thread that died starting."""
+
+    def run(self) -> None:
+        return None
+
+
+def test_a_worker_that_ends_without_answering_fails_its_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder = _Recorder()
+    monkeypatch.setattr(
+        server_probe, "threading", types.SimpleNamespace(Thread=_ThreadThatNeverRuns)
+    )
+    probe = probe_server("http://127.0.0.1:8000/v1/chat/completions", opener=recorder)
+    for route in (VERSION, MODELS, SERVER_INFO):
+        answer = probe.answers[route]
+        assert answer.status == "failed"
+        assert answer.detail == (
+            "OSError: the server probe's worker thread ended without answering"
+        )
+    # Nothing was sent, so no collector can be running.
+    assert recorder.urls == []
+    assert not probe.incomplete
 
 
 def test_server_info_is_skipped_on_a_public_host_unless_allowed() -> None:
