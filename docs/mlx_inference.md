@@ -113,10 +113,11 @@ time. Sampling uses bounded GET requests to `/admin/api/stats` only. The
 whole-request deadline covers connection, response headers and body, so a
 server trickling response headers cannot keep an abandoned worker alive.
 
-A completed phase takes a final stats sample. An interrupted or failed phase
-starts no final GET: already running samples are abandoned with no late append,
-and bounded daemon workers do not hold event-loop shutdown open. A skipped
-final sample is absent, rather than represented as a successful observation.
+A phase that completes, or fails on its own, takes a final stats sample. An
+interrupted phase (Ctrl+C or cancellation) starts no final GET: already running
+samples are abandoned with no late append, and bounded daemon workers do not
+hold event-loop shutdown open. A skipped final sample is absent, rather than
+represented as a successful observation.
 
 Elapsed scrape time uses the monotonic clock. The raw wall-clock start/end
 stamps are retained even if the clock moves backwards; the observation lies

@@ -313,6 +313,37 @@ def test_interrupted_phase_does_not_start_a_final_scrape(monkeypatch):
     assert calls == ["phase_start"]
 
 
+@pytest.mark.parametrize(
+    ("raised", "markers"),
+    [
+        # Ctrl+C raised while the phase's own code runs (Python 3.10).
+        (KeyboardInterrupt, ["phase_start"]),
+        # The phase fails by itself: nothing is stopping, so it is sampled.
+        (RuntimeError, ["phase_start", "phase_end"]),
+    ],
+)
+def test_only_an_interrupt_skips_the_final_scrape(
+    raised: type[BaseException], markers: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    capture = sampler("http://localhost")
+    calls: list[str] = []
+
+    async def sample(append: object, case: str, phase: str, marker: str) -> None:
+        calls.append(marker)
+
+    monkeypatch.setattr(capture, "sample", sample)
+
+    async def run() -> None:
+        async with capture.phase(list().append, "case", "measured"):
+            raise raised("inside the phase")
+
+    with pytest.raises(raised, match="inside the phase"):
+        asyncio.run(run())
+    assert calls == markers
+
+
 def test_backwards_wall_clock_remains_analyzable(monkeypatch):
     import stormlog.infer.omlx_stats as module
     from stormlog.infer.omlx_stats import stats_report

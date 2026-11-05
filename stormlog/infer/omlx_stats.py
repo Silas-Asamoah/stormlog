@@ -303,15 +303,19 @@ class OmlxStatsSampler:
         await self.sample(append, case_id, phase, "phase_start")
         stop = asyncio.Event()
         task = asyncio.create_task(self._interval_loop(append, case_id, phase, stop))
-        completed = False
+        interrupted = False
         try:
             yield
-            completed = True
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            interrupted = True
+            raise
         finally:
             stop.set()
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            if completed:
+            # An interrupt starts no final GET, so stopping never waits on the
+            # stats route. A phase that ends, or fails on its own, is sampled.
+            if not interrupted:
                 await self.sample(append, case_id, phase, "phase_end")
 
     async def _interval_loop(
