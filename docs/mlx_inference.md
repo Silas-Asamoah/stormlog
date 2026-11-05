@@ -123,7 +123,10 @@ Elapsed scrape time uses the monotonic clock. The raw wall-clock start/end
 stamps are retained even if the clock moves backwards; the observation lies
 between their minimum and maximum. Clock uncertainty includes the disagreement
 between wall-clock movement and monotonic elapsed time. Offline analysis accepts
-these records without treating a clock step as an invalid input artifact.
+a record whose clock stepped backwards when its uncertainty covers that
+disagreement, and the statistics report counts such records as
+`backward_clock_steps`. Reversed stamps without that uncertainty are an invalid
+input artifact.
 
 ## Same-process server evidence
 

@@ -360,7 +360,27 @@ def test_backwards_wall_clock_remains_analyzable(monkeypatch):
     assert record["scrape_started_at_ns"] > record["scrape_ended_at_ns"]
     assert record["scrape_elapsed_ns"] >= 0
     assert record["clock_uncertainty_ns"] >= 1_000_000_000
-    assert stats_report([record])["failed_samples"] == 0
+    report = stats_report([record])
+    assert report["failed_samples"] == 0
+    assert report["backward_clock_steps"] == 1
+
+
+def test_a_clock_step_needs_an_uncertainty_that_covers_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import stormlog.infer.omlx_stats as module
+    from stormlog.infer.omlx_stats import validate_stats_record
+
+    capture = sampler("http://localhost")
+    monkeypatch.setattr(capture, "_fetch_metrics", lambda _: [])
+    stamps = iter([2_000_000_000, 1_000_000_000])
+    monkeypatch.setattr(module.time, "time_ns", lambda: next(stamps))
+    record = capture.observe("case", "measured", "phase_start")
+    validate_stats_record(record)
+    # Swapped stamps with no uncertainty are a corrupt record, not a step.
+    record["clock_uncertainty_ns"] = 0
+    with pytest.raises(ValueError, match="clock step"):
+        validate_stats_record(record)
 
 
 def test_observation_outside_either_wall_clock_endpoint_is_invalid(monkeypatch):

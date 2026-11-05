@@ -397,6 +397,11 @@ def _validate_stats_times(record: dict[str, Any]) -> None:
     start, end = record["scrape_started_at_ns"], record["scrape_ended_at_ns"]
     if not min(start, end) <= record["observed_at_ns"] <= max(start, end):
         raise ValueError("Invalid oMLX scrape time window")
+    # Reversed stamps are a backwards wall-clock step, kept as evidence only
+    # with the uncertainty the sampler gives it: at least the clocks' gap.
+    gap = abs(end - start - record["scrape_elapsed_ns"])
+    if end < start and record["clock_uncertainty_ns"] < gap:
+        raise ValueError("oMLX clock uncertainty does not cover its clock step")
 
 
 def _validate_metric(metric: Any, seen: set[str]) -> None:
@@ -441,6 +446,10 @@ def stats_report(records: list[dict[str, Any]]) -> dict[str, Any]:
         "failed_samples": sum(record["status"] != "ok" for record in samples),
         "epoch_changes": sum(
             record.get("epoch_change") is not None for record in samples
+        ),
+        "backward_clock_steps": sum(
+            record["scrape_ended_at_ns"] < record["scrape_started_at_ns"]
+            for record in samples
         ),
         "other_client_contamination": "possible",
         "request_ownership": "unavailable",
