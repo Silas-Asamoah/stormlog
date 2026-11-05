@@ -760,11 +760,7 @@ def test_queue_episodes_recover_end_to_end(tmp_path: Path) -> None:
     shape = {"input_tokens": 128, "output_tokens": 16}
     record["episodes"] = [
         {"type": "T1", "dose": {"rate_per_second": 2, **shape}},
-        # Saturate the simulated engine without saturating the Python HTTP
-        # dispatcher on a busy runner. At 120/s, its 240 streaming requests
-        # can fail actuation's 250 ms dispatch-lag limit before recovery is
-        # judged. At 40/s the same onset/preemption/recovery assertions apply.
-        {"type": "F1", "dose": {"rate_per_second": 40, **shape}},
+        {"type": "F1", "dose": {"rate_per_second": 120, **shape}},
     ]
     plan = tmp_path / "plan.json"
     plan.write_text(json.dumps(record))
