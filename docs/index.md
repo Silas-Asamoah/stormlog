@@ -72,7 +72,6 @@ tensorflow_testing_guide
 jax_testing_guide
 mlx_testing_guide
 mlx_inference
-issue-325-mlx-behaviors
 benchmarks/mlx-qualification
 benchmarks/mlx-inference-qualification
 article

@@ -336,7 +336,7 @@ services. Successful authenticated stats are still unqualified locally at the
 user's request; the complete live gate remains strict for future qualification.
 
 
-## Review behavior contracts (issue #325)
+## Live timeline and exit codes
 
 The live MLX timeline counts start, periodic sample, stop, phase-enter and
 phase-exit allocator observations, including missing values as gaps. This is
@@ -350,5 +350,21 @@ use exit 1, including failures recorded by capture bundles. Missing or invalid
 input artifacts still use exit 5, unavailable runtimes retain their existing
 usage status, and SIGINT retains exit 130.
 
-See [the issue #325 reproduction and validation record](issue-325-mlx-behaviors.md)
-for regression commands, behavior choices and live-check limits.
+These behaviors, and the oMLX sampler's interruption and clock handling, were
+checked on Apple Silicon on 2026-10-27, against a local oMLX 0.6.4 server whose
+`/admin/api/stats` route answered HTTP 401 (no admin session was available):
+
+- Cancelling a phase after its real phase-start GET returned in about 0.11 ms
+  and started no phase-end GET, though a one-second delay was armed for that
+  marker. Eleven real SIGINT runs, each in a fresh process, raised
+  `KeyboardInterrupt` and started no final GET; in the ten that were timed,
+  the interrupt arrived 0.31 to 0.40 ms after the signal.
+- Two real GETs, each wrapped in an injected one-second backwards wall-clock
+  step, gave valid error records with conservative clock uncertainty, and
+  offline inference analysis read the artifact.
+- A Textual pilot with MLX 0.32.3 on Metal evaluated a 1024-by-1024 array
+  inside a phase. Its phase-enter and phase-exit readings, 0 and 4,194,304
+  bytes, matched offline analysis exactly.
+
+These checks qualify the timing and error-record paths, not successful
+authenticated statistics.
