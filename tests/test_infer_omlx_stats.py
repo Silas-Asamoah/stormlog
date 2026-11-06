@@ -5,8 +5,10 @@ from __future__ import annotations
 import contextlib
 import json
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,7 +16,7 @@ from stormlog.infer.config import ProfileConfig
 from stormlog.infer.omlx_stats import OmlxStatsSampler, normalize_stats, stats_identity
 from stormlog.infer.profile import InferenceProfiler
 
-PINNED_RESPONSE = {
+PINNED_RESPONSE: dict[str, Any] = {
     "total_requests": 2,
     "total_prompt_tokens": 10,
     "total_completion_tokens": 4,
@@ -35,11 +37,13 @@ PINNED_RESPONSE = {
 
 
 @contextlib.contextmanager
-def endpoint(*, failing=False, cookie_headers=None):
-    calls = []
+def endpoint(
+    *, failing: bool = False, cookie_headers: list[str | None] | None = None
+) -> Iterator[tuple[str, list[tuple[str, str, str | None]]]]:
+    calls: list[tuple[str, str, str | None]] = []
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self) -> None:
             calls.append(("GET", self.path, self.headers.get("Authorization")))
             if self.path != "/admin/api/stats":
                 self.send_response(404)
@@ -51,14 +55,14 @@ def endpoint(*, failing=False, cookie_headers=None):
             self.end_headers()
             self.wfile.write(json.dumps(PINNED_RESPONSE).encode())
 
-        def do_POST(self):
+        def do_POST(self) -> None:
             calls.append(("POST", self.path, self.headers.get("Authorization")))
             self.rfile.read(int(self.headers["Content-Length"]))
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"choices":[{"message":{"content":"ok"}}]}')
 
-        def log_message(self, *_):
+        def log_message(self, *_: Any) -> None:
             pass
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -72,7 +76,7 @@ def endpoint(*, failing=False, cookie_headers=None):
         thread.join()
 
 
-def sampler(url, **kwargs):
+def sampler(url: str, **kwargs: Any) -> OmlxStatsSampler:
     return OmlxStatsSampler(
         url=url + "/admin/api/stats",
         api_key=kwargs.pop("api_key", None),
@@ -85,7 +89,7 @@ def sampler(url, **kwargs):
     )
 
 
-def test_units_scope_and_no_sensitive_fields():
+def test_units_scope_and_no_sensitive_fields() -> None:
     identity = stats_identity(
         "http://localhost/admin/api/stats?scope=alltime&model=opaque"
     )
@@ -109,12 +113,12 @@ def test_units_scope_and_no_sensitive_fields():
         "http://localhost/admin/api/stats?scope=invalid",
     ],
 )
-def test_read_only_preflight(url):
+def test_read_only_preflight(url: str) -> None:
     with pytest.raises(ValueError):
         stats_identity(url)
 
 
-def test_stats_credentials_never_inherit_inference_key(tmp_path):
+def test_stats_credentials_never_inherit_inference_key(tmp_path: Path) -> None:
     with endpoint() as (url, calls):
         config = ProfileConfig(
             endpoint=url + "/v1/chat/completions",
@@ -154,7 +158,7 @@ def test_stats_credentials_never_inherit_inference_key(tmp_path):
     )
 
 
-def test_stats_auth_failure_does_not_fail_inference(tmp_path):
+def test_stats_auth_failure_does_not_fail_inference(tmp_path: Path) -> None:
     with endpoint(failing=True) as (url, calls):
         config = ProfileConfig(
             endpoint=url + "/v1/chat/completions",
@@ -181,22 +185,25 @@ def test_stats_auth_failure_does_not_fail_inference(tmp_path):
     assert all(row["status"] == "error" and row["http_status"] == 401 for row in stats)
 
 
-def test_reset_and_outage_are_distinct_from_negative_throughput():
+def test_reset_and_outage_are_distinct_from_negative_throughput() -> None:
     capture = sampler("http://localhost")
     identity = stats_identity(capture.url)
-    first = {"metrics": normalize_stats(PINNED_RESPONSE, identity), "status": "ok"}
+    first: dict[str, Any] = {
+        "metrics": normalize_stats(PINNED_RESPONSE, identity),
+        "status": "ok",
+    }
     capture._epoch(first)
     assert first["epoch_change"] is None
-    outage = {"metrics": [], "status": "error"}
+    outage: dict[str, Any] = {"metrics": [], "status": "error"}
     capture._epoch(outage)
-    reset = {
+    reset: dict[str, Any] = {
         "metrics": normalize_stats({**PINNED_RESPONSE, "total_requests": 0}, identity),
         "status": "ok",
     }
     capture._epoch(reset)
     assert reset["epoch_change"] == "counter_reset_or_restart"
     assert reset["preceded_by_outage"]
-    restart = {
+    restart: dict[str, Any] = {
         "metrics": normalize_stats({**PINNED_RESPONSE, "uptime_seconds": 1}, identity),
         "status": "ok",
     }
@@ -204,20 +211,22 @@ def test_reset_and_outage_are_distinct_from_negative_throughput():
     assert restart["epoch_change"] == "restart_or_uptime_reset"
 
 
-def test_cancelled_scrape_is_recorded_without_late_append(monkeypatch):
+def test_cancelled_scrape_is_recorded_without_late_append(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import asyncio
     import time
 
     capture = sampler("http://localhost")
 
-    def delayed(*args):
+    def delayed(*args: Any) -> dict[str, Any]:
         time.sleep(0.05)
         return {"should_never_append": True}
 
     monkeypatch.setattr(capture, "fetch", delayed)
-    records = []
+    records: list[dict[str, Any]] = []
 
-    async def run():
+    async def run() -> None:
         task = asyncio.create_task(
             capture.sample(records.append, "case", "measured", "interval")
         )
@@ -231,8 +240,8 @@ def test_cancelled_scrape_is_recorded_without_late_append(monkeypatch):
     asyncio.run(run())
 
 
-def test_admin_session_cookie_is_separate_and_never_retained(tmp_path):
-    cookies = []
+def test_admin_session_cookie_is_separate_and_never_retained(tmp_path: Path) -> None:
+    cookies: list[str | None] = []
     token = "normally-issued-admin-session-token"
     with endpoint(cookie_headers=cookies) as (url, calls):
         config = ProfileConfig(
@@ -265,7 +274,7 @@ def test_admin_session_cookie_is_separate_and_never_retained(tmp_path):
 @pytest.mark.parametrize(
     "cookie", ["bad\r\nheader", "cookie;other=value", "cookie=value", " ", "x" * 8193]
 )
-def test_invalid_admin_cookie_fails_before_traffic(cookie):
+def test_invalid_admin_cookie_fails_before_traffic(cookie: str) -> None:
     with pytest.raises(ValueError):
         OmlxStatsSampler(
             url="http://127.0.0.1:1/admin/api/stats",
@@ -279,25 +288,27 @@ def test_invalid_admin_cookie_fails_before_traffic(cookie):
         )
 
 
-def test_interrupted_phase_does_not_start_a_final_scrape(monkeypatch):
+def test_interrupted_phase_does_not_start_a_final_scrape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import asyncio
     import time
 
     capture = sampler("http://localhost")
-    calls = []
+    calls: list[str] = []
 
-    async def sample(append, case, phase, marker):
+    async def sample(append: object, case: str, phase: str, marker: str) -> None:
         calls.append(marker)
         if marker == "phase_end":
             await asyncio.sleep(5)
 
     monkeypatch.setattr(capture, "sample", sample)
 
-    async def run():
+    async def run() -> None:
         entered = asyncio.Event()
 
-        async def phase():
-            async with capture.phase(list().append, "case", "measured"):
+        async def phase() -> None:
+            async with capture.phase(list[dict[str, Any]]().append, "case", "measured"):
                 entered.set()
                 await asyncio.sleep(60)
 
@@ -338,7 +349,7 @@ def test_only_an_interrupt_skips_the_final_scrape(
     monkeypatch.setattr(capture, "sample", sample)
 
     async def run() -> None:
-        async with capture.phase(list().append, "case", "measured"):
+        async with capture.phase(list[dict[str, Any]]().append, "case", "measured"):
             raise raised("inside the phase")
 
     with pytest.raises(raised, match="inside the phase"):
@@ -346,7 +357,9 @@ def test_only_an_interrupt_skips_the_final_scrape(
     assert calls == markers
 
 
-def test_backwards_wall_clock_remains_analyzable(monkeypatch):
+def test_backwards_wall_clock_remains_analyzable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import stormlog.infer.omlx_stats as module
     from stormlog.infer.omlx_stats import stats_report
 
@@ -385,7 +398,9 @@ def test_a_clock_step_needs_an_uncertainty_that_covers_it(
         validate_stats_record(record)
 
 
-def test_observation_outside_either_wall_clock_endpoint_is_invalid(monkeypatch):
+def test_observation_outside_either_wall_clock_endpoint_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from stormlog.infer.omlx_stats import validate_stats_record
 
     capture = sampler("http://localhost")
@@ -396,17 +411,19 @@ def test_observation_outside_either_wall_clock_endpoint_is_invalid(monkeypatch):
         validate_stats_record(record)
 
 
-def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
+def test_cancelled_interval_does_not_hold_asyncio_runner_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import asyncio
     import time
 
     capture = sampler("http://localhost")
     entered, release = threading.Event(), threading.Event()
-    records = []
+    records: list[dict[str, Any]] = []
     original = capture.fetch
     monkeypatch.setattr(capture, "_fetch_metrics", lambda _: [])
 
-    def fetch(case, phase, marker):
+    def fetch(case: str, phase: str, marker: str) -> dict[str, Any]:
         if marker == "interval":
             entered.set()
             release.wait(timeout=10)
@@ -414,8 +431,8 @@ def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
 
     monkeypatch.setattr(capture, "fetch", fetch)
 
-    async def run():
-        async def phase():
+    async def run() -> None:
+        async def phase() -> None:
             async with capture.phase(records.append, "case", "measured"):
                 await asyncio.sleep(60)
 
@@ -438,11 +455,11 @@ def test_cancelled_interval_does_not_hold_asyncio_runner_open(monkeypatch):
     assert records[-1]["status"] == "abandoned"
 
 
-def test_stats_header_trickle_cannot_outlive_the_scrape_deadline():
+def test_stats_header_trickle_cannot_outlive_the_scrape_deadline() -> None:
     import time
 
     class DribblingHeaders(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self) -> None:
             try:
                 self.connection.sendall(b"HTTP/1.1 200 OK\r\nX-Slow: ")
                 for _ in range(100):
@@ -452,7 +469,7 @@ def test_stats_header_trickle_cannot_outlive_the_scrape_deadline():
             except OSError:
                 pass
 
-        def log_message(self, *_):
+        def log_message(self, *_: Any) -> None:
             pass
 
     http = ThreadingHTTPServer(("127.0.0.1", 0), DribblingHeaders)

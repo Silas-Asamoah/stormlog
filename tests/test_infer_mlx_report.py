@@ -7,19 +7,24 @@ import sys
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from stormlog.infer.correlation_events import ArtifactIdentityEvent, CorrelationContext
 from stormlog.infer.host_clock import wall_clock_domain
-from stormlog.infer.mlx_evidence import load_evidence, write_manifest
+from stormlog.infer.mlx_evidence import (
+    LoadedEvidence,
+    load_evidence,
+    write_manifest,
+)
 from stormlog.infer.mlx_report import mlx_evidence_report
 from stormlog.infer.mlx_server import capture_mlx_server
 from tests.mlx_fakes import FakeCore, make_runtime
 
 
 @pytest.fixture
-def native(tmp_path, monkeypatch):
+def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(
         "stormlog.infer.mlx_server.host_boot_id", lambda: "contract-boot"
     )
@@ -35,7 +40,9 @@ def native(tmp_path, monkeypatch):
     return capture.directory
 
 
-def client(item, *, run_id="join-run", boot=None):
+def client(
+    item: LoadedEvidence, *, run_id: str = "join-run", boot: str | None = None
+) -> list[dict[str, Any]]:
     process = item.manifest["process"]
     context = CorrelationContext(
         run_id=run_id,
@@ -78,7 +85,9 @@ def client(item, *, run_id="join-run", boot=None):
     ]
 
 
-def test_run_id_is_declaration_and_memory_remains_process_scoped(native):
+def test_run_id_is_declaration_and_memory_remains_process_scoped(
+    native: Path,
+) -> None:
     item = load_evidence(native)
     report = mlx_evidence_report(client(item), [native])
     process = report["processes"][0]
@@ -90,7 +99,9 @@ def test_run_id_is_declaration_and_memory_remains_process_scoped(native):
     assert report["aggregation"].startswith("none")
 
 
-def test_wrong_run_endpoint_and_missing_identity_are_unjoined(native):
+def test_wrong_run_endpoint_and_missing_identity_are_unjoined(
+    native: Path,
+) -> None:
     item = load_evidence(native)
     for records in [
         client(item, run_id="other"),
@@ -102,7 +113,9 @@ def test_wrong_run_endpoint_and_missing_identity_are_unjoined(native):
         assert not any(c["available"] for c in process["cases"])
 
 
-def test_verified_requires_observed_launcher_epoch_same_host_boot(native):
+def test_verified_requires_observed_launcher_epoch_same_host_boot(
+    native: Path,
+) -> None:
     item = load_evidence(native)
     manifest = copy.deepcopy(item.manifest)
     manifest["producer"]["mode"] = "mlx-serve"
@@ -128,7 +141,9 @@ def test_verified_requires_observed_launcher_epoch_same_host_boot(native):
     assert not different["clock"]["available"]
 
 
-def test_uncertainty_excludes_boundary_samples_and_marks_missing_clock(native):
+def test_uncertainty_excludes_boundary_samples_and_marks_missing_clock(
+    native: Path,
+) -> None:
     item = load_evidence(native)
     process = mlx_evidence_report(
         client(item), [native], clock_uncertainty_ns=10**12
@@ -144,7 +159,9 @@ def test_uncertainty_excludes_boundary_samples_and_marks_missing_clock(native):
     assert process["association"]["state"] == "declared_direct"
 
 
-def test_overlapping_physical_epochs_are_ambiguous(native, monkeypatch):
+def test_overlapping_physical_epochs_are_ambiguous(
+    native: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import stormlog.infer.mlx_report as module
 
     item = load_evidence(native)
@@ -159,7 +176,9 @@ def test_overlapping_physical_epochs_are_ambiguous(native, monkeypatch):
     assert all(p["memory"]["samples"] > 0 for p in report["processes"])
 
 
-def test_cli_offline_join_blocks_all_framework_and_server_imports(native, tmp_path):
+def test_cli_offline_join_blocks_all_framework_and_server_imports(
+    native: Path, tmp_path: Path
+) -> None:
     item = load_evidence(native)
     path = tmp_path / "client.jsonl"
     path.write_text("".join(json.dumps(row) + "\n" for row in client(item)))
@@ -227,8 +246,8 @@ def test_declared_loopback_aliases_match_without_dns(
     ],
 )
 def test_declared_endpoint_aliases_preserve_port_scheme_and_host_boundaries(
-    native, origin
-):
+    native: Path, origin: str
+) -> None:
     records = client(load_evidence(native))
     records[1]["endpoint"] = origin + "/v1/completions"
     state = mlx_evidence_report(records, [native])["processes"][0]["association"]
@@ -236,7 +255,9 @@ def test_declared_endpoint_aliases_preserve_port_scheme_and_host_boundaries(
     assert state["endpoint_match"] is None
 
 
-def test_loopback_alias_does_not_turn_listener_proof_into_routing_proof(native):
+def test_loopback_alias_does_not_turn_listener_proof_into_routing_proof(
+    native: Path,
+) -> None:
     item = load_evidence(native)
     manifest = copy.deepcopy(item.manifest)
     manifest["producer"]["mode"] = "mlx-serve"
@@ -270,7 +291,9 @@ def test_localhost_aliases_only_the_addresses_it_resolves_to(native: Path) -> No
     assert state["endpoint_match"] is None
 
 
-def test_overlapping_alias_endpoints_remain_ambiguous(native, monkeypatch):
+def test_overlapping_alias_endpoints_remain_ambiguous(
+    native: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import stormlog.infer.mlx_report as module
 
     item = load_evidence(native)

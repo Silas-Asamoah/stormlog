@@ -202,8 +202,10 @@ def test_the_runtime_line_says_when_device_details_failed() -> None:
 
 
 @pytest.mark.tui_pilot
-def test_live_mlx_timeline_includes_phase_observations(monkeypatch, tmp_path):
-    async def scenario():
+def test_live_mlx_timeline_includes_phase_observations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
         runtime = make_runtime()
         monkeypatch.setattr("stormlog.mlx.tracker.MLXRuntime", lambda *a, **kw: runtime)
         app = GPUMemoryProfilerTUI(framework="mlx")
@@ -211,7 +213,7 @@ def test_live_mlx_timeline_includes_phase_observations(monkeypatch, tmp_path):
             await app.start_live_tracking()
             session = app.tracker_session
             assert session is not None
-            adapter = session._tracker
+            adapter: Any = session._tracker
             tracker = adapter.tracker
             runtime.core.values["active_memory"] = 400
             with tracker.phase("prefill"):

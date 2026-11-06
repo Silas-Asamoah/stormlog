@@ -5,7 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import jsonschema
 import pytest
@@ -277,10 +277,14 @@ def test_text_mode_prints_an_analyze_error_once(
 
 
 @pytest.mark.parametrize("command", ["info", "track", "analyze"])
-def test_unexpected_value_error_is_an_internal_error(command, monkeypatch, capsys):
+def test_unexpected_value_error_is_an_internal_error(
+    command: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     import stormlog.mlx.cli as module
 
-    def fail(*args, **kwargs):
+    def fail(*args: Any, **kwargs: Any) -> NoReturn:
         raise ValueError("internal invariant broke")
 
     monkeypatch.setattr(
@@ -294,9 +298,11 @@ def test_unexpected_value_error_is_an_internal_error(command, monkeypatch, capsy
 
 
 def test_capture_internal_value_error_is_not_a_usage_report(
-    tmp_path, monkeypatch, capsys
-):
-    def fail(*args, **kwargs):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> NoReturn:
         raise ValueError("internal capture invariant")
 
     monkeypatch.setattr("stormlog.mlx.artifacts.CaptureBundle.start", fail)
@@ -322,8 +328,10 @@ def test_capture_internal_value_error_is_not_a_usage_report(
     "args",
     [["--rank", "1"], ["--local-rank", "-1"], ["--world-size", "1", "--rank", "2"]],
 )
-def test_distributed_usage_errors_are_validated_before_capture(args, monkeypatch):
-    def no_capture(*a, **kw):
+def test_distributed_usage_errors_are_validated_before_capture(
+    args: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_capture(*a: Any, **kw: Any) -> NoReturn:
         pytest.fail("invalid CLI must fail before creating artifacts")
 
     monkeypatch.setattr("stormlog.mlx.cli._capture", no_capture)
