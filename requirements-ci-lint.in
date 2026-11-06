@@ -3,3 +3,11 @@ isort==9.0.2
 flake8==7.4.1
 mypy==2.4.0
 rich==15.0.0
+# matplotlib and numpy ship type annotations. Installed here, they let
+# `mypy stormlog/` check calls into them; without them mypy treats both
+# as Any. These are the newest releases for Python 3.10, the lint job's
+# Python. If the job moves to a newer Python, keep numpy below 2.5:
+# numpy 2.5's annotations hide ArrayLike errors under the repo's mypy
+# setting `python_version = "3.10"`.
+matplotlib==3.10.9
+numpy==2.2.6
