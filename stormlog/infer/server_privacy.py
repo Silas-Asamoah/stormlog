@@ -200,9 +200,11 @@ def recorded_url(url: str) -> str:
 
     A token can sit in a path as easily as in its credentials or query, so
     the path is never kept; its digest still tells a changed path apart.
-    A removed query is marked.
+    A removed query is marked. ``ValueError`` for a URL urllib cannot
+    parse, its port included, so the caller removes it.
     """
     parts = urllib.parse.urlsplit(url)
+    parts.port  # Reading it raises for a port out of range or not a number.
     origin = redact_url(url, origin_only=True)
     path = parts.path if parts.path not in ("", "/") else ""
     digest = hashlib.sha256(path.encode()).hexdigest()[:12] if path else ""
