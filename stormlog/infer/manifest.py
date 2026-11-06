@@ -434,13 +434,24 @@ def _port_mismatch(
     ports = server.get("listen_ports")
     if not ports or server.get("shares_network_namespace") is not True:
         return None
-    origin = urllib.parse.urlsplit(str(probe.get("origin") or ""))
-    if not _loopback(origin.hostname):
-        return None
-    port = origin.port or (443 if origin.scheme == "https" else 80)
-    if port in ports:
+    port = _loopback_port(probe.get("origin"))
+    if port is None or port in ports:
         return None
     return {"field": "server.port", "description": list(ports), "server": [port]}
+
+
+def _loopback_port(origin: Any) -> int | None:
+    """The port of an origin on this host's loopback, or None.
+
+    None too for an origin urllib cannot parse, such as an edited one with
+    an unbalanced IPv6 bracket or a port out of range: it names no port.
+    """
+    try:
+        parts = urllib.parse.urlsplit(str(origin or ""))
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return port if _loopback(parts.hostname) else None
 
 
 def _loopback(host: str | None) -> bool:
