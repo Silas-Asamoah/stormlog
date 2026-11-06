@@ -48,6 +48,33 @@ def test_runtime_unavailable_bundle(
     assert "no device" in report["verdict"]["summary"]
 
 
+@pytest.mark.parametrize(
+    ("options", "env", "message"),
+    [
+        ({"rank": 2, "world_size": 1}, {}, "rank must be < world_size"),
+        ({}, {"RANK": "one", "WORLD_SIZE": "2"}, "rank must be an integer"),
+    ],
+)
+def test_an_identity_it_cannot_use_is_a_usage_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, Any],
+    env: dict[str, str],
+    message: str,
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    directory, outcome = capture_process(
+        output=tmp_path / "bundle",
+        options=CaptureOptions(**options),
+        runtime=make_runtime(),
+    )
+    assert outcome.exit_code == 2
+    report = load_report(directory / "report.json")
+    assert report["verdict"]["status"] == "usage"
+    assert message in report["verdict"]["summary"]
+
+
 def test_interrupt_and_core_sampling_failure_are_incomplete(tmp_path: Path) -> None:
     def interrupt(seconds: float) -> None:
         raise KeyboardInterrupt()

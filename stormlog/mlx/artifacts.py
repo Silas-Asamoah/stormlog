@@ -23,6 +23,7 @@ from stormlog.session import (
     update_session_summary,
 )
 from stormlog.system_info import get_system_info
+from stormlog.telemetry import DistributedIdentityError
 from stormlog.telemetry_sink import TelemetrySinkConfig
 
 from .models import TrackingResult
@@ -371,6 +372,6 @@ def capture_failure(exc: BaseException) -> Outcome:
     code = ExitCode.ERROR
     if isinstance(exc, KeyboardInterrupt):
         code = ExitCode.INTERRUPTED
-    elif isinstance(exc, MLXRuntimeError):
+    elif isinstance(exc, (MLXRuntimeError, DistributedIdentityError)):
         code = ExitCode.USAGE
     return Outcome(int(code), f"{type(exc).__name__}: {exc}")
