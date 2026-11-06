@@ -202,6 +202,39 @@ def test_cli_rejects_a_reset_url_that_is_not_http(tmp_path: Path) -> None:
     assert not (tmp_path / "infer.jsonl").exists()
 
 
+_URL_FLAGS = {
+    "--cache-reset-url": [],
+    "--trace-control-url": ["--trace", "vllm-torch"],
+    "--vllm-metrics": [],
+}
+
+
+@pytest.mark.parametrize("flag", sorted(_URL_FLAGS))
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://127.0.0.1:99999/x", "is not a URL urllib can parse"),
+        ("http://127.0.0.1:eighty/x", "is not a URL urllib can parse"),
+        ("http://[::1:80/x", "is not a URL urllib can parse"),
+        ("http:///x", "must name a host"),
+    ],
+)
+def test_cli_rejects_a_url_flag_it_cannot_parse_before_sending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flag: str, url: str, message: str
+) -> None:
+    # Only the scheme was checked, so these passed and redact_url raised
+    # once the run recorded them (exit 1), after requests had gone out.
+    def no_profile(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the profiler was built for a refused flag")
+
+    monkeypatch.setattr("stormlog.infer.cli.InferenceProfiler", no_profile)
+    code, stderr = _cli(tmp_path, flag, url, *_URL_FLAGS[flag])
+    assert code == ExitCode.USAGE
+    assert int(ExitCode.USAGE) == 2
+    assert f"Error: {flag} {message}" in stderr
+    assert not (tmp_path / "infer.jsonl").exists()
+
+
 def test_resets_carry_the_api_key(tmp_path: Path) -> None:
     with _reset_server() as base:
         run_profile_with_fake_client(
