@@ -72,6 +72,16 @@ The server's `base_url` is a template too, filled once for each block from
 runner checks that URL's port, waits on its `/health`, probes it, and hands
 it out as `{base_url}`.
 
+`run_plan` fills the base URL for every block the plan runs before any
+server, treatment or prelude starts, and before it writes `plan.json`; a
+base URL that uses `{model}` from weights the plan fixes (a `route`) is
+filled once they are fixed, still before anything starts. A URL the probe
+cannot use, one urllib cannot parse (an unclosed IPv6 bracket, a port out
+of range or not a number) or one that is not http or https with a host, is
+refused with `InferInputError` (exit 5), which reads
+`server.base_url for block <n>: ` and the reason, quoting urllib's message
+but not the URL, which may hold a credential.
+
 A block prelude, and the server it launches, are filled from its block:
 `{run_dir}` is the prelude's own directory, and it has no run's ID, label,
 arm, position or attempt. A prelude's step also gets `{server_pid}`, that of
