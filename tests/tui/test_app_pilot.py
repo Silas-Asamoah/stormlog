@@ -1,5 +1,6 @@
 import asyncio
 import builtins
+import math
 from pathlib import Path
 from typing import Any
 
@@ -479,6 +480,41 @@ def test_save_timeline_plot_png_single_sample_uses_markers(
 
     assert file_path.exists()
     assert captured["markers"] == ["o", "o"]
+
+
+def test_save_timeline_plot_png_draws_a_missing_reading_as_a_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import numpy as np
+    from matplotlib.figure import Figure
+
+    captured: dict[str, Any] = {}
+
+    def _capture_savefig(
+        self: Figure, file_path: str | Path, *args: Any, **kwargs: Any
+    ) -> None:
+        _ = (args, kwargs)
+        captured["y"] = [
+            np.asarray(line.get_ydata(orig=False), dtype=float).tolist()
+            for line in self.axes[0].lines
+        ]
+        Path(file_path).write_bytes(b"png")
+
+    monkeypatch.setattr(Figure, "savefig", _capture_savefig)
+    monkeypatch.chdir(tmp_path)
+
+    GPUMemoryProfilerTUI()._save_timeline_plot(
+        {
+            "timestamps": [1.0, 2.0, 3.0],
+            "allocated": [1024**3, None, 2 * 1024**3],
+            "reserved": [None, 1024**3, 1024**3],
+        },
+        "png",
+    )
+
+    allocated, reserved = captured["y"]
+    assert allocated[0] == 1.0 and math.isnan(allocated[1]) and allocated[2] == 2.0
+    assert math.isnan(reserved[0]) and reserved[1:] == [1.0, 1.0]
 
 
 def test_save_timeline_plot_html_single_sample_uses_markers(
