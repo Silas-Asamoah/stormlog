@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import math
 import urllib.parse
 from collections.abc import Sequence
@@ -98,13 +99,88 @@ def _client_endpoints(
             for record in records
             if record.get("event_type") == "infer.session"
         ]
-    return {_origin(url) for url in urls if isinstance(url, str)}
+    origins = (_origin(url) for url in urls if isinstance(url, str))
+    return {origin for origin in origins if origin is not None}
 
 
-def _origin(url: str) -> tuple[str, str, int | None]:
-    parsed = urllib.parse.urlparse(url)
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """The scheme, host and effective port of ``url``.
+
+    None when urllib cannot parse it, for example an unbalanced IPv6 bracket
+    or a port that is not a number from 0 to 65535: it names no endpoint.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
     return parsed.scheme, parsed.hostname or "", port
+
+
+def _host_key(host: str) -> str:
+    """One spelling per host: lowercase, without IPv6 brackets or a root dot.
+
+    An address takes its canonical form, and an IPv4-mapped IPv6 address
+    is its IPv4 address.
+    """
+    name = host.lower()
+    if name.startswith("[") and name.endswith("]"):
+        name = name[1:-1]
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return name.removesuffix(".")
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return str(address.ipv4_mapped)
+    return str(address)
+
+
+# The name, and the addresses it resolves to on common hosts.
+_LOCALHOST = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _endpoint_match(
+    declared: tuple[str, str, int | None], origin: tuple[str, str, int | None]
+) -> str | None:
+    """How a client origin matches a declared endpoint, offline and without DNS.
+
+    ``literal``: the same scheme, port and host. ``loopback_alias``: the same
+    scheme and port, with one host ``localhost`` and the other 127.0.0.1 or
+    ::1, the addresses it resolves to. Two different addresses never match:
+    a socket bound to 127.0.0.1 does not accept a connection to ::1 or
+    127.0.0.2.
+    """
+    if declared[0] != origin[0] or declared[2] != origin[2]:
+        return None
+    declared_host, origin_host = _host_key(declared[1]), _host_key(origin[1])
+    if declared_host == origin_host:
+        return "literal"
+    pair = {declared_host, origin_host}
+    if "localhost" in pair and pair <= _LOCALHOST:
+        return "loopback_alias"
+    return None
+
+
+def _best_endpoint_match(
+    declared: tuple[str, str, int | None], origins: set[tuple[str, str, int | None]]
+) -> str | None:
+    """The strongest match any client origin makes with the declared endpoint."""
+    matches = {_endpoint_match(declared, origin) for origin in origins}
+    for kind in ("literal", "loopback_alias"):
+        if kind in matches:
+            return kind
+    return None
+
+
+def _listener_class(host: str) -> str:
+    """Hosts two joined captures could both have served: localhost is one class.
+
+    A client that named ``localhost`` can have reached a capture on
+    127.0.0.1 or on ::1, so two captures joined to it there may have served
+    the same requests.
+    """
+    key = _host_key(host)
+    return "localhost" if key in _LOCALHOST else key
 
 
 def _association(
@@ -114,6 +190,7 @@ def _association(
         "state": "unjoined",
         "reason": None,
         "run_id_match": False,
+        "endpoint_match": None,
         "physical_process_epoch_known": item.manifest["process"]["start_time_ns"]
         is not None,
         "request_ownership": "unavailable",
@@ -127,13 +204,17 @@ def _association(
     state["run_id_match"] = True
     endpoint = item.manifest["endpoint"]
     expected = ("http", endpoint["host"] or "", endpoint["port"])
-    if expected not in _client_endpoints(records):
+    match = _best_endpoint_match(expected, _client_endpoints(records))
+    if match is None:
         state["reason"] = "endpoint_not_declared_or_different"
         return state
     state.update(
-        state="declared_direct", reason="declared_endpoint_and_run_id_not_routing_proof"
+        state="declared_direct",
+        reason="declared_endpoint_and_run_id_not_routing_proof",
+        endpoint_match=match,
     )
-    if _verified_process_association(item, artifact):
+    # A listener proof covers the address it observed, not an alias of it.
+    if match == "literal" and _verified_process_association(item, artifact):
         state.update(
             state="verified",
             reason="same_host_boot_and_observed_qualified_launcher_listener_pid",
@@ -177,7 +258,10 @@ def _mark_ambiguity(
 
 def _conflicting_endpoint_epochs(left: LoadedEvidence, right: LoadedEvidence) -> bool:
     a, b = left.manifest["endpoint"], right.manifest["endpoint"]
-    if (a["host"], a["port"]) != (b["host"], b["port"]):
+    if (_listener_class(a["host"] or ""), a["port"]) != (
+        _listener_class(b["host"] or ""),
+        b["port"],
+    ):
         return False
     if left.clock_domain != right.clock_domain:
         return True

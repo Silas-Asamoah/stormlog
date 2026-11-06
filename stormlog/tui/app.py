@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -260,6 +261,11 @@ def _build_diagnostics_markdown() -> str:
 
 def _memory_gib(values: list[Any]) -> list[float | None]:
     return [None if value is None else value / 1024**3 for value in values]
+
+
+def _with_nan_gaps(values: list[float | None]) -> list[float]:
+    """Matplotlib's spelling of a missing reading: NaN, drawn as a gap."""
+    return [math.nan if value is None else value for value in values]
 
 
 def _timeline_series_labels(timeline: dict[str, Any]) -> tuple[str, str, str]:
@@ -1972,7 +1978,7 @@ class GPUMemoryProfilerTUI(App):
             ax = fig.add_subplot(1, 1, 1)
             ax.plot(
                 rel_times,
-                allocated_gb,
+                _with_nan_gaps(allocated_gb),
                 label=primary_label,
                 color="tab:blue",
                 marker=line_marker,
@@ -1980,7 +1986,7 @@ class GPUMemoryProfilerTUI(App):
             if reserved_gb:
                 ax.plot(
                     rel_times,
-                    reserved_gb,
+                    _with_nan_gaps(reserved_gb),
                     label=secondary_label,
                     color="tab:red",
                     marker=line_marker,

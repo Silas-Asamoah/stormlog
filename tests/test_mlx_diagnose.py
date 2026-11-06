@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -8,7 +10,7 @@ from stormlog.report import load_report
 from tests.mlx_fakes import make_runtime
 
 
-def test_bundle_environment_capabilities_and_evidence(tmp_path):
+def test_bundle_environment_capabilities_and_evidence(tmp_path: Path) -> None:
     from stormlog import query
 
     directory, outcome = run_diagnose(
@@ -29,10 +31,12 @@ def test_bundle_environment_capabilities_and_evidence(tmp_path):
     assert query.open([directory]).list_sessions()
 
 
-def test_runtime_unavailable_bundle(tmp_path, monkeypatch):
+def test_runtime_unavailable_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from stormlog.mlx.runtime import MLXMetalUnavailableError
 
-    def fail():
+    def fail() -> None:
         raise MLXMetalUnavailableError("no device")
 
     monkeypatch.setattr("stormlog.mlx.artifacts.MLXRuntime", fail)
@@ -44,8 +48,35 @@ def test_runtime_unavailable_bundle(tmp_path, monkeypatch):
     assert "no device" in report["verdict"]["summary"]
 
 
-def test_interrupt_and_core_sampling_failure_are_incomplete(tmp_path):
-    def interrupt(seconds):
+@pytest.mark.parametrize(
+    ("options", "env", "message"),
+    [
+        ({"rank": 2, "world_size": 1}, {}, "rank must be < world_size"),
+        ({}, {"RANK": "one", "WORLD_SIZE": "2"}, "rank must be an integer"),
+    ],
+)
+def test_an_identity_it_cannot_use_is_a_usage_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    options: dict[str, Any],
+    env: dict[str, str],
+    message: str,
+) -> None:
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    directory, outcome = capture_process(
+        output=tmp_path / "bundle",
+        options=CaptureOptions(**options),
+        runtime=make_runtime(),
+    )
+    assert outcome.exit_code == 2
+    report = load_report(directory / "report.json")
+    assert report["verdict"]["status"] == "usage"
+    assert message in report["verdict"]["summary"]
+
+
+def test_interrupt_and_core_sampling_failure_are_incomplete(tmp_path: Path) -> None:
+    def interrupt(seconds: float) -> None:
         raise KeyboardInterrupt()
 
     directory, outcome = capture_process(
@@ -62,7 +93,7 @@ def test_interrupt_and_core_sampling_failure_are_incomplete(tmp_path):
     assert summary["allocated_bytes"] is None
 
 
-def test_collision_safe_output_and_argument_validation(tmp_path):
+def test_collision_safe_output_and_argument_validation(tmp_path: Path) -> None:
     for _ in range(2):
         directory, _ = run_diagnose(output=tmp_path, runtime=make_runtime())
         assert directory.parent == tmp_path
@@ -74,12 +105,12 @@ def test_collision_safe_output_and_argument_validation(tmp_path):
         CaptureOptions(max_history=0)
 
 
-def test_summary_write_failure_never_leaves_passing_report(tmp_path, monkeypatch):
-    from pathlib import Path
-
+def test_summary_write_failure_never_leaves_passing_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     original = Path.write_text
 
-    def fail(self, *args, **kwargs):
+    def fail(self: Path, *args: Any, **kwargs: Any) -> int:
         if self.name == "diagnostic_summary.json":
             raise OSError("disk full")
         return original(self, *args, **kwargs)

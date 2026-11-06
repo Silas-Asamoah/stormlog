@@ -97,7 +97,12 @@ class MLXTrackerAdapter:
 
     def get_memory_timeline(self, interval: float = 1.0) -> dict[str, Any]:
         records = self.tracker.get_results().telemetry_events
-        samples = [r for r in records if r["event_type"] in {"start", "sample", "stop"}]
+        samples = [
+            r
+            for r in records
+            if r["event_type"]
+            in {"start", "sample", "stop", "phase_enter", "phase_exit"}
+        ]
         return {
             "framework": "mlx",
             "timestamps": [r["timestamp_ns"] / 1e9 for r in samples],

@@ -109,7 +109,24 @@ A missing/unauthorized stats endpoint is evidence loss, not an inference
 failure. Counter decreases and uptime restarts mark epoch changes; outage
 and sampling scope are explicit. Aggregate statistics can include other
 clients and do not prove request ownership, allocator usage or pure compute
-time. Sampling uses bounded GET requests to `/admin/api/stats` only.
+time. Sampling uses bounded GET requests to `/admin/api/stats` only. The
+whole-request deadline covers connection, response headers and body, so a
+server trickling response headers cannot keep an abandoned worker alive.
+
+A phase that completes, or fails on its own, takes a final stats sample. An
+interrupted phase (Ctrl+C or cancellation) starts no final GET: already running
+samples are abandoned with no late append, and bounded daemon workers do not
+hold event-loop shutdown open. A skipped final sample is absent, rather than
+represented as a successful observation.
+
+Elapsed scrape time uses the monotonic clock. The raw wall-clock start/end
+stamps are retained even if the clock moves backwards; the observation lies
+between their minimum and maximum. Clock uncertainty includes the disagreement
+between wall-clock movement and monotonic elapsed time. Offline analysis accepts
+a record whose clock stepped backwards when its uncertainty covers that
+disagreement, and the statistics report counts such records as
+`backward_clock_steps`. Reversed stamps without that uncertainty are an invalid
+input artifact.
 
 ## Same-process server evidence
 
@@ -148,8 +165,22 @@ identity and sample timestamps without importing MLX or server packages.
 Repeat `--mlx-server-evidence` for separate captures. Identical copies are
 deduplicated; conflicting identities or contents fail validation.
 
-Matching run IDs and endpoints produce `declared_direct` association. A
-controlled launcher with an observed literal-loopback listener owned by its
+Matching run IDs and endpoints produce `declared_direct` association. Matching
+stays offline: it performs no DNS lookup and requires the same scheme and port.
+Hosts match when they name the same host or address, ignoring case, IPv6
+brackets and a trailing dot (`endpoint_match: "literal"`). `localhost` also
+matches `127.0.0.1` and `::1`, the addresses it resolves to
+(`endpoint_match: "loopback_alias"`). Two different addresses never
+match: a server bound to `127.0.0.1` accepts no connection to `::1` or
+`127.0.0.2`, and a wildcard bind address such as `0.0.0.0` is not an alias.
+A client URL that cannot be parsed, such as one with an unbalanced IPv6
+bracket or a port out of range, matches no capture.
+Overlapping captures a client could have reached through `localhost` are
+ambiguous. An alias match never upgrades a capture to `verified`; listener
+verification still requires a literal match as well as its existing process
+and host/boot proof.
+
+A controlled launcher with an observed literal-loopback listener owned by its
 sampled PID and matching host/boot can establish `verified` process
 association. Request execution ownership remains unavailable. Missing identity
 is `unjoined`; overlapping endpoint process epochs are `ambiguous`.

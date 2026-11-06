@@ -471,6 +471,15 @@ def _infer_distributed_identity_from_env(
     return {"job_id": raw_job_id, "rank": None, "local_rank": None, "world_size": None}
 
 
+class DistributedIdentityError(ValueError):
+    """A job id, rank, local rank or world size that cannot describe a process.
+
+    A ``ValueError``, so callers that catch that keep working. A capture
+    command maps it to ``ExitCode.USAGE``: there the identity comes from the
+    caller's options or environment.
+    """
+
+
 def resolve_distributed_identity(
     *,
     job_id: Any = None,
@@ -480,7 +489,11 @@ def resolve_distributed_identity(
     metadata: Optional[Mapping[str, Any]] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> dict[str, Any]:
-    """Normalize distributed identity fields from explicit, metadata, or env inputs."""
+    """Normalize distributed identity fields from explicit, metadata, or env inputs.
+
+    Raises:
+        DistributedIdentityError: a field is invalid, or the fields disagree.
+    """
     metadata_values = dict(metadata or {})
     raw = {
         "job_id": job_id,
@@ -491,8 +504,11 @@ def resolve_distributed_identity(
     for name, value in raw.items():
         if value is None:
             raw[name] = metadata_values.get(name)
-    _fill_identity_from_env(raw, env)
-    return _normalize_distributed_identity(raw)
+    try:
+        _fill_identity_from_env(raw, env)
+        return _normalize_distributed_identity(raw)
+    except ValueError as exc:
+        raise DistributedIdentityError(str(exc)) from exc
 
 
 def _fill_identity_from_env(
@@ -1487,5 +1503,6 @@ __all__ = [
     "telemetry_event_to_dict",
     "validate_telemetry_record",
     "load_telemetry_events",
+    "DistributedIdentityError",
     "resolve_distributed_identity",
 ]

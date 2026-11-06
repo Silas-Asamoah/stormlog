@@ -509,6 +509,10 @@ def test_a_served_model_name_is_matched_by_the_models_root() -> None:
         ("http://127.0.0.1:18013", False, False),
         # Through a remote address a proxy may map it too.
         ("http://10.0.0.5:18013", True, False),
+        # An origin urllib cannot parse names no port to compare.
+        ("http://[::1:8014", True, False),
+        ("http://127.0.0.1:99999", True, False),
+        ("http://127.0.0.1:eighty", True, False),
     ],
 )
 def test_a_twin_server_on_another_port_fails_the_cross_check(
