@@ -99,12 +99,21 @@ def _client_endpoints(
             for record in records
             if record.get("event_type") == "infer.session"
         ]
-    return {_origin(url) for url in urls if isinstance(url, str)}
+    origins = (_origin(url) for url in urls if isinstance(url, str))
+    return {origin for origin in origins if origin is not None}
 
 
-def _origin(url: str) -> tuple[str, str, int | None]:
-    parsed = urllib.parse.urlparse(url)
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """The scheme, host and effective port of ``url``.
+
+    None when urllib cannot parse it, for example an unbalanced IPv6 bracket
+    or a port that is not a number from 0 to 65535: it names no endpoint.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
     return parsed.scheme, parsed.hostname or "", port
 
 

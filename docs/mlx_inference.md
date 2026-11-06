@@ -173,6 +173,8 @@ matches `127.0.0.1` and `::1`, the addresses it resolves to
 (`endpoint_match: "loopback_alias"`). Two different addresses never
 match: a server bound to `127.0.0.1` accepts no connection to `::1` or
 `127.0.0.2`, and a wildcard bind address such as `0.0.0.0` is not an alias.
+A client URL that cannot be parsed, such as one with an unbalanced IPv6
+bracket or a port out of range, matches no capture.
 Overlapping captures a client could have reached through `localhost` are
 ambiguous. An alias match never upgrades a capture to `verified`; listener
 verification still requires a literal match as well as its existing process

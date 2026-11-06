@@ -255,6 +255,30 @@ def test_declared_endpoint_aliases_preserve_port_scheme_and_host_boundaries(
     assert state["endpoint_match"] is None
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://[::1:8000",
+        "http://[::1].:8000",
+        "http://127.0.0.1:99999",
+        "http://127.0.0.1:eighty",
+    ],
+)
+def test_a_client_url_that_cannot_be_parsed_matches_no_capture(
+    native: Path, endpoint: str
+) -> None:
+    records = client(load_evidence(native))
+    parsable = copy.deepcopy(records[1])
+    records[1]["endpoint"] = endpoint + "/v1/completions"
+    state = mlx_evidence_report(records, [native])["processes"][0]["association"]
+    assert state["state"] == "unjoined"
+    assert state["reason"] == "endpoint_not_declared_or_different"
+    # Another request's URL still joins.
+    records.append(parsable)
+    state = mlx_evidence_report(records, [native])["processes"][0]["association"]
+    assert state["state"] == "declared_direct"
+
+
 def test_loopback_alias_does_not_turn_listener_proof_into_routing_proof(
     native: Path,
 ) -> None:
