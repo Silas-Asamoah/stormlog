@@ -399,8 +399,16 @@ def _finite(value: Any, name: str) -> float:
 
 
 def _http_url(value: Any, name: str) -> None:
-    parts = urllib.parse.urlsplit(value) if isinstance(value, str) else None
-    if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
+    """Refuse a URL the watch could not use or record, its port included:
+    ``redact_url`` would record one urllib cannot parse as a marker."""
+    if not isinstance(value, str):
+        raise InferUsageError(f"{name} must be an http or https URL with a host")
+    try:
+        parts = urllib.parse.urlsplit(value)
+        parts.port  # Reading it raises for a port out of range or not a number.
+    except ValueError as exc:
+        raise InferUsageError(f"{name} is not a URL urllib can parse: {exc}") from exc
+    if parts.scheme not in ("http", "https") or not parts.hostname:
         raise InferUsageError(f"{name} must be an http or https URL with a host")
 
 
