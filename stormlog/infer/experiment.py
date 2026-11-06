@@ -117,7 +117,7 @@ from .observers import TREATMENTS_EVENT
 from .run_summary import RUN_STATE_EVENT
 from .sanitize import sanitize_bundle
 from .server_collector import NvmlUnavailableError
-from .server_probe import AUTO, BEFORE, SERVER_INFO, probe_server
+from .server_probe import AUTO, BEFORE, SERVER_INFO, endpoint_origin, probe_server
 
 COMPLETED = "completed"
 OUTCOME_FAILURE = "outcome_failure"
@@ -261,10 +261,15 @@ def run_plan(
             _check_nothing_left(output_dir)
         env = environment or Environment(secrets=_secrets(plan))
         order = plan_order(plan)
+        model_named = _base_url_names_verified_model(plan)
+        if not model_named:
+            _check_base_urls(plan, order, env)
         _prepare(plan, order, output_dir, resume)
         model = _verified_model(plan)
         if model is not None:
             env = replace(env, model=model)
+        if model_named:
+            _check_base_urls(plan, order, env)
         epoch = _stops_so_far(output_dir)
         written: list[dict[str, Any]] = []
         for block, arms in enumerate(order.blocks):
@@ -1724,6 +1729,44 @@ def _block_values(plan: ExperimentPlan, block: int, env: Environment) -> dict[st
     }
     values["base_url"] = expand(plan.server.base_url, values)
     return values
+
+
+def _base_url_names_verified_model(plan: ExperimentPlan) -> bool:
+    """Whether the base URL's ``{model}`` is filled from weights fixed only
+    after ``plan.json`` is written, so it can be checked only then."""
+    route = (plan.server.model or {}).get("route")
+    return bool(route) and "{model}" in plan.server.base_url
+
+
+def _check_base_urls(plan: ExperimentPlan, order: RunOrder, env: Environment) -> None:
+    """Refuse a base URL, as expanded for any block the plan runs, that the
+    probe cannot parse, before any server, treatment or prelude starts.
+
+    The plan file is not URL-checked, and the port check, the health wait
+    and the probe each parse the expanded URL: an unclosed ``[`` or a port
+    out of range or not a number raised ``ValueError`` from the first of
+    them. The URL itself is not quoted: it may hold a credential.
+    """
+    for block in range(len(order.blocks)):
+        problem = _unusable_base_url(_block_values(plan, block, env)["base_url"])
+        if problem is not None:
+            raise InferInputError(f"server.base_url for block {block}: {problem}")
+
+
+def _unusable_base_url(url: str) -> str | None:
+    """Why the probe's parser (``endpoint_origin``) refuses ``url``, if it
+    does; urllib's own message when urllib cannot parse it."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        parts.port
+    except ValueError as exc:
+        return f"urllib cannot parse it ({exc})"
+    try:
+        endpoint_origin(url)
+    except ValueError:
+        return "it is not an http or https URL with a host"
+    # endpoint_origin needs a netloc, not a host: http://:8000 has one.
+    return None if parts.hostname else "it is not an http or https URL with a host"
 
 
 def _model_name(plan: ExperimentPlan, env: Environment) -> str:

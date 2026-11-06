@@ -1039,7 +1039,8 @@ def _validate_requested_trace(args: argparse.Namespace) -> None:
     """Refuse ``--trace`` options that cannot work together.
 
     Raises ``ValueError`` for ``--trace-control-url`` with ``--trace cupti``, a
-    control URL that is not http(s), or ``--trace-phase warmup`` without warmup
+    control URL that is not an http(s) URL urllib can parse with a host, or
+    ``--trace-phase warmup`` without warmup
     requests. A ``--trace-dir`` that does not exist yet only warns: the server
     may create it.
     """
@@ -1821,8 +1822,20 @@ def _validate_prompt_arguments(args: argparse.Namespace) -> None:
 
 
 def _validate_http_url(url: str | None, flag: str) -> None:
-    if url is not None and urllib.parse.urlparse(url).scheme not in {"http", "https"}:
+    """Refuse a URL the run could not send to or record, before anything is
+    sent: a scheme other than http or https, one urllib cannot parse (its
+    port included), or one with no host."""
+    if url is None:
+        return
+    try:
+        parts = urllib.parse.urlsplit(url)
+        parts.port  # Reading it raises for a port out of range or not a number.
+    except ValueError as exc:
+        raise ValueError(f"{flag} is not a URL urllib can parse: {exc}") from exc
+    if parts.scheme not in {"http", "https"}:
         raise ValueError(f"{flag} must use http:// or https://")
+    if not parts.hostname:
+        raise ValueError(f"{flag} must name a host")
 
 
 def _validate_loop_flags(args: argparse.Namespace) -> None:

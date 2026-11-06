@@ -44,6 +44,7 @@ from stormlog.infer.vllm_telemetry import (
     MARKER_PHASE_END,
     MARKER_PHASE_START,
 )
+from stormlog.scrub import UNPARSABLE_URL
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures" / "vllm"
@@ -971,6 +972,39 @@ class TestScraperUnits:
         assert result.error.startswith("HTTP 301: redirect to http://127.0.0.1:1/aaa")
         assert result.error.endswith("... not followed")
         assert len(result.error) < 300
+
+    @pytest.mark.parametrize(
+        "location", [b"http://127.0.0.1:99999/x", b"http://127.0.0.1:eighty/x"]
+    )
+    def test_a_redirect_to_a_port_urllib_cannot_read_is_a_failed_scrape(
+        self, location: bytes
+    ) -> None:
+        # urllib's redirect handler parses the Location without reading its
+        # port, so the 302 reached the HTTPError handler, which redacted the
+        # Location: .port raised there, and what a handler raises is not
+        # caught by its siblings, so the ValueError left fetch_metrics and
+        # ended the profile run.
+        answer = (
+            b"HTTP/1.1 302 Found\r\nLocation: " + location + b"\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+        with _answering(answer) as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.text is None
+        assert result.http_status == 302
+        assert result.error == f"HTTP 302: redirect to {UNPARSABLE_URL} not followed"
+
+    def test_a_redirect_to_an_unclosed_bracket_is_a_failed_scrape(self) -> None:
+        # urllib's redirect handler parses this Location itself and raises
+        # before any 3xx is answered; that ValueError was already a result.
+        answer = (
+            b"HTTP/1.1 302 Found\r\nLocation: http://[::1:80/x\r\n"
+            b"Content-Length: 0\r\n\r\n"
+        )
+        with _answering(answer) as origin:
+            result = fetch_metrics(f"{origin}/metrics", timeout_seconds=5)
+        assert result.text is None
+        assert result.error is not None and result.error.startswith("ValueError:")
 
     def test_a_trickling_response_ends_the_fetch_at_its_timeout(self) -> None:
         # The timeout bounded each socket read only: a body arriving a byte
