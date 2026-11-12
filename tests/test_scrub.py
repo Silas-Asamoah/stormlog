@@ -57,6 +57,29 @@ def test_redact_url_origin_only_keeps_none_as_none() -> None:
     assert redact_url(None, origin_only=True) is None
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://[::1:80",
+        "http://127.0.0.1:99999",
+        "http://127.0.0.1:eighty",
+        "http://u:sk-secret-token@[::1:80/v1?key=value",
+    ],
+)
+@pytest.mark.parametrize("origin_only", [False, True])
+def test_redact_url_gives_a_marker_for_a_url_urllib_cannot_parse(
+    url: str, origin_only: bool
+) -> None:
+    # urlsplit raises for the unclosed bracket and .port for the bad ports:
+    # redact_url raised too, from wherever such a URL was recorded.
+    assert redact_url(url, origin_only=origin_only) == scrub.UNPARSABLE_URL
+
+
+def test_the_unparsable_url_marker_holds_no_part_of_the_url() -> None:
+    assert "sk-secret" not in redact_url("http://u:sk-secret@[::1:80/")
+    assert scrub.UNPARSABLE_URL == "[unparsable URL]"
+
+
 # Each spelling below is written out by hand, not produced by the encoders
 # the implementation might use, so a test cannot agree with a bug.
 # A backslash, built here so no escape in this file can be mistaken for one.

@@ -15,6 +15,9 @@ from collections.abc import Callable, Iterable, Iterator
 from typing import overload
 
 REDACTED = "<redacted>"
+# What redact_url records for a URL urllib cannot parse: no part of it can
+# be told apart from a credential, so none of it is kept.
+UNPARSABLE_URL = "[unparsable URL]"
 BACKSLASH = chr(92)
 # Shorter values are not used for exact-value redaction: they would erase
 # ordinary text such as case names and numbers, and a credential that short
@@ -390,11 +393,19 @@ def redact_url(url: str | None, *, origin_only: bool = False) -> str | None:
     kept, and a removed query is marked. ``origin_only`` drops the path too,
     for a destination whose path is not known to be safe: a token can sit
     in a path segment as easily as in a query.
+
+    A URL urllib cannot parse, such as an unclosed ``[`` or a port that is
+    out of range or not a number, gives ``UNPARSABLE_URL``: it never raises,
+    so a URL a server or a file sent cannot end a run where it is recorded.
     """
     if url is None:
         return None
-    parts = urllib.parse.urlsplit(url)
-    origin = f"{parts.scheme}://{_host_and_port(parts)}"
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = _host_and_port(parts)
+    except ValueError:
+        return UNPARSABLE_URL
+    origin = f"{parts.scheme}://{host}"
     if origin_only:
         return origin
     query = f"?{REDACTED}" if parts.query else ""

@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
 from stormlog.infer.compare import ComparisonSpec, compare_runs
 from stormlog.infer.comparison_stats import GateRule
 from stormlog.infer.errors import InferInputError, InferUsageError
@@ -260,6 +261,86 @@ def test_a_resumed_experiment_skips_finished_runs_and_refuses_a_changed_plan(
         _run(tmp_path, document)
     with pytest.raises(InferInputError, match="plan changed"):
         _run(tmp_path, _plan(port, blocks=1, seed=8), resume=True)
+
+
+def _launches_fail_the_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make starting any process (server, treatment, prelude or workload
+    step) fail the test, and so does a port check of the base URL."""
+    from stormlog.infer import experiment
+
+    def refuse(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("the runner started something for a refused plan")
+
+    for name in ("launch", "run_step", "_port_in_use"):
+        monkeypatch.setattr(experiment, name, refuse)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "block", "message"),
+    [
+        ("http://127.0.0.1:99999/v1", 0, "Port out of range 0-65535"),
+        ("http://127.0.0.1:eighty/v1", 0, "Port could not be cast"),
+        ("http://[::1:80/v1", 0, "Invalid IPv6 URL"),
+        ("127.0.0.1:8000/v1", 0, "not an http or https URL"),
+        ("http://:8000/v1", 0, "not an http or https URL"),
+        # Block 0 expands to port 18000; only block 1's 118000 is refused.
+        ("http://127.0.0.1:{block}18000/v1", 1, "Port out of range 0-65535"),
+    ],
+)
+def test_a_base_url_the_probe_cannot_parse_is_refused_before_anything_starts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str,
+    block: int,
+    message: str,
+) -> None:
+    # The plan file's base_url is not URL-checked; the port check, the
+    # health wait and the probe each parsed it and raised ValueError, which
+    # nothing caught before the caller.
+    from stormlog.infer.cli import _exit_code_for
+
+    _launches_fail_the_test(monkeypatch)
+    document = _plan(_port())
+    document["server"]["base_url"] = base_url
+    with pytest.raises(InferInputError) as raised:
+        _run(tmp_path, document)
+    text = str(raised.value)
+    assert text.startswith(f"server.base_url for block {block}: ")
+    assert message in text
+    assert _exit_code_for(raised.value) == ExitCode.INVALID_INPUT
+    assert int(ExitCode.INVALID_INPUT) == 5
+    # Refused before the experiment directory got anything.
+    assert not (tmp_path / "exp" / "plan.json").exists()
+    assert not (tmp_path / "exp" / "runs").exists()
+
+
+def test_a_base_url_bad_only_with_the_verified_model_is_refused_before_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # {model} is filled from weights fixed after plan.json is written, so
+    # the check runs then, still before any server starts.
+    source = tmp_path / "model"
+    source.mkdir()
+    (source / "config.json").write_text("{}")
+    (source / "model.safetensors").write_bytes(b"weights")
+    (source / "tokenizer.json").write_text("{}")
+    _launches_fail_the_test(monkeypatch)
+    document = _plan(_port(), blocks=1)
+    # The staged weights' path fills {model}: the bracket is never closed.
+    document["server"]["base_url"] = "http://[{model}/v1"
+    document["server"]["model"] = {
+        "route": "staged",
+        "source": str(source),
+        "store": str(tmp_path / "store"),
+    }
+    with pytest.raises(InferInputError) as raised:
+        _run(tmp_path, document)
+    assert str(raised.value) == (
+        "server.base_url for block 0: urllib cannot parse it (Invalid IPv6 URL)"
+    )
+    assert list((tmp_path / "exp" / "runs").iterdir()) == []
+    recorded = json.loads((tmp_path / "exp" / "plan.json").read_text())
+    assert set(recorded) == {"plan_digest", "prereg_digest", "experiment_id"}
 
 
 def _interrupt(exp: Path, label: str) -> None:

@@ -14,6 +14,7 @@ from stormlog.infer.server_privacy import (
     redact_vllm_config,
     redact_vllm_env,
     redacted,
+    scrub_argument,
     secret_name,
     system_env_summary,
 )
@@ -264,6 +265,15 @@ def test_credentials_in_a_url_of_any_spelling_go(value: str) -> None:
     kept = redact_environ({"VLLM_ENDPOINT": value})
     assert PLANTED not in json.dumps(kept)
     assert "collector:4317" in json.dumps(kept)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://h:99999/p?k=v", "http://h:eighty/p", "http://[::1:80/p"]
+)
+def test_a_url_urllib_cannot_parse_is_removed(url: str) -> None:
+    kept = redact_environ({"VLLM_ENDPOINT": url})
+    assert is_redacted(kept["VLLM_ENDPOINT"])
+    assert scrub_argument(url) == "<redacted>"
 
 
 def test_urls_nested_in_vllm_env_values_are_stripped() -> None:

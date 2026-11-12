@@ -43,6 +43,17 @@ redact_url("https://host:8443/v1/sk-secret/chat?k=v", origin_only=True)
 The host is lower-cased, and an IPv6 host keeps its brackets.
 `redact_url(None)` is `None`.
 
+A URL urllib cannot parse, such as one with an unclosed IPv6 bracket or a
+port out of range or not a number, gives the marker `[unparsable URL]`
+(`stormlog.scrub.UNPARSABLE_URL`) and keeps no part of the URL: it cannot be
+redacted, and may hold a credential. `redact_url` never raises for one, so
+a URL a server or a file sent cannot end a run where it is recorded:
+
+```python
+redact_url("http://user:hunter2@127.0.0.1:99999/x")
+# '[unparsable URL]'
+```
+
 `stormlog.infer.cache_state.redact_url` is the same function, kept for
 callers that imported it from there.
 

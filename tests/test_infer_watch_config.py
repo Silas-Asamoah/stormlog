@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
+from stormlog.infer.cli import main as infer_main
 from stormlog.infer.errors import InferInputError, InferUsageError
 from stormlog.infer.watch.config import (
     CONFIG_FORMAT,
@@ -213,6 +215,41 @@ def test_an_unreadable_or_foreign_file_is_an_input_error(
     path.write_text(content, encoding="utf-8")
     with pytest.raises(InferInputError):
         load_watch_config(path)
+
+
+UNPARSABLE = ["http://[::1:80", "http://127.0.0.1:99999", "http://127.0.0.1:eighty"]
+
+
+@pytest.mark.parametrize("url", UNPARSABLE)
+@pytest.mark.parametrize("field", ["base_url", "metrics_url"])
+def test_a_server_url_urllib_cannot_parse_is_refused_on_load(
+    tmp_path: Path, field: str, url: str
+) -> None:
+    # urlsplit raised a bare ValueError for the bracket (exit 1), and the
+    # ports passed, so redact_url failed when the watch recorded them.
+    server = {"base_url": BASE, field: url}
+    path = tmp_path / "watch.json"
+    path.write_text(json.dumps(_payload(server=server)), encoding="utf-8")
+    with pytest.raises(InferUsageError, match=f"^server.{field} is not a URL"):
+        load_watch_config(path)
+
+
+@pytest.mark.parametrize("url", UNPARSABLE)
+@pytest.mark.parametrize("field", ["base_url", "metrics_url"])
+def test_the_watch_command_exits_2_for_a_server_url_it_cannot_parse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], field: str, url: str
+) -> None:
+    server = {"base_url": BASE, field: url}
+    path = tmp_path / "watch.json"
+    path.write_text(json.dumps(_payload(server=server)), encoding="utf-8")
+    root = tmp_path / "root"
+    # A duration, so a watch that wrongly starts ends instead of hanging.
+    argv = ["watch", "--root", str(root), "--config", str(path), "--duration", "1"]
+    code = infer_main(argv)
+    assert code == ExitCode.USAGE
+    assert int(ExitCode.USAGE) == 2
+    assert f"server.{field} is not a URL urllib can parse" in capsys.readouterr().err
+    assert not root.exists()
 
 
 def test_a_missing_file_is_an_input_error(tmp_path: Path) -> None:
