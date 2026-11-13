@@ -39,10 +39,12 @@ snapshots, whose columns the builder only ever appends to.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import math
 import secrets
+import sys
 import threading
 import time
 from array import array
@@ -82,6 +84,7 @@ from stormlog.studio.contracts import (
 )
 
 __all__ = [
+    "trim_heap",
     "CLIENT_METRICS",
     "GAPS",
     "ERROR_MESSAGE",
@@ -1187,6 +1190,25 @@ class _StoreRows(Sequence[Mapping[str, Any]]):
 # --- One index -----------------------------------------------------------
 
 
+def trim_heap() -> bool:
+    """Hand the C allocator's free pages back to the OS; True if it ran.
+
+    A build grows many arrays by reallocation, and glibc keeps the freed
+    blocks: Fable measured 591 MiB RSS after a 500,000-row build against
+    275 MiB traced, and 416 MiB after ``malloc_trim(0)`` (F-12). Linux
+    only, through ctypes, best effort: it never raises.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+        trim.argtypes = [ctypes.c_size_t]
+        trim(0)
+    except Exception:  # no glibc (musl), no symbol, no ctypes: nothing to do
+        return False
+    return True
+
+
 def _event_name(record: Mapping[str, Any]) -> str:
     name = record.get("event_type")
     return name if isinstance(name, str) else "unknown"
@@ -1320,7 +1342,18 @@ class _Index:
     # --- Building -----------------------------------------------------
 
     def refresh(self) -> None:
-        """Take in whatever the file gained since the last refresh."""
+        """Take in whatever the file gained since the last refresh.
+
+        When a build (a first build, or a rebuild after ``changed``)
+        completes, :func:`trim_heap` returns the build's freed memory.
+        """
+        state, was_built = self.state, self.state.built
+        self._rounds()
+        self.complete = self.complete or self.state.built or bool(self.state.failure)
+        if self.state.built and (self.state is not state or not was_built):
+            trim_heap()
+
+    def _rounds(self) -> None:
         try:
             for _ in range(_REFRESH_ROUNDS):
                 if self.cancelled.is_set() or not self._round():
@@ -1330,7 +1363,6 @@ class _Index:
         except Exception:
             _LOG.exception("indexing %s failed", self.path)
             self._internal()
-        self.complete = self.complete or self.state.built or bool(self.state.failure)
 
     def _round(self) -> bool:
         """One identity check and the reading it calls for; True if the
