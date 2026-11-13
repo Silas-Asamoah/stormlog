@@ -262,25 +262,24 @@ class RequestRow(Mapping[str, Any]):
 class DictRow(RequestRow):
     """A resident row over a plain dict, for C2's tests and for fixtures.
 
+    A given ``ref`` is used as is, so a fixture over a real file can carry
+    the record's real line reference; ``line`` is then ignored. Without one,
     ``ref`` is synthetic: offset 0, and the length and SHA-256 of the
     record's compact JSON (sorted keys), with ``line`` as given. ``index``
     is the row's position in the snapshot it is put in; the caller gives it.
     """
 
     def __init__(
-        self, record: Mapping[str, Any], *, line: int = 0, index: int = 0
+        self,
+        record: Mapping[str, Any],
+        *,
+        line: int = 0,
+        index: int = 0,
+        ref: LineRef | None = None,
     ) -> None:
         self._record: dict[str, Any] = dict(record)
-        encoded = json.dumps(
-            self._record, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
         self._index = index
-        self._ref = LineRef(
-            line=line,
-            offset=0,
-            length=len(encoded),
-            sha256=hashlib.sha256(encoded).hexdigest(),
-        )
+        self._ref = _synthetic_ref(self._record, line) if ref is None else ref
         self._session_id = str(record.get("session_id", "unknown"))
         self._request_id = str(record.get("request_id", "unknown"))
         self._record_id = _request_record_id(record)
@@ -344,6 +343,16 @@ class DictRow(RequestRow):
     def load_error_message(self) -> str | None:
         message = self._record.get("error_message")
         return message if isinstance(message, str) else None
+
+
+def _synthetic_ref(record: Mapping[str, Any], line: int) -> LineRef:
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return LineRef(
+        line=line,
+        offset=0,
+        length=len(encoded),
+        sha256=hashlib.sha256(encoded).hexdigest(),
+    )
 
 
 def _gap_value(gap: Any) -> float:
