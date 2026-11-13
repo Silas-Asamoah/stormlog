@@ -14,9 +14,11 @@ path would (design §4.2, §8.2, §10.3 C5).
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import itertools
 import json
+import math
 import random
 import signal
 import threading
@@ -27,8 +29,10 @@ from pathlib import Path
 from typing import Any, Literal
 from unittest import mock
 
+from stormlog.cpu_profiler import _CPU_MEMORY_CAPABILITIES
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.arrivals import CLOSED, FIXED_RATE, RATE_MODES, ArrivalSpec
+from stormlog.infer.audio_events import AudioRequestEvent
 from stormlog.infer.cache_state import cache_state_record
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
@@ -42,6 +46,12 @@ from stormlog.infer.events import (
 from stormlog.infer.profile import InferenceProfiler, _PhaseRequest, _PhaseWindow
 from stormlog.infer.prompts import PromptSource
 from stormlog.infer.request_scheduler import AbandonedWait
+from stormlog.telemetry import (
+    SCHEMA_VERSION_V4,
+    TelemetryEventV4,
+    telemetry_event_to_dict,
+)
+from stormlog.telemetry_sink import AppendOnlyTelemetrySink, TelemetrySinkConfig
 from tests.studio.fake_openai import CasePolicy, fake_openai
 from tests.vllm_execution_helpers import (
     SECOND,
@@ -73,7 +83,9 @@ class CaseSpec:
     In an open-loop run ``concurrency`` is the in-flight limit, one for the
     whole run. ``stop_after`` ends the measured window through the run's
     stop file when the Nth measured request reaches the server;
-    ``interrupt_after`` presses Ctrl+C then.
+    ``interrupt_after`` presses Ctrl+C then. ``slow_every`` holds every Nth
+    measured request for ``delay_seconds`` at the server: past the run's
+    ``timeout_seconds``, the profiler records a timeout.
     """
 
     concurrency: int
@@ -86,6 +98,8 @@ class CaseSpec:
     usage: bool = True
     stop_after: int | None = None
     interrupt_after: int | None = None
+    slow_every: int | None = None
+    delay_seconds: float = 0.0
 
     @property
     def case_id(self) -> str:
@@ -105,6 +119,8 @@ class CaseSpec:
             usage=self.usage,
             stop_after=self.stop_after,
             interrupt_after=self.interrupt_after,
+            slow_every=self.slow_every,
+            delay_seconds=self.delay_seconds,
         )
 
 
@@ -156,6 +172,7 @@ def profile_config(
     arrival: str = CLOSED,
     rate_per_second: float | None = None,
     stop_file: Path | None = None,
+    timeout_seconds: float = 60.0,
 ) -> ProfileConfig:
     """The config one profile run of ``cases`` takes.
 
@@ -166,7 +183,8 @@ def profile_config(
     its interval set them. ``arrival`` and ``rate_per_second`` are the
     run's too (``--arrival``, ``--rate``): an open loop sends every case at
     that rate with the cases' one ``concurrency`` as its in-flight limit.
-    ``stop_file`` is ``--stop-file``.
+    ``stop_file`` is ``--stop-file`` and ``timeout_seconds`` ``--timeout``,
+    which also bounds the drain.
     """
     concurrency, inputs, outputs = _run_shape(cases)
     spec = arrival_spec(arrival, rate_per_second)
@@ -177,6 +195,7 @@ def profile_config(
         rates=() if spec.rate_per_second is None else (spec.rate_per_second,),
         max_in_flight=concurrency[0],
         stop_file=None if stop_file is None else str(stop_file),
+        timeout_seconds=timeout_seconds,
         endpoint=endpoint,
         model=MODEL,
         concurrency=concurrency,
@@ -205,6 +224,7 @@ def profile_artifact(
     sample_interval_seconds: float = 1.0,
     arrival: str = CLOSED,
     rate_per_second: float | None = None,
+    timeout_seconds: float = 60.0,
 ) -> Path:
     """Profile ``fake_openai`` with the real ``InferenceProfiler``.
 
@@ -217,6 +237,7 @@ def profile_artifact(
     ``arrival`` (``fixed-rate`` or ``poisson``) and ``rate_per_second``
     make the run open-loop, for every case: one profile run has one arrival
     shape per rate, as ``requests`` and ``stream`` are the run's.
+    ``timeout_seconds`` is the run's request timeout (``--timeout``).
 
     A case with ``stop_after`` ends its measured window early through
     ``<name>.stop``, which is removed first. A case with
@@ -242,6 +263,7 @@ def profile_artifact(
             arrival=arrival,
             rate_per_second=rate_per_second,
             stop_file=stop_file if _stops(cases) else None,
+            timeout_seconds=timeout_seconds,
         )
         _run(InferenceProfiler(config), interrupted=_interrupts(cases))
         if server.state.interrupted != _interrupts(cases):
@@ -315,6 +337,7 @@ class SyntheticPlan:
     output_tokens: int = 64
     fail_every: int | None = None
     tokens: TokenMode = "exact"
+    nan_gap: bool = False
 
     @property
     def case_id(self) -> str:
@@ -441,6 +464,9 @@ def _ok_fields(
     count = plan.gaps_per_request
     start = (index * 7919) % (len(pools.gaps) - count)
     gaps = pools.gaps[start : start + count]
+    if plan.nan_gap and index == 0 and count:
+        # json.dumps writes it as a bare NaN, as events.py would.
+        gaps[count // 2] = math.nan
     ttft = pools.ttft[(index * 104729) % _POOL]
     e2e = round(ttft + pools.prefix[start + count] - pools.prefix[start] + 0.5, 3)
     fields: dict[str, Any] = {
@@ -672,6 +698,7 @@ def synthetic_artifact(
     fail_every: int | None = None,
     tokens: TokenMode = "exact",
     samples: SamplePlan | bool = False,
+    nan_gap: bool = False,
 ) -> Path:
     """One closed-loop case of ``requests`` streamed requests.
 
@@ -682,10 +709,14 @@ def synthetic_artifact(
     requests. ``fail_every`` makes every Nth request a server 500;
     ``tokens`` picks exact, estimated or missing output counts, or all three
     in turn. ``samples`` writes ``InferenceSystemSample`` rows through the
-    same writer: True for the default ``SamplePlan``. No
+    same writer: True for the default ``SamplePlan``. ``nan_gap`` makes the
+    middle gap of request 0 a NaN, which the writer's ``json.dumps`` writes
+    as a bare ``NaN`` (needs ``gaps_per_request`` of at least 1). No
     ``infer.dispatch``, ``infer.first_content`` or ``infer.summary``
     records are written.
     """
+    if nan_gap and (gaps_per_request < 1 or requests < 1):
+        raise ValueError("nan_gap needs a request with at least one gap")
     if not 0 <= gaps_per_request <= MAX_SYNTHETIC_GAPS:
         raise ValueError(f"gaps_per_request must be 0 to {MAX_SYNTHETIC_GAPS}")
     plan = SyntheticPlan(
@@ -694,6 +725,7 @@ def synthetic_artifact(
         concurrency=concurrency,
         fail_every=fail_every,
         tokens=tokens,
+        nan_gap=nan_gap,
     )
     sample_plan = samples if isinstance(samples, SamplePlan) else None
     if samples is True:
@@ -790,6 +822,126 @@ def with_execution_import(artifact: Path) -> Path:
     if code != int(ExitCode.OK):
         raise RuntimeError(f"import-execution exited {code}")
     return artifact
+
+
+# --- Files Studio does not read as a text inference artifact -------------
+
+
+def _uuid(rng: random.Random) -> str:
+    return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+
+
+def _audio_request(session_id: str, index: int, ok: bool) -> dict[str, Any]:
+    started = SYNTHETIC_ORIGIN_NS + 5_000_000 + index * 400_000_000
+    return AudioRequestEvent(
+        session_id=session_id,
+        request_id=f"tts_c1_measured_0_{index}",
+        case_id="tts_c1",
+        phase="measured",
+        task="tts",
+        model="fake-tts",
+        fixture_id="hello",
+        fixture_digest=hashlib.sha256(b"hello").hexdigest(),
+        request_index=index,
+        started_at_ns=started,
+        ended_at_ns=started + 300_000_000,
+        status="ok" if ok else "error",
+        endpoint="http://127.0.0.1:9/v1/audio/speech",
+        stream=False,
+        arrival_mode=CLOSED,
+        intended_at_ns=started,
+        response_bytes=48_000 if ok else 0,
+        concurrency=1,
+        e2e_latency_ms=300.0,
+        first_response_byte_ms=120.0 if ok else None,
+        output_audio_seconds=1.5 if ok else None,
+        rtf=0.2 if ok else None,
+        http_status=200 if ok else 500,
+        error_type=None if ok else "EndpointHTTPError",
+    ).to_record()
+
+
+def audio_artifact(directory: Path, *, name: str = "audio.jsonl") -> Path:
+    """Two ``infer.audio.request`` lines, an ok and a failed text-to-speech
+    request, written by ``AudioRequestEvent`` through ``JsonlEventWriter``:
+    the shape Studio refuses as ``unsupported_artifact``, reason ``audio``."""
+    session_id = _uuid(random.Random(11))
+    path = Path(directory) / name
+    with JsonlEventWriter(path) as writer:
+        writer.append(_audio_request(session_id, 0, ok=True))
+        writer.append(_audio_request(session_id, 1, ok=False))
+    return path
+
+
+def telemetry_artifact(directory: Path, *, name: str = "telemetry.jsonl") -> Path:
+    """A memory-profiler telemetry JSONL, not an inference artifact.
+
+    ``AppendOnlyTelemetrySink`` writes ``TelemetryEventV4`` records into
+    ``<stem>.sink/``, built as the CPU tracker builds them
+    (``CPUMemoryTracker._telemetry_record_from_event``, with its private
+    capability table); the sink's one segment is copied to ``name``. Four
+    samples of the process's RSS, one per 100 ms."""
+    path = Path(directory) / name
+    sink = AppendOnlyTelemetrySink(
+        TelemetrySinkConfig(root_dir=path.with_suffix(".sink"), write_rollups=False)
+    )
+    session = sink.start_session()
+    for index in range(4):
+        rss = 2 * GIB + index * 64 * MIB
+        event = TelemetryEventV4(
+            schema_version=SCHEMA_VERSION_V4,
+            session_id=session.session_id,
+            timestamp_ns=SYNTHETIC_ORIGIN_NS + index * 100_000_000,
+            event_type="sample",
+            collector="stormlog.cpu_tracker",
+            sampling_interval_ms=100,
+            pid=1,
+            host="fixture",
+            device_id=-1,
+            allocator_allocated_bytes=rss,
+            allocator_reserved_bytes=rss,
+            allocator_active_bytes=None,
+            allocator_inactive_bytes=None,
+            allocator_change_bytes=0 if index == 0 else 64 * MIB,
+            device_used_bytes=rss,
+            device_free_bytes=None,
+            device_total_bytes=None,
+            context=None,
+            metadata={"memory_capabilities": dict(_CPU_MEMORY_CAPABILITIES)},
+        )
+        sink.append(telemetry_event_to_dict(event))
+    sink.close()
+    (segment,) = sorted(path.with_suffix(".sink").glob("*.jsonl"))
+    path.write_bytes(segment.read_bytes())
+    return path
+
+
+def unsupported_version_artifact(
+    directory: Path, *, name: str = "unsupported_version.jsonl"
+) -> Path:
+    """A real profile with one more line: its last measured client request
+    again, declared ``schema_version`` 2 and still without a ``context``.
+
+    ``JsonlEventWriter`` refuses that record (a v2 request must carry the
+    context it compacts), and no Stormlog writer makes one, so the line is
+    the record ``json.dumps``-ed with ``sort_keys`` as the writer would
+    have, and appended after the terminal session record. It stands for
+    the design's "client request at version 2 with no context" (§4.4):
+    Studio counts it as an ``unsupported_version`` problem and excludes it.
+    """
+    path = profile_artifact(directory, [CaseSpec(2, 8, 4, 8)], name=name)
+    requests = [r for r in decoded_records(path) if _is_measured_ok(r)]
+    record = dict(requests[-1], schema_version=2)
+    with JsonlEventWriter(path.with_suffix(".refused")) as writer:
+        try:
+            writer.append(record)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("JsonlEventWriter now writes v2 client requests")
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+    return path
 
 
 # --- Cuts, growth, concatenation and reruns ------------------------------
@@ -993,14 +1145,41 @@ STANDARD_ARTIFACTS: Mapping[str, Builder] = {
     "truncated_after_newline": _truncated("truncated_after_newline", "after_newline"),
     "growing": _growing,
     "multi_session": _multi_session,
+    # Every 4th measured request held 1 s at the server, past the 0.25 s
+    # request timeout: two timeouts among eight measured requests.
+    "timeouts": _profiled(
+        "timeouts",
+        [CaseSpec(2, 8, 4, 8, slow_every=4, delay_seconds=1.0)],
+        timeout_seconds=0.25,
+    ),
+    "nan_gap": _synthetic("nan_gap", 60, nan_gap=True),
+    "audio": lambda directory: audio_artifact(directory, name="audio.jsonl"),
+    "not_an_inference_artifact": lambda directory: telemetry_artifact(
+        directory, name="not_an_inference_artifact.jsonl"
+    ),
+    "unsupported_version": lambda directory: unsupported_version_artifact(
+        directory, name="unsupported_version.jsonl"
+    ),
 }
 
 # What the rest of the suite may rely on about each standard artifact.
-ANALYZE_FAILS = frozenset({"truncated_mid_line"})  # one bad line fails the file
+# Not text inference artifacts: no infer.session, no infer.request. Studio
+# answers each with 422 and this code (design §5.2, §8.2 unsupported).
+UNSUPPORTED: Mapping[str, str] = {
+    "audio": "unsupported_artifact",  # details.reason "audio"
+    "not_an_inference_artifact": "not_an_inference_artifact",
+}
+# One bad line fails the file; the analyzer exits INVALID_INPUT on these.
+ANALYZE_FAILS = frozenset({"truncated_mid_line", *UNSUPPORTED})
 MULTI_SESSION = frozenset({"multi_session"})  # Studio refuses it (decision 7)
 NO_TERMINAL_RECORD = frozenset(
     {"truncated_mid_line", "truncated_after_newline", "growing"}
 )
+# Read by Studio, with lines it counts as these problems (contracts.ProblemCode).
+PROBLEM_LINES: Mapping[str, str] = {
+    "truncated_mid_line": "truncated_final_line",
+    "unsupported_version": "unsupported_version",
+}
 
 LARGE_REQUESTS = 500_000
 LARGE_GAPS = 15
