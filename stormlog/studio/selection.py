@@ -1023,7 +1023,11 @@ def _check_cursor(payload: Any) -> None:
             raise ValueError(name)
     if not _is_int(payload.get("generation")):
         raise ValueError("generation")
-    key = payload.get("key")
+    _check_key_shape(payload.get("key"))
+
+
+def _check_key_shape(key: Any) -> None:
+    """Three items: an int flag of 0 or 1, a value, an int row."""
     if not isinstance(key, list) or len(key) != 3:
         raise ValueError("key")
     if not _is_int(key[0]) or key[0] not in (0, 1):
