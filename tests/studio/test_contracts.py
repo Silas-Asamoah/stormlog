@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -430,6 +431,14 @@ def test_a_snapshot_names_its_cut_and_line_count() -> None:
     assert _errors("studio_artifact_block_v1.schema.json", block) == []
     bad = dict(block, cut={"line": 7})
     assert _errors("studio_artifact_block_v1.schema.json", bad)
+
+
+def test_a_snapshot_counts_its_problems_by_code() -> None:
+    assert dict(snapshot().problem_counts) == {}
+    counted = snapshot(problem_count=3, problem_counts={"not_json": 2, "oversized": 1})
+    assert sum(counted.problem_counts.values()) == counted.problem_count
+    fields = {f.name for f in dataclasses.fields(IndexSnapshot)}
+    assert {"problem_counts", "cut", "line_count"} <= fields
 
 
 def test_contexts_is_a_limit_of_the_contract_and_the_schema() -> None:
