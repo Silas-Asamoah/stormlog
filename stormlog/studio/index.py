@@ -29,7 +29,9 @@ sample budget it keeps reading but keeps no more samples (``partial``,
 ``samples``). Past the context budget the reader refuses new context
 definitions, so the lines that refer to them are problems (``partial``,
 ``contexts``); the definitions it holds count in :meth:`memory`. An oversized or over-budget kept record leaves its line
-reference only (``kept_records``).
+reference only (``kept_records``), and so does one nested too deep to
+copy, as an ``undecodable`` problem; a field nested too deep for the side
+table reads as None, with the same problem.
 
 Only one builder task runs per artifact at a time; request threads read
 snapshots, whose columns the builder only ever appends to.
@@ -76,6 +78,7 @@ from stormlog.studio.contracts import (
     SessionInfo,
     StudioError,
     WorkspaceRoot,
+    encode_json,
     finite_copy,
     identity_text,
 )
@@ -387,6 +390,9 @@ class _RecordStore:
         self.side: dict[str, dict[int, str]] = {}
         self.side_bytes = 0
         self.rows = 0
+        # keys whose value had no JSON text (nested too deep); the caller
+        # records the problem and clears the list
+        self.dropped: list[str] = []
 
     def add(self, record: Mapping[str, Any]) -> int:
         row = self.rows
@@ -425,7 +431,14 @@ class _RecordStore:
         self.put_side(key, row, value)
 
     def put_side(self, key: str, row: int, value: Any) -> None:
-        text = json.dumps(value)
+        """Keep ``value`` as JSON text; one ``json.loads`` accepted but
+        ``json.dumps`` refuses (nested too deep) reads as None, its key
+        noted in ``dropped``."""
+        try:
+            text = json.dumps(value)
+        except (RecursionError, ValueError):
+            self.dropped.append(key)
+            return
         self.side.setdefault(key, {})[row] = text
         self.side_bytes += len(text) + _ENTRY_BYTES
 
@@ -1208,6 +1221,17 @@ def _int_or_none(value: Any) -> int | None:
     return value if type(value) is int else None
 
 
+def _finite_record(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """``finite_copy`` of a record to keep whole, or None when it is
+    nested too deep to copy or to write as JSON again (Fable's F-4)."""
+    try:
+        copied = finite_copy(record)[0]
+        encode_json(copied)  # what a route does with it
+    except (RecursionError, ValueError):
+        return None
+    return copied
+
+
 @dataclass
 class _Session:
     """What the ``infer.session`` records said, as they arrive."""
@@ -1253,6 +1277,7 @@ class _State:
     origin_ns: int | None = None
     failure: IndexFailure | None = None
     cut: LineRef | None = None  # the first request a budget left out
+    deep_ref: LineRef | None = None  # the last line found too deep to keep
     stopped: bool = False  # no more lines are read (a cut, or a failure)
     built: bool = False  # the first build reached the end of the file
     row_bytes: int = 0
@@ -1409,7 +1434,7 @@ class _Index:
         elif name == "infer.session":
             self._session(record, ref)
         elif name == "infer.system_sample":
-            self._sample(record)
+            self._sample(record, ref)
         elif name in _LINK_TYPES:
             self._link(name, record, ref)
         if name in KEPT_EVENT_TYPES:
@@ -1465,6 +1490,7 @@ class _Index:
         state = self.state
         requests = state.requests
         row = requests.add(record, ref)
+        self._dropped(requests.store, ref)
         if requests.gaps is None:
             state.limits_hit.add("gaps")
         if requests.errors is None:
@@ -1505,8 +1531,10 @@ class _Index:
         timestamp = _int_or_none(record.get("timestamp_ns"))
         if state.session is None:
             config = record.get("config")
-            copied = finite_copy(config)[0] if isinstance(config, Mapping) else {}
-            state.session = _Session(session_id, timestamp, copied)
+            copied = _finite_record(config) if isinstance(config, Mapping) else {}
+            if copied is None:
+                self._too_deep(ref, "the session's config")
+            state.session = _Session(session_id, timestamp, copied or {})
             if state.origin_ns is None:
                 state.origin_ns = timestamp
         status = record.get("status")
@@ -1515,7 +1543,20 @@ class _Index:
             state.session.terminal = True
             state.session.ended_at_ns = timestamp
 
-    def _sample(self, record: Mapping[str, Any]) -> None:
+    def _too_deep(self, ref: LineRef, what: str) -> None:
+        """One ``undecodable`` problem per line nested too deep to keep."""
+        if self.state.deep_ref == ref:
+            return
+        self.state.deep_ref = ref
+        detail = f"{what} is nested too deeply to keep; its line is kept"
+        self._problem(LineProblem(ref, "undecodable", detail))
+
+    def _dropped(self, store: _RecordStore, ref: LineRef) -> None:
+        if store.dropped:
+            self._too_deep(ref, "field " + ", ".join(sorted(set(store.dropped))))
+            store.dropped.clear()
+
+    def _sample(self, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
         if "samples" in state.limits_hit:
             return
@@ -1523,6 +1564,7 @@ class _Index:
             state.limits_hit.add("samples")
             return
         state.samples.add({k: v for k, v in record.items() if k != "metadata"})
+        self._dropped(state.samples, ref)
 
     def _link(self, name: str, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
@@ -1538,7 +1580,12 @@ class _Index:
         if over_one or state.kept_bytes + ref.length > self.limits.kept_bytes:
             state.limits_hit.add("kept_records")
             return
-        state.kept.setdefault(name, []).append(finite_copy(record)[0])
+        copied = _finite_record(record)
+        if copied is None:
+            state.limits_hit.add("kept_records")  # its line reference only
+            self._too_deep(ref, "the record")
+            return
+        state.kept.setdefault(name, []).append(copied)
         state.kept_bytes += ref.length
 
     # --- Publishing ---------------------------------------------------
