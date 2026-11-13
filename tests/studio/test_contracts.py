@@ -14,7 +14,7 @@ from array import array
 from collections.abc import Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
@@ -22,6 +22,7 @@ from referencing import Registry, Resource
 
 from stormlog.infer import artifact_lines
 from stormlog.infer.diagnosis_inputs import record_id
+from stormlog.infer.latency_report import CLIENT_METRICS
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import contracts
 from stormlog.studio.contracts import (
@@ -385,8 +386,34 @@ def test_artifact_block_lists_the_section_5_1_fields() -> None:
         "gaps_resident": True,
         "error_messages_resident": True,
         "limits_hit": ["gaps", "samples"],
+        "cut": None,
     }
     assert to_wire(block)["origin_ns"] == "1788609600000000000"
+
+
+def test_a_snapshot_names_its_cut_and_line_count() -> None:
+    plain = snapshot()
+    assert (plain.cut, plain.line_count) == (None, None)
+    ref = LineRef(line=7, offset=512, length=90, sha256="b" * 64)
+    cut = snapshot(cut=ref, line_count=7, status="partial", limits_hit={"rows"})
+    assert artifact_block(cut)["cut"] == {
+        "line": 7,
+        "offset": 512,
+        "length": 90,
+        "sha256": "b" * 64,
+    }
+    block = to_wire(artifact_block(cut))
+    assert _errors("studio_artifact_block_v1.schema.json", block) == []
+    bad = dict(block, cut={"line": 7})
+    assert _errors("studio_artifact_block_v1.schema.json", bad)
+
+
+def test_internal_is_a_failure_of_the_contract_and_the_schema() -> None:
+    failures = set(get_args(contracts.IndexFailure))
+    assert "internal" in failures
+    schema = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")
+    enum = schema["properties"]["index"]["properties"]["failure"]["enum"]
+    assert set(enum) == failures | {None}
 
 
 def test_artifact_block_without_a_session() -> None:
@@ -473,6 +500,71 @@ def test_columns_equal_row_access() -> None:
     assert list(snap.column("client.ttft")) == [10.0, None, None]
     with pytest.raises(KeyError):
         snap.column("client.no_such_metric")
+
+
+def test_a_dict_table_gives_the_columnar_arrays_of_its_rows() -> None:
+    rows = [
+        DictRow(request_record(request_id="a", chunk_interarrival_ms=[1.0, "x"])),
+        DictRow(request_record(request_id="b", ttft_ms=None, status="timeout")),
+        DictRow({"request_id": "c", "chunk_interarrival_ms": None}, line=2),
+        DictRow(request_record(request_id="d", chunk_interarrival_ms=[3]), line=3),
+    ]
+    table = contracts.columnar(DictTable(rows))
+    assert table is not None and isinstance(table, contracts.ColumnarTable)
+    for metric in CLIENT_METRICS:
+        values = table.client_values(metric)
+        assert len(values) == len(rows)
+        for value, row in zip(values, rows):
+            expected = row.client[metric].value_ms
+            assert math.isnan(value) if expected is None else value == expected
+        codes, reasons = table.client_reasons(metric)
+        assert reasons[0] == (None, False)
+        assert [reasons[code] for code in codes] == [
+            (row.client[metric].reason, row.client[metric].not_applicable)
+            for row in rows
+        ]
+    assert list(table.line_refs()) == [row.ref for row in rows]
+    assert list(table.line_lengths()) == [row.ref.length for row in rows]
+    assert list(table.gap_counts()) == [row.gap_count for row in rows] == [2, 15, 0, 1]
+    pool = table.gap_pool()
+    for i, row in enumerate(rows):
+        start, count = pool.starts[i], pool.counts[i]
+        gaps = list(pool.values[start : start + count])
+        assert repr(gaps) == repr(list(row.load_gaps()))
+    assert list(table.column("status")) == [row.get("status") for row in rows]
+
+
+def test_a_table_without_the_arrays_is_not_columnar() -> None:
+    class Bare:
+        def __len__(self) -> int:
+            return 0
+
+        def column(self, name: str) -> list[Any]:
+            return []
+
+    assert contracts.columnar(Bare()) is None
+    doc = _doc(contracts.ColumnarTable)
+    for token in ("NaN", "milliseconds", "NotResident", "copy", "must not mutate"):
+        assert token in doc, token
+
+
+def test_the_registry_has_a_publish_listener_that_survives_replace() -> None:
+    doc = _doc(contracts.PublishingRegistry.add_publish_listener)
+    assert "builder pool" in doc and "id(snapshot.table)" in doc
+
+    class Bare:
+        def snapshot(self, rel: str) -> IndexSnapshot:
+            return snapshot()
+
+    class Hooked(Bare):
+        def add_publish_listener(self, fn: Any) -> None:
+            pass
+
+    assert contracts.publish_hook(Bare()) is None  # type: ignore[arg-type]
+    hooked: Any = Hooked()
+    for name in ("wait", "read_line", "read_lines", "close"):
+        setattr(hooked, name, lambda *args: None)
+    assert contracts.publish_hook(hooked) is hooked
 
 
 def test_not_resident_is_not_a_key_error() -> None:
