@@ -4,6 +4,7 @@ reads it as the rest of the Studio suite assumes."""
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import json
 import math
@@ -32,6 +33,7 @@ from stormlog.infer.events import (
 from stormlog.infer.populations import case_populations
 from stormlog.studio.contracts import ProblemCode
 from stormlog.telemetry import validate_telemetry_record
+from tests import test_infer_profile
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     LARGE_GAPS,
@@ -372,6 +374,35 @@ def _post(endpoint: str, request_id: str, body: dict[str, Any]) -> Any:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with opener.open(request, timeout=10) as response:
         return response.read()
+
+
+# What fake_openai.py takes from tests/test_infer_profile.py, by name.
+BASE_FAKE = {
+    "_send_json": ["self", "body", "status"],
+    "_send_stream": ["self", "include_usage"],
+    "do_POST": ["self"],
+}
+
+
+def test_the_base_fake_keeps_the_private_names_this_fake_uses() -> None:
+    message = (
+        "tests/studio/fake_openai.py subclasses _FakeOpenAIHandler from "
+        "tests/test_infer_profile.py and calls its _send_json(body, *, status) "
+        "and _send_stream(*, include_usage). {problem}. Keep those names and "
+        "signatures in test_infer_profile.py, or copy the base fake into "
+        "tests/studio/fake_openai.py (Fable F-23)."
+    )
+    handler = getattr(test_infer_profile, "_FakeOpenAIHandler", None)
+    if not isinstance(handler, type):
+        pytest.fail(message.format(problem="_FakeOpenAIHandler is gone"))
+    for name, parameters in BASE_FAKE.items():
+        method = getattr(handler, name, None)
+        if not callable(method):
+            pytest.fail(message.format(problem=f"{name} is gone"))
+        found = list(inspect.signature(method).parameters)
+        if found != parameters:
+            problem = f"{name} now takes {found}, not {parameters}"
+            pytest.fail(message.format(problem=problem))
 
 
 def test_the_fake_server_answers_by_case_and_phase() -> None:
