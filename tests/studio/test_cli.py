@@ -237,6 +237,29 @@ def test_state_directory_defaults_to_local_state(
 # --- Serving ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("stale", ["file", "symlink"])
+def test_private_writes_recover_from_a_stale_temporary(
+    tmp_path: Path, stale: str
+) -> None:
+    # Fable's nit: a crash left .<name>.<pid>.tmp; a later launcher with
+    # the same PID failed its O_EXCL open with a traceback.
+    directory = tmp_path / "state"
+    directory.mkdir(mode=0o700)
+    target = directory / "8790.json"
+    temporary = directory / f".8790.json.{os.getpid()}.tmp"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep\n")
+    if stale == "file":
+        temporary.write_text("half a record")
+    else:
+        temporary.symlink_to(outside)
+    assert cli._write_private(target, '{"pid": 1}') == target
+    assert target.read_text() == '{"pid": 1}'
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not temporary.exists() and not temporary.is_symlink()
+    assert outside.read_text() == "keep\n"
+
+
 def test_serve_prints_a_one_time_url_and_writes_private_state(
     root: Path, state: Path, serve: Callable[[list[str]], Running]
 ) -> None:
