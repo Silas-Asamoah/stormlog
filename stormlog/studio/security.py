@@ -83,6 +83,8 @@ JSON_TYPE = "application/json; charset=utf-8"
 _TOKEN_BYTES = 32
 _PORT = re.compile(r"[0-9]{1,5}")
 _DRIVE = re.compile(r"[A-Za-z]:")
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
 _TICKET_ROUTE = re.compile(r"/api/v1/[a-z0-9_/]+")
 _ROUTE_MAX_CHARS = 2048
 _API_PREFIX = "/api/"
@@ -496,16 +498,20 @@ class RootDirectory:
     def open(self, rel: str) -> BinaryIO:
         """Resolve, open read-only, and check the open file is the one resolved.
 
-        ``O_NOFOLLOW`` refuses a final component swapped for a symlink and
-        ``O_NONBLOCK`` keeps a swapped-in FIFO from blocking the open; the
-        ``fstat`` then requires a regular file with the resolved device and
-        inode, so a swap between check and open is refused.
+        The resolved path is opened one component at a time from a
+        descriptor on the root, each with ``O_NOFOLLOW``: a directory on
+        the way swapped for a symlink after ``realpath`` (out of the root,
+        or anywhere) fails the open instead of being followed. An in-root
+        symlink in ``rel`` still works, because ``realpath`` has already
+        replaced it with its target. ``O_NONBLOCK`` keeps a swapped-in
+        FIFO from blocking the open; the ``fstat`` then requires a regular
+        file with the resolved device and inode, so a swap between check
+        and open is refused.
         """
         real = self.resolve(rel)
         try:
             expected = os.stat(real)
-            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-            fd = os.open(real, flags)
+            fd = self._open_beneath(real.relative_to(self.path).parts)
         except OSError:
             raise _not_allowed(rel) from None
         actual = os.fstat(fd)
@@ -515,6 +521,18 @@ class RootDirectory:
             raise _not_allowed(rel)
         os.set_blocking(fd, True)
         return os.fdopen(fd, "rb")
+
+    def _open_beneath(self, parts: tuple[str, ...]) -> int:
+        """Open ``parts`` under the root without following any symlink."""
+        fd = os.open(self.path, _DIR_FLAGS)
+        try:
+            for part in parts[:-1]:
+                child = os.open(part, _DIR_FLAGS, dir_fd=fd)
+                os.close(fd)
+                fd = child
+            return os.open(parts[-1], _FILE_FLAGS, dir_fd=fd)
+        finally:
+            os.close(fd)
 
     def relative(self, path: Path) -> str:
         """The root-relative POSIX path of ``path``; ForbiddenError outside."""
