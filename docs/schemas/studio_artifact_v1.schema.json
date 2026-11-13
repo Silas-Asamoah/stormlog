@@ -97,8 +97,10 @@
             "not_an_inference_artifact",
             "audio",
             "multiple_sessions",
+            "internal",
             null
-          ]
+          ],
+          "description": "Why the index failed; internal: indexing raised an unexpected error (logged by the server). null unless status is failed."
         },
         "bytes_read": {
           "$ref": "#/$defs/count"
