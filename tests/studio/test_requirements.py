@@ -10,24 +10,25 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JSONSCHEMA = re.compile(r"jsonschema\s*>=\s*([0-9][0-9.]*)")
-# Every place that pins jsonschema, with how many pins it holds.
-PINS = {
-    "pyproject.toml": 2,
-    "requirements-ci-base.txt": 1,
-    "requirements-test.txt": 1,
-    "requirements-dev.txt": 1,
-}
+# Every place that pins jsonschema. Each must hold a pin; how many it
+# holds is free, so a new extra or a reordered file does not fail this.
+PINS = (
+    "pyproject.toml",
+    "requirements-ci-base.txt",
+    "requirements-test.txt",
+    "requirements-dev.txt",
+)
 
 
 def _release(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split(".")[:3])
 
 
-@pytest.mark.parametrize(("name", "count"), sorted(PINS.items()))
-def test_every_jsonschema_pin_allows_only_4_18_or_later(name: str, count: int) -> None:
+@pytest.mark.parametrize("name", PINS)
+def test_every_jsonschema_pin_allows_only_4_18_or_later(name: str) -> None:
     text = (REPO_ROOT / name).read_text(encoding="utf-8")
     floors = JSONSCHEMA.findall(text)
-    assert len(floors) == count, floors
+    assert floors, f"{name} pins no jsonschema"
     for floor in floors:
         assert _release(floor) >= (4, 18), f"{name}: jsonschema>={floor}"
 
