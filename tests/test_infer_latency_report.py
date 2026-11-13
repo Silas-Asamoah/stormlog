@@ -105,6 +105,17 @@ def test_a_token_count_that_is_not_finite_adds_nothing_and_analyze_still_runs(
     assert report["cases"]["c1"]["streaming"]["mean_tokens_per_chunk"] == 8.0
 
 
+@pytest.mark.parametrize("gaps", ["abcdefg", 7, 7.5, True, {"a": 1.0, "b": 2.0}])
+def test_chunk_gaps_that_are_not_a_list_are_no_gaps(gaps: Any) -> None:
+    # A string's characters or an object's keys are not chunks, and a
+    # number is not iterable: each reads as a response with no gaps, as
+    # Studio's index stores it (gap_count 0).
+    hostile = [_streamed(0), _streamed(1, chunk_interarrival_ms=gaps)]
+    empty = [_streamed(0), _streamed(1, chunk_interarrival_ms=[])]
+    assert streaming_summary(hostile) == streaming_summary(empty)
+    assert streaming_summary(hostile)["mean_tokens_per_chunk"] == 256 / 9
+
+
 def test_no_inter_token_latency_appears_outside_vllms_own_block(tmp_path: Path) -> None:
     path = tmp_path / "infer.jsonl"
     records = [{"event_type": "infer.session", "session_id": "s1"}] + [
