@@ -8,11 +8,13 @@ import math
 import subprocess
 import sys
 from array import array
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
+import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
+from referencing import Registry, Resource
 
 from stormlog.infer.diagnosis_inputs import record_id
 from stormlog.infer.slo import client_values
@@ -44,6 +46,10 @@ from stormlog.studio.contracts import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO_ROOT / "stormlog" / "studio" / "contracts.py"
 ALLOWED_STORMLOG_IMPORTS = {"stormlog.infer.populations", "stormlog.infer.slo"}
+SCHEMA_DIR = REPO_ROOT / "docs" / "schemas"
+EXAMPLE_DIR = SCHEMA_DIR / "examples"
+SCHEMA_BASE = "https://github.com/Silas-Asamoah/stormlog/docs/schemas/"
+STUDIO_SCHEMAS = sorted(path.name for path in SCHEMA_DIR.glob("studio_*.schema.json"))
 SESSION = "5f0c1d2e3a4b5c6d7e8f901234567890"
 INDEX_ID = "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d"
 
@@ -440,3 +446,126 @@ def test_importing_contracts_loads_no_other_studio_module() -> None:
 def test_every_public_name_is_exported() -> None:
     for name in contracts.__all__:
         assert hasattr(contracts, name), name
+
+
+# --- schemas and examples (design §10.2) --------------------------------------
+
+
+def _load(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _registry() -> Any:
+    resources = []
+    for name in STUDIO_SCHEMAS:
+        schema = _load(SCHEMA_DIR / name)
+        resources.append((schema["$id"], Resource.from_contents(schema)))
+    return Registry().with_resources(resources)
+
+
+def _validator(name: str) -> Any:
+    schema = _load(SCHEMA_DIR / name)
+    return jsonschema.Draft202012Validator(schema, registry=_registry())
+
+
+def _errors(name: str, document: Any) -> list[str]:
+    found = _validator(name).iter_errors(document)
+    return [f"{list(error.absolute_path)}: {error.message}" for error in found]
+
+
+def _example_name(schema_name: str) -> str:
+    return schema_name.replace(".schema.json", ".example.json")
+
+
+def _walk(node: Any) -> Iterator[Mapping[str, Any]]:
+    if isinstance(node, Mapping):
+        yield node
+        for value in node.values():
+            yield from _walk(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from _walk(value)
+
+
+def test_there_are_step_0_schemas() -> None:
+    assert "studio_error_v1.schema.json" in STUDIO_SCHEMAS
+    assert "studio_artifact_block_v1.schema.json" in STUDIO_SCHEMAS
+
+
+@pytest.mark.parametrize("name", STUDIO_SCHEMAS)
+def test_schema_is_valid_under_draft_2020_12(name: str) -> None:
+    schema = _load(SCHEMA_DIR / name)
+    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["$id"] == SCHEMA_BASE + name
+    jsonschema.Draft202012Validator.check_schema(schema)
+
+
+@pytest.mark.parametrize("name", STUDIO_SCHEMAS)
+def test_document_schema_names_its_envelope(name: str) -> None:
+    schema = _load(SCHEMA_DIR / name)
+    document = name.removeprefix("studio_").removesuffix("_v1.schema.json")
+    if document.endswith("_block"):
+        assert "format" not in schema["properties"]
+        return
+    properties = schema["properties"]
+    assert properties["format"]["const"] == f"stormlog.studio.{document}"
+    assert properties["schema_version"]["const"] == 1
+    assert {"format", "schema_version"} <= set(schema["required"])
+    if "artifact" in properties:
+        assert properties["artifact"] == {
+            "$ref": "studio_artifact_block_v1.schema.json"
+        }
+        assert "artifact" in schema["required"]
+
+
+@pytest.mark.parametrize("name", STUDIO_SCHEMAS)
+def test_ns_fields_are_decimal_strings_in_every_schema(name: str) -> None:
+    schema = _load(SCHEMA_DIR / name)
+    canonical = _load(SCHEMA_DIR / "studio_artifact_block_v1.schema.json")
+    for node in _walk(schema):
+        for key, value in dict(node.get("properties", {})).items():
+            if key.endswith("_ns"):
+                assert value.get("$ref") in {"#/$defs/ns", "#/$defs/ns_or_null"}, key
+    defs = schema.get("$defs", {})
+    if "ns" in defs:
+        assert defs["ns"] == canonical["$defs"]["ns"]
+        assert defs["ns"]["type"] == "string"
+
+
+def test_every_schema_has_an_example_and_every_example_a_schema() -> None:
+    examples = sorted(path.name for path in EXAMPLE_DIR.glob("studio_*.json"))
+    assert examples == [_example_name(name) for name in STUDIO_SCHEMAS]
+
+
+@pytest.mark.parametrize("name", STUDIO_SCHEMAS)
+def test_example_validates_against_its_schema(name: str) -> None:
+    example = _load(EXAMPLE_DIR / _example_name(name))
+    assert _errors(name, example) == []
+    assert to_wire(example) == example, "examples are already in wire form"
+
+
+@pytest.mark.parametrize(("cls", "status", "verdict"), ERROR_CLASSES)
+def test_error_documents_validate(
+    cls: type[StudioError], status: int, verdict: str | None
+) -> None:
+    error = cls("cursor_mismatch", "the index was rebuilt", details={"at_ns": 5})
+    assert _errors("studio_error_v1.schema.json", to_wire(error.document())) == []
+
+
+def test_error_schema_pairs_http_and_verdict_status() -> None:
+    document = UsageError("bad_parameter", "x").document()
+    document["error"]["verdict_status"] = None
+    assert _errors("studio_error_v1.schema.json", document)
+
+
+def test_artifact_block_validates_with_and_without_a_session() -> None:
+    name = "studio_artifact_block_v1.schema.json"
+    assert _errors(name, to_wire(artifact_block(snapshot()))) == []
+    bare = snapshot(session=None, origin_ns=None, sha256=None, status="building")
+    assert _errors(name, to_wire(artifact_block(bare))) == []
+
+
+def test_artifact_block_refuses_an_integer_ns_field() -> None:
+    block = to_wire(artifact_block(snapshot()))
+    block["origin_ns"] = 1788609600000000000
+    assert _errors("studio_artifact_block_v1.schema.json", block)

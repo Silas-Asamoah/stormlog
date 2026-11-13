@@ -1,0 +1,23 @@
+{
+  "format": "stormlog.studio.error",
+  "schema_version": 1,
+  "error": {
+    "code": "bad_parameter",
+    "message": "status: unknown value 'eror'",
+    "http_status": 400,
+    "verdict_status": "usage",
+    "field": "status",
+    "details": {
+      "allowed": [
+        "ok",
+        "timeout",
+        "rejected",
+        "error",
+        "dropped",
+        "cancelled",
+        "unreachable",
+        "delivery_unknown"
+      ]
+    }
+  }
+}
