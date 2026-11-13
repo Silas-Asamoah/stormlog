@@ -66,6 +66,7 @@ from stormlog.studio.contracts import (
     TimeWindow,
     UsageError,
     columnar,
+    identity_text,
     selection_fingerprint,
 )
 
@@ -519,7 +520,7 @@ def _compute_facts(snapshot: IndexSnapshot) -> CaseFacts:
     cases = snapshot.column("case_id")
     by_case: dict[str, array[int]] = {}
     for i in measured:
-        by_case.setdefault(_case_name(cases[i]), array("q")).append(i)
+        by_case.setdefault(identity_text(cases[i]), array("q")).append(i)
     rows = _cohort_records(snapshot, measured)
     windows = [
         record
@@ -589,12 +590,10 @@ def _missing_kept(snapshot: IndexSnapshot) -> tuple[str, ...]:
     return tuple(missing)
 
 
-def _case_name(value: Any) -> str:
-    """``str(record.get("case_id", "unknown"))`` from a column cell.
-
-    A column gives None where the record lacks the key, so None is read as
-    the missing key's ``"unknown"``.
-    """
+def _source_name(value: Any) -> str:
+    """An ``output_token_source`` cell as the filter matches it: None (the
+    key absent or null) is ``"unknown"``, as ``tokens.TOKEN_SOURCES`` names
+    it."""
     return _UNKNOWN if value is None else str(value)
 
 
@@ -608,7 +607,7 @@ def select(snapshot: IndexSnapshot, f: RequestFilter) -> Selection:
         rows = [i for i in rows if keep(i)]
     selected = array("q", rows)
     case_column = snapshot.column("case_id")
-    cases = tuple(sorted({_case_name(case_column[i]) for i in selected}))
+    cases = tuple(sorted({identity_text(case_column[i]) for i in selected}))
     rate, whole_case = _rate_scope(snapshot, f, selected, cases)
     params = canonical_params(f)
     return Selection(
@@ -640,7 +639,7 @@ def _conditions(snapshot: IndexSnapshot, f: RequestFilter) -> list[Keep]:
         keeps.append(lambda i: phases[i] == f.phase)
     if f.cases:
         cases, wanted = column("case_id"), frozenset(f.cases)
-        keeps.append(lambda i: _case_name(cases[i]) in wanted)
+        keeps.append(lambda i: identity_text(cases[i]) in wanted)
     if f.statuses:
         statuses, allowed = column("status"), frozenset(f.statuses)
         keeps.append(lambda i: str(statuses[i]) in allowed)
@@ -649,7 +648,7 @@ def _conditions(snapshot: IndexSnapshot, f: RequestFilter) -> list[Keep]:
         keeps.append(lambda i: bool(streams[i]) is stream)
     if f.token_sources:
         sources, chosen = column("output_token_source"), frozenset(f.token_sources)
-        keeps.append(lambda i: _case_name(sources[i]) in chosen)
+        keeps.append(lambda i: _source_name(sources[i]) in chosen)
     keeps.extend(_time_conditions(snapshot, f))
     if f.latency is not None:
         keeps.append(_latency_condition(snapshot, f.latency))
