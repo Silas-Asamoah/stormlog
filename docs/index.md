@@ -44,6 +44,7 @@ vllm_execution
 inference_diagnosis
 incident_capture
 inference_export
+studio
 qualification
 tui
 cookbook/index
@@ -101,9 +102,10 @@ examples/test_guides/README
 7. [Inference execution correlation](inference_correlation.md)
 8. [vLLM native telemetry](vllm_telemetry.md)
 9. [Exporting inference metrics and spans](inference_export.md)
-10. [TUI](tui.md)
-11. [Production Cookbook](cookbook/index.md)
-12. [Troubleshooting](troubleshooting.md)
+10. [Stormlog Studio](studio.md)
+11. [TUI](tui.md)
+12. [Production Cookbook](cookbook/index.md)
+13. [Troubleshooting](troubleshooting.md)
 
 ### Release or CI validation
 
