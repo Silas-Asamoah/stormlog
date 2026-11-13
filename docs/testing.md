@@ -369,6 +369,15 @@ available, so with a large stack the decoder accepts nesting that older
 interpreters reject with `RecursionError`; the probe enforces the limit
 explicitly before retaining a response.
 
+Inference artifact lines and Studio reports get the same treatment, with a
+128-container limit (`diagnosis_inputs.MAX_NESTING`) counted on the bytes
+before `json.loads` runs. Studio's artifact reader and `stormlog infer
+diagnose` both call a deeper line `not_json`, and Studio refuses a deeper
+report as not a report, whatever the Python version or the thread's stack
+size. Their tests use lines just inside and just past the limit, plus one
+50,000 levels deep that Python 3.14 parses on an 8 MiB stack. None of them
+depends on where `json.loads` itself gives up.
+
 ## Documentation checks
 
 Documentation source is built from `docs/`, not from checked-in generated HTML.
