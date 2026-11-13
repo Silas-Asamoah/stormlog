@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_items_v1.schema.json",
+  "title": "Stormlog Studio workspace items v1",
+  "description": "GET /api/v1/workspace/items (design §5.4), written by workspace.ArtifactScanner.items: one page of the files the last scan listed, sorted by path, with the filter that chose them. Paging is keyset on the path, so a cursor stays valid across rescans.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "filter",
+    "items",
+    "total",
+    "next_cursor",
+    "scan"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.items"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "q"
+      ],
+      "properties": {
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/kind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "q": {
+          "description": "Case-insensitive substring of the path, as given.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/item"
+      }
+    },
+    "total": {
+      "description": "Items matching the filter, on every page.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "next_cursor": {
+      "description": "Opaque; null on the last page.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "scan": {
+      "$ref": "studio_workspace_v1.schema.json#/$defs/scan"
+    }
+  },
+  "$defs": {
+    "kind": {
+      "description": "inference_artifact: JSONL with infer.session or infer.request records. audio_artifact: JSONL with infer.audio.* records, unsupported in slice 1. report: a stormlog.report v1 envelope. run_envelope: a stormlog.run_envelope v1 file.",
+      "enum": [
+        "inference_artifact",
+        "audio_artifact",
+        "report",
+        "run_envelope"
+      ]
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "kind",
+        "size",
+        "mtime_ns",
+        "session_id",
+        "status",
+        "report_kind",
+        "verdict"
+      ],
+      "properties": {
+        "path": {
+          "description": "Root-relative POSIX path.",
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/kind"
+        },
+        "size": {
+          "description": "Bytes, at the scan.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "$ref": "#/$defs/ns"
+        },
+        "session_id": {
+          "description": "Artifacts: the first infer.session record's session_id, else the first infer.request's. Reports: the envelope's session_id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "description": "Artifacts: the status of the last infer.session record classify read. For a file over 64 KiB only its last 32 KiB count, so null means no session record there, not that the run has no status.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report_kind": {
+          "description": "Reports only.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verdict": {
+          "description": "Reports only: verdict.status, an exit_codes verdict.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    }
+  }
+}
