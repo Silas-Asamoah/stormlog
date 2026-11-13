@@ -730,6 +730,57 @@ def test_odd_values_round_trip_exactly(tmp_path: Path) -> None:
     assert snapshot.requests[4].load_error_message() is None
 
 
+@pytest.mark.parametrize("depth", [900, 990, 1500, 5000])
+def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
+    tmp_path: Path, depth: int
+) -> None:
+    """Made here: json.loads takes it, finite_copy and json.dumps may not (F-4).
+
+    Where this Python's json.loads refuses the depth, the line is the
+    reader's not_json problem instead; either way the index is ready.
+    """
+    nested = "[" * depth + "]" * depth
+    head = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1,'
+    lines = [
+        head + '"status":"running","config":{"d":' + nested + "}}",
+        '{"event_type":"infer.workload","schema_version":1,"w":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"q",'
+        '"status":"ok","weird":' + nested + "}",
+        '{"event_type":"infer.system_sample","t":1,"weird":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+    ]
+    path = tmp_path / f"deep{depth}.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    problems = {p.ref.line: p.code for p in snapshot.problems}
+    assert set(problems.values()) <= {"undecodable", "not_json"}
+    assert snapshot.problem_count == len(problems)
+    parsed = {line for line in range(5) if problems.get(line) != "not_json"}
+    assert {0, 1, 2, 3} <= parsed or depth > 900
+    ids = [row.request_id for row in snapshot.requests]
+    assert ids == (["q", "r"] if 2 in parsed else ["r"])
+    for line, kind in ((0, "infer.session"), (1, "infer.workload")):
+        if line not in parsed:
+            continue
+        kept = snapshot.kept.get(kind, ())
+        assert (problems.get(line) == "undecodable") == (not kept), (depth, line)
+        assert snapshot.refs[kind][0].line == line
+        encode_json({"kept": kept})
+    if 0 in parsed:
+        assert snapshot.session is not None and snapshot.session.session_id == "s1"
+    if problems.get(0) == "undecodable":
+        assert snapshot.session is not None and snapshot.session.config == {}
+        assert "kept_records" in snapshot.limits_hit
+    if 2 in parsed:
+        weird = snapshot.requests[0]["weird"]
+        assert (weird is None) == (problems.get(2) == "undecodable"), depth
+    if 3 in parsed:
+        weird = snapshot.samples[0]["weird"]
+        assert (weird is None) == (problems.get(3) == "undecodable"), depth
+    encode_json({"artifact": artifact_block(snapshot)})
+
+
 def test_many_distinct_strings_move_to_a_byte_pool(tmp_path: Path) -> None:
     rows = [
         {"event_type": "infer.request", "request_id": str(i), "tag": f"t{i}"}
