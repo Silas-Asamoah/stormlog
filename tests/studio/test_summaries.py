@@ -690,6 +690,9 @@ def _stable(document: Any) -> Any:
     copy = json.loads(json.dumps(document))
     for key in VOLATILE:
         copy.get("artifact", {}).pop(key, None)
+    # The analysed prefix is the file's bytes_read, which moves with it.
+    analysis = copy.get("panels", {}).get("analysis", {})
+    (analysis.get("detail") or {}).pop("analysed_bytes", None)
     return copy
 
 
