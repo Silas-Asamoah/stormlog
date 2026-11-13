@@ -7,6 +7,7 @@ from typing import Any
 
 from stormlog.infer import analysis
 from stormlog.infer.sample_report import (
+    group_samples,
     request_window,
     sample_peaks,
     samples_in_window,
@@ -96,6 +97,28 @@ def test_a_malformed_device_id_gets_its_own_group() -> None:
 
 def test_no_samples_have_no_peaks() -> None:
     assert sample_peaks([]) == []
+
+
+def test_groups_are_the_peaks_groups_with_their_members_in_order() -> None:
+    samples = [
+        _sample(3, sampler="psutil", process_rss_bytes=11),
+        _sample(1, sampler="nvml", device_id=0, device_used_bytes=5),
+        _sample(2, sampler="nvml", device_id=1, device_used_bytes=3),
+        _sample(0, sampler="nvml", device_id=0, device_used_bytes=7),
+        _sample(4, sampler="nvml", device_id="0", device_used_bytes=1),
+    ]
+    groups = group_samples(samples)
+    assert [(s, d, [m["timestamp_ns"] for m in ms]) for s, d, ms in groups] == [
+        ("nvml", 0, [1, 0]),
+        ("nvml", "0", [4]),
+        ("nvml", 1, [2]),
+        ("psutil", None, [3]),
+    ]
+    peaks = sample_peaks(samples)
+    assert [(p["sampler"], p["device_id"], p["samples"]) for p in peaks] == [
+        (s, d, len(ms)) for s, d, ms in groups
+    ]
+    assert group_samples([]) == []
 
 
 def test_the_helpers_follow_the_analyzers_rules() -> None:
