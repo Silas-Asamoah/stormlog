@@ -1,0 +1,17 @@
+{
+  "format": "stormlog.studio.capabilities",
+  "schema_version": 1,
+  "jobs": {
+    "state": "unavailable",
+    "reason": "slice_2"
+  },
+  "analyzer": {
+    "enabled": true,
+    "max_bytes": 134217728,
+    "timeout_s": 300.0
+  },
+  "export_profiles": [
+    "original_bytes"
+  ],
+  "remote": false
+}
