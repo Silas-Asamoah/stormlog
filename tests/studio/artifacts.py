@@ -752,3 +752,21 @@ MULTI_SESSION = frozenset({"multi_session"})  # Studio refuses it (decision 7)
 NO_TERMINAL_RECORD = frozenset(
     {"truncated_mid_line", "truncated_after_newline", "growing"}
 )
+
+LARGE_REQUESTS = 500_000
+LARGE_GAPS = 15
+
+
+def large_artifact(directory: Path) -> Path:
+    """The 500,000-request, 15-gap artifact for the 2 s route target and
+    Fable's D-1/F-7 timings: one case at concurrency 64, every 100th
+    request failed, token counts mixed."""
+    return synthetic_artifact(
+        directory,
+        requests=LARGE_REQUESTS,
+        gaps_per_request=LARGE_GAPS,
+        seed=1,
+        name="large.jsonl",
+        fail_every=100,
+        tokens="mixed",
+    )
