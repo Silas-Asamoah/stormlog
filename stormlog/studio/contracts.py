@@ -208,7 +208,11 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def session_id(self) -> str:
-        """``str(record.get("session_id", "unknown"))``."""
+        """``str(record.get("session_id", "unknown"))``.
+
+        ``"unknown"`` never counts as a second session in C1's
+        ``multiple_sessions`` check.
+        """
         raise NotImplementedError
 
     @property
@@ -456,7 +460,7 @@ class SessionInfo:
     started_at_ns: int | None  # timestamp_ns of the first infer.session record
     ended_at_ns: int | None  # timestamp_ns of the terminal record
     terminal: bool  # a record with a status other than "running" exists
-    config: Mapping[str, Any]  # the first record's config, as written
+    config: Mapping[str, Any]  # the first record's config, after finite_copy
 
 
 @dataclass(frozen=True)
@@ -466,6 +470,17 @@ class IndexSnapshot:
     Columns are append-only, so a snapshot shares them with later ones,
     bounded by its own length. ``requests`` gives row views; ``table`` and
     :meth:`column` give the same values by column (D-1).
+
+    C1 passes every kept record (``kept``, and the session ``config`` it
+    digests) through :func:`finite_copy` once, at index time, so a NaN or
+    an infinity that ``json.loads`` accepted cannot make
+    :func:`encode_json` refuse a document that embeds one.
+
+    ``failure == "multiple_sessions"`` means the file's client requests or
+    session records name two or more distinct ``session_id`` values other
+    than ``"unknown"``. A ``session_id`` of ``"unknown"`` (a record that
+    lacks the field, :class:`RequestRow`'s identity rule) never counts as a
+    second session.
     """
 
     path: str  # root-relative POSIX path
@@ -487,7 +502,7 @@ class IndexSnapshot:
     table: RequestTable  # the same requests by column (D-1)
     by_request_id: Mapping[str, tuple[int, ...]]  # request_id -> indexes into requests
     samples: Sequence[Mapping[str, Any]]  # infer.system_sample rows, no metadata
-    kept: Mapping[str, tuple[Mapping[str, Any], ...]]  # event_type -> small records
+    kept: Mapping[str, tuple[Mapping[str, Any], ...]]  # event_type -> finite records
     request_links: Mapping[
         str, tuple[LineRef | None, LineRef | None]
     ]  # request_id -> (dispatch, first_content)
