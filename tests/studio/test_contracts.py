@@ -23,12 +23,14 @@ from stormlog.infer.diagnosis_inputs import record_id
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import contracts
 from stormlog.studio.contracts import (
+    AnalysisCache,
     BusyError,
     ConflictError,
     DictRow,
     DictTable,
     FileIdentity,
     ForbiddenError,
+    IndexRegistry,
     IndexSnapshot,
     InvalidInputError,
     LineProblem,
@@ -505,11 +507,89 @@ def test_error_document_defaults_and_independence() -> None:
     assert UsageError("x", "y").document()["error"]["details"] == {}
 
 
-def test_not_ready_keeps_its_state_and_retry_after() -> None:
-    state = {"status": "building", "bytes_read": 10}
+def test_not_ready_carries_the_enveloped_analysis_document() -> None:
+    state = envelope("analysis", {"status": "running"}, snapshot())
     ready = NotReady(state, retry_after_s=2)
     assert ready.state == state and ready.retry_after_s == 2
-    assert NotReady({}).retry_after_s == 1
+    assert NotReady(state).retry_after_s == 1
+    assert not isinstance(ready, StudioError)
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"status": "building", "bytes_read": 10},
+        envelope("artifact", {}, snapshot()),
+        {},
+    ],
+)
+def test_not_ready_refuses_anything_but_an_analysis_document(
+    state: Mapping[str, Any],
+) -> None:
+    with pytest.raises(ValueError, match="stormlog.studio.analysis"):
+        NotReady(state)
+
+
+def _doc(item: Any) -> str:
+    return " ".join((item.__doc__ or "").split())
+
+
+def test_the_contract_states_who_raises_not_ready() -> None:
+    assert "Only C4's analysis routes raise it" in _doc(NotReady)
+    assert "Never raises :class:`NotReady`" in _doc(IndexRegistry.snapshot)
+    assert 'zero-row snapshot with ``status="building"``' in _doc(
+        IndexRegistry.snapshot
+    )
+    wait = _doc(IndexRegistry.wait)
+    assert "it never raises on a timeout" in wait
+    assert 'may still be ``"building"``' in wait
+    assert "raise :class:`NotReady`" in _doc(AnalysisCache)
+
+
+def test_the_artifact_document_is_never_a_202_body() -> None:
+    description = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")["description"]
+    assert "also the 202 body" not in description.lower()
+    assert "Always answered with 200" in description
+
+
+def test_a_zero_row_building_snapshot_gives_a_valid_artifact_document() -> None:
+    building = snapshot(
+        generation=0,
+        status="building",
+        identity=None,
+        bytes_read=0,
+        sha256=None,
+        prefix_sha256=hashlib.sha256(b"").hexdigest(),
+        growing=False,
+        origin_ns=None,
+        session=None,
+        requests=(),
+        table=DictTable(()),
+        by_request_id={},
+        inventory={},
+        limits_hit=frozenset(),
+    )
+    body: dict[str, Any] = {
+        "session": None,
+        "index": {
+            "status": "building",
+            "failure": None,
+            "bytes_read": 0,
+            "size": None,
+            "progress": None,
+            "pending_tail_bytes": 0,
+            "prefix_sha256": building.prefix_sha256,
+            "requests": 0,
+            "samples": 0,
+        },
+        "inventory": [],
+        "problems": {"count": 0, "first": []},
+        "cases": [],
+        "warnings": [],
+    }
+    document = to_wire(envelope("artifact", body, building))
+    assert document["artifact"]["status"] == "building"
+    assert _errors("studio_artifact_v1.schema.json", document) == []
 
 
 def test_line_types_are_frozen() -> None:

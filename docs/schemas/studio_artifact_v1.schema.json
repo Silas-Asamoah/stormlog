@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_artifact_v1.schema.json",
   "title": "Stormlog Studio artifact v1",
-  "description": "GET /api/v1/artifact (design §5.4): an artifact's identity, session, index state and progress, inventory, problems, cases and warnings. Also the 202 body while the index builds.",
+  "description": "GET /api/v1/artifact (design §5.4): an artifact's identity, session, index state and progress, inventory, problems, cases and warnings. Always answered with 200: while the index builds, the document comes from the zero-row snapshot C1 publishes as soon as a build is scheduled, with artifact.status and index.status building. Studio's only 202 is the analysis route's, whose body is the stormlog.studio.analysis document (contracts.NotReady).",
   "type": "object",
   "additionalProperties": false,
   "required": [
