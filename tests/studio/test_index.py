@@ -54,7 +54,9 @@ from tests.studio.artifacts import (
     MIXED_CASES,
     MULTI_SESSION,
     NO_TERMINAL_RECORD,
+    PROBLEM_LINES,
     STANDARD_ARTIFACTS,
+    UNSUPPORTED,
     GrowingCopy,
     rewrite_in_place,
     with_execution_import,
@@ -204,6 +206,32 @@ def edited_copy(
     return write_records(target, records)
 
 
+def same(a: Any, b: Any) -> bool:
+    """``a == b``, with NaN equal to NaN at any depth (C5's ``nan_gap``)."""
+    if isinstance(a, float) and isinstance(b, float) and math.isnan(a):
+        return math.isnan(b)
+    if isinstance(a, dict) and isinstance(b, dict):
+        return list(a) == list(b) and all(same(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return len(a) == len(b) and all(same(x, y) for x, y in zip(a, b))
+    return bool(a == b)
+
+
+# The index failure behind each 422 code C5's UNSUPPORTED names (§5.2).
+UNSUPPORTED_FAILURE = {
+    "unsupported_artifact": "audio",
+    "not_an_inference_artifact": "not_an_inference_artifact",
+}
+
+
+def check_unsupported(snapshot: IndexSnapshot, name: str) -> None:
+    """Studio refuses the file: failed, with the code C5 says, no rows."""
+    expected = UNSUPPORTED_FAILURE[UNSUPPORTED[name]]
+    assert (snapshot.status, snapshot.failure) == ("failed", expected)
+    assert len(snapshot.requests) == len(snapshot.table) == 0
+    encode_json({"artifact": artifact_block(snapshot)})
+
+
 def check_rows(snapshot: IndexSnapshot, path: Path) -> None:
     """Rows, row attributes and columns equal the file's client records."""
     expected = client_lines(path)
@@ -211,7 +239,7 @@ def check_rows(snapshot: IndexSnapshot, path: Path) -> None:
     for i, (number, line, record) in enumerate(expected):
         row = snapshot.requests[i]
         assert isinstance(row, ColumnRow) and isinstance(row, RequestRow)
-        assert dict(row) == record and list(row) == list(record)
+        assert same(dict(row), record) and list(row) == list(record)
         assert row.index == i and row.ref.line == number
         assert row.ref.sha256 == hashlib.sha256(line).hexdigest()
         twin = DictRow(record, index=i, ref=row.ref)
@@ -219,7 +247,7 @@ def check_rows(snapshot: IndexSnapshot, path: Path) -> None:
             assert getattr(row, name) == getattr(twin, name), name
         assert row.gap_count == twin.gap_count
         assert dict(row.client) == dict(twin.client)
-        assert tuple(row.load_gaps()) == tuple(twin.load_gaps())
+        assert same(tuple(row.load_gaps()), tuple(twin.load_gaps()))
         assert row.load_error_message() == twin.load_error_message()
         assert i in snapshot.by_request_id[row.request_id]
     keys = {key for _, _, record in expected for key in record} | {"no_such_key"}
@@ -230,7 +258,7 @@ def check_rows(snapshot: IndexSnapshot, path: Path) -> None:
             if name in CLIENT_METRICS:
                 assert column[i] == snapshot.requests[i].client[name].value_ms
             else:
-                assert column[i] == record.get(name), (name, i)
+                assert same(column[i], record.get(name)), (name, i)
 
 
 # --- Every standard artifact -----------------------------------------------
@@ -245,8 +273,11 @@ def test_each_standard_artifact_indexes_its_client_requests(
 ) -> None:
     path = studio_artifacts[name]
     snapshot = harness_for(path).build(path.name)
-    assert (snapshot.status, snapshot.failure) == ("ready", None)
     assert snapshot.path == path.name and len(snapshot.index_id) == 32
+    if name in UNSUPPORTED:
+        check_unsupported(snapshot, name)
+        return
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
     check_rows(snapshot, path)
 
 
@@ -256,6 +287,9 @@ def test_each_standard_artifact_keeps_its_records_and_counts(
 ) -> None:
     path = studio_artifacts[name]
     snapshot = harness_for(path).build(path.name)
+    if name in UNSUPPORTED:  # not_an_inference_artifact: the codec refuses it
+        check_unsupported(snapshot, name)
+        return
     records = all_records(path)
     kept = {
         kind: tuple(r for r in records if r.get("event_type") == kind)
@@ -271,7 +305,10 @@ def test_each_standard_artifact_keeps_its_records_and_counts(
     if contexts:
         inventory["infer.context"] = {4: contexts}
     assert snapshot.inventory == inventory
-    assert snapshot.problems == () and snapshot.problem_count == 0
+    allowed = {PROBLEM_LINES[name]} if name in PROBLEM_LINES else set()
+    assert {problem.code for problem in snapshot.problems} <= allowed
+    assert snapshot.problem_count == len(snapshot.problems)
+    assert sum(snapshot.problem_counts.values()) == snapshot.problem_count
     sessions = [r for r in records if r.get("event_type") == "infer.session"]
     assert snapshot.session is not None
     assert snapshot.session.session_id == sessions[0]["session_id"]
