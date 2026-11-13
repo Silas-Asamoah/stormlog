@@ -1169,8 +1169,10 @@ class PublishingRegistry(IndexRegistry, Protocol):
         Called on the builder pool, on the thread that built the snapshot,
         after the snapshot is current, for each new generation and for each
         ``dataclasses.replace`` republish (same rows; ``growing``,
-        ``identity``, ``status`` or the problems changed). Not called for
-        the zero-row ``building`` snapshot of a new index. Listeners run in
+        ``identity``, ``status`` or the problems changed). Not called for a
+        snapshot whose status is ``building`` (the zero-row one of a new
+        index, or a batch of its first build), so a warm-up does not run
+        per batch of a large file. Listeners run in
         the order added; one that raises is logged and the others still
         run. C4 warms caches with it, such as C2's ``case_facts``.
 
