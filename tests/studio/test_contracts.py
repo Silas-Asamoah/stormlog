@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import math
 import subprocess
@@ -316,6 +317,23 @@ def test_dict_row_identity_rule_for_missing_fields() -> None:
 def test_dict_row_record_id_matches_diagnosis_inputs_for_v2_records() -> None:
     record = request_record(schema_version=2, event_id="evt-1")
     assert DictRow(record).record_id == record_id(record) == "evt-1"
+
+
+def test_dict_row_builds_a_synthetic_ref_without_one() -> None:
+    record = request_record()
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+    assert DictRow(record, line=842).ref == LineRef(
+        line=842,
+        offset=0,
+        length=len(encoded),
+        sha256=hashlib.sha256(encoded).hexdigest(),
+    )
+
+
+def test_dict_row_uses_a_given_ref_as_is() -> None:
+    real = LineRef(line=842, offset=1_048_000, length=611, sha256="b" * 64)
+    row = DictRow(request_record(), line=3, ref=real)
+    assert row.ref is real
 
 
 def test_dict_row_is_read_only() -> None:
