@@ -124,7 +124,7 @@
       "type": "string"
     },
     "fingerprint": {
-      "description": "sha256: + hex of path, index ID, generation and params.",
+      "description": "contracts.selection_fingerprint(path, index_id, generation, params): sha256: and the hex SHA-256 of the four, newline-joined.",
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
     },
