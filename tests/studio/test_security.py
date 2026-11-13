@@ -820,6 +820,20 @@ def test_documents_validate_against_their_schemas(ctx: StudioContext) -> None:
         validate(body_json(made), "bootstrap")
 
 
+@pytest.mark.parametrize(
+    "bomb", [b"[" * 60_000, b'{"a":' * 30_000], ids=["array", "object"]
+)
+def test_a_json_nesting_bomb_is_a_bad_parameter(
+    ctx: StudioContext, bomb: bytes
+) -> None:
+    # Fable's probe: 60 KB of "[" raised RecursionError, which became 500.
+    tickets = handlers(ctx)["/api/v1/tickets"].handler
+    assert code_of(lambda: tickets(json_request("/api/v1/tickets", bomb))) == (
+        400,
+        "bad_parameter",
+    )
+
+
 def test_ticket_issue_refuses_bad_routes_and_queries(ctx: StudioContext) -> None:
     tickets = handlers(ctx)["/api/v1/tickets"].handler
     for body in (
