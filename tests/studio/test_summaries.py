@@ -39,7 +39,7 @@ from stormlog.studio.contracts import (
     to_wire,
 )
 from stormlog.studio.metric_catalog import metric_catalog, panels
-from stormlog.studio.selection import case_facts, page, parse_filter, select
+from stormlog.studio.selection import case_facts, page, parse_filter, select, warm
 from tests.studio.artifacts import ANALYZE_FAILS, MULTI_SESSION, STANDARD_ARTIFACTS
 from tests.studio.conftest import StandardArtifacts
 from tests.studio.test_index import Harness
@@ -962,13 +962,13 @@ def large_index_snapshot(large_studio_artifact: Path) -> Any:
     """C1's real ArtifactIndexes over the large file (Fable's F-2: time the
     index Studio serves, not a stand-in)."""
     snapshot = Harness(large_studio_artifact.parent).build(large_studio_artifact.name)
-    case_facts(snapshot)  # warmed once per snapshot, as on the builder pool
+    warm(snapshot)  # as C4's publish listener does, on the builder pool
     return snapshot
 
 
 @pytest.mark.studio_large
 def test_summary_takes_under_2_s_on_500000_requests(large_index_snapshot: Any) -> None:
-    # The first summary of the snapshot, so building its columns counts.
+    # The first summary of the warmed snapshot.
     snapshot = large_index_snapshot
     assert snapshot.status == "ready" and columnar(snapshot.table) is not None
     sel = select(snapshot, RequestFilter())
