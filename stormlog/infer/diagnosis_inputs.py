@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,16 @@ from .correlation_codec import CorrelationRecordDecoder
 from .correlation_events import InferenceRecord
 
 INPUT_KIND = "inference_jsonl"
+
+# The deepest a line may nest arrays and objects, the record's own object
+# included (serde_json's default). Deeper is not JSON on every Python:
+# json.loads's own limit is about 1,000 on 3.10, 10,000 on 3.12 and 3.13,
+# and from 3.14 whatever the thread's stack holds, while Studio's
+# finite_copy and to_wire recurse once a level against a limit of 1,000.
+MAX_NESTING = 128
+# A JSON string, quotes and escapes included: its brackets do not nest.
+_JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"')
+_NOT_BRACKETS = bytes(byte for byte in range(256) if byte not in b"[]{}")
 
 # How a v1 record's ID is built: from these fields, joined by "/" after the
 # event type. A v2 record's ID is its event_id.
@@ -117,6 +128,24 @@ def line_digest(chunk: bytes) -> str:
     return hashlib.sha256(chunk).hexdigest()
 
 
+def nested_too_deep(chunk: bytes, limit: int = MAX_NESTING) -> bool:
+    """Whether ``chunk`` opens more than ``limit`` arrays and objects at once.
+
+    Brackets inside strings do not count, so for valid JSON this is its
+    nesting depth exactly; for invalid JSON it is at least the depth
+    ``json.loads`` reaches before it fails. A line with at most ``limit``
+    brackets in all is answered by counting them, without a scan.
+    """
+    if chunk.count(b"[") + chunk.count(b"{") <= limit:
+        return False
+    depth = 0
+    for byte in _JSON_STRING.sub(b"", chunk).translate(None, _NOT_BRACKETS):
+        depth += 1 if byte in b"[{" else -1
+        if depth > limit:
+            return True
+    return False
+
+
 def record_id(raw: dict[str, Any]) -> str | None:
     """A record's ID: its ``event_id`` for a v2 record, otherwise built from
     the fields that identify it; None when it has none of them."""
@@ -156,4 +185,13 @@ def _line(
     return Line(number, digest, raw, record, record_id(raw)), problem
 
 
-__all__ = ["INPUT_KIND", "InputFile", "Line", "line_digest", "read_input", "record_id"]
+__all__ = [
+    "INPUT_KIND",
+    "MAX_NESTING",
+    "InputFile",
+    "Line",
+    "line_digest",
+    "nested_too_deep",
+    "read_input",
+    "record_id",
+]

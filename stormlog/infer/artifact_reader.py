@@ -52,7 +52,7 @@ from stormlog.infer.artifact_lines import (
     ProblemCode,
 )
 from stormlog.infer.correlation_codec import CorrelationRecordDecoder
-from stormlog.infer.diagnosis_inputs import line_digest
+from stormlog.infer.diagnosis_inputs import MAX_NESTING, line_digest, nested_too_deep
 from stormlog.scrub import scrub_text
 
 __all__ = [
@@ -376,8 +376,13 @@ class ArtifactReader:
         return self._decode(ref, chunk)
 
     def _decode(self, ref: LineRef, chunk: bytes) -> ReadItem:
+        # A line nested past MAX_NESTING is not_json before json.loads sees
+        # it: json.loads's own limit moves with the Python version and, from
+        # 3.14, the thread's stack, and Studio walks a record once a level.
         if not chunk or chunk.isspace():
             return ReadItem(ref, None, None, "blank")
+        if nested_too_deep(chunk):
+            return _problem(ref, "not_json", f"nested deeper than {MAX_NESTING}")
         try:
             raw = json.loads(chunk)
         except (ValueError, RecursionError) as exc:

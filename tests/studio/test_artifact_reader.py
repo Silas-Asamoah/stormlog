@@ -251,6 +251,43 @@ def test_unknown_types_and_newer_versions_never_crash(tmp_path: Path) -> None:
     assert items[1].record == {"schema_version": 5, "event_type": "infer.request"}
 
 
+def nested_line(depth: int) -> bytes:
+    """An infer.x line nesting ``depth`` objects and arrays, its own included."""
+    inner = b"[" * (depth - 1) + b"]" * (depth - 1)
+    return b'{"event_type": "infer.x", "deep": ' + inner + b"}"
+
+
+def test_nesting_past_the_limit_is_not_json_on_any_python_or_thread(
+    tmp_path: Path,
+) -> None:
+    """json.loads's own limit moves with the version and, from 3.14, the
+    thread's stack; the reader's does not, and what it keeps can be walked."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+    from stormlog.studio.contracts import encode_json, finite_copy
+
+    brackets = b"[" * 3 * MAX_NESTING
+    lines = [
+        nested_line(MAX_NESTING),
+        nested_line(MAX_NESTING + 1),
+        nested_line(50_000),
+        b'{"event_type": "infer.x", "text": "' + brackets + b'"}',
+        b'{"event_type": "infer.x", "text": "\\"' + brackets + b'", "n": [[1]]}',
+    ]
+    path = write_lines(tmp_path / "deep.jsonl", lines)
+    items = read_all(reader_for(path))
+    codes = [item.kind if item.problem is None else item.problem.code for item in items]
+    assert codes == ["record", "not_json", "not_json", "record", "record"]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(read_all, reader_for(path)).result() == items
+    assert items[1].problem is not None
+    assert items[1].problem.detail == f"nested deeper than {MAX_NESTING}"
+    record = items[0].record
+    assert record is not None
+    encode_json(finite_copy(record)[0])
+
+
 def test_nan_in_a_record_is_read_as_written(tmp_path: Path) -> None:
     path = write_lines(tmp_path / "nan.jsonl", [b'{"event_type": "x", "v": NaN}'])
     (item,) = read_all(reader_for(path))
