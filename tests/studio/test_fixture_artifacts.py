@@ -20,6 +20,7 @@ import pytest
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.events import InferenceRequestEvent, InferenceSystemSample
+from stormlog.infer.populations import case_populations
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     LARGE_GAPS,
@@ -40,7 +41,7 @@ from tests.studio.artifacts import (
     with_execution_import,
 )
 from tests.studio.conftest import StandardArtifacts
-from tests.studio.fake_openai import CasePolicy, fake_openai
+from tests.studio.fake_openai import Answer, CasePolicy, ServerState, fake_openai
 
 NAMES = sorted(STANDARD_ARTIFACTS)
 
@@ -407,6 +408,153 @@ def test_fresh_artifact_gives_a_private_copy(
 
     assert copy.read_bytes() == studio_artifacts["empty"].read_bytes()
     assert copy != studio_artifacts["empty"]
+
+
+def _windows(path: Path) -> dict[str, dict[str, Any]]:
+    """Each case's measured phase window."""
+    return {
+        r["case_id"]: r
+        for r in _lines(path)
+        if r.get("event_type") == "infer.phase_window" and r["phase"] == "measured"
+    }
+
+
+def _by_case(path: Path) -> Counter[str]:
+    return Counter(r["case_id"] for r in _measured(path))
+
+
+def test_the_open_loop_artifact_has_a_scheduled_rate_window_per_case(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["open_loop"]
+    windows = _windows(path)
+    populations = case_populations(decoded_records(path))
+
+    assert _by_case(path) == {"fixed40_in8_out4": 12, "fixed40_in8_out16": 12}
+    assert set(windows) == set(populations) == set(_by_case(path))
+    for case_id, window in windows.items():
+        assert window["arrival_mode"] == "fixed-rate"
+        assert window["stopped_early"] is False
+        assert window["scheduled_arrivals"] == 12
+        assert window["scheduled_endpoint_offset_ns"] == 300_000_000  # 12 at 40/s
+        rate = populations[case_id].intervals.rate
+        assert rate is not None and rate.kind == "scheduled_window"
+        # A window over the case's rate interval keeps every one of its rows.
+        for request in _measured(path):
+            if request["case_id"] == case_id:
+                assert rate.started_at_ns <= request["intended_at_ns"]
+                assert request["intended_at_ns"] < rate.ended_at_ns
+
+
+def test_the_stopped_early_artifact_ends_its_window_at_the_stop(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["stopped_early"]
+    (window,) = _windows(path).values()
+    (population,) = case_populations(decoded_records(path)).values()
+    rate = population.intervals.rate
+    sessions = [r for r in _lines(path) if _is_terminal(r)]
+
+    assert window["stopped_early"] is True
+    assert 8 <= window["scheduled_arrivals"] < 40
+    assert window["scheduled_endpoint_offset_ns"] < 2_000_000_000
+    assert _by_case(path) == {"fixed20_in8_out4": window["scheduled_arrivals"]}
+    assert rate is not None and rate.kind == "scheduled_window"
+    assert rate.ended_at_ns - rate.started_at_ns == (
+        window["scheduled_endpoint_offset_ns"]
+    )
+    assert [r["status"] for r in sessions] == ["completed"]
+
+
+def test_the_interrupted_artifact_has_a_case_without_a_window(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["interrupted"]
+    populations = case_populations(decoded_records(path))
+    starts = [
+        r["case_id"]
+        for r in _lines(path)
+        if r.get("event_type") == "infer.phase_start" and r["phase"] == "measured"
+    ]
+    whole, cut = "c2_in8_out4", "c2_in8_out16"
+
+    assert [r["status"] for r in _lines(path) if _is_terminal(r)] == ["interrupted"]
+    assert starts == [whole, cut]
+    assert set(_windows(path)) == {whole}
+    assert _by_case(path)[whole] == 12
+    assert 5 <= _by_case(path)[cut] < 12
+    assert populations[whole].intervals.rate is not None
+    assert populations[cut].intervals.rate is None
+    assert populations[cut].intervals.rate_reason == "phase_window_missing"
+
+
+def test_the_fake_server_reads_open_loop_ids_and_stops_or_interrupts_once() -> None:
+    state = ServerState(
+        policies={"fixed4_in8_out4": CasePolicy(stop_after=2, interrupt_after=3)}
+    )
+    ids = [f"stormlog-r-1-fixed4_in8_out4_measured_{i}" for i in range(4)]
+    warmup = state.answer("stormlog-r-1-fixed4_in8_out4_warmup_0")
+
+    answers = [state.answer(request_id) for request_id in ids]
+
+    assert warmup == Answer()
+    assert [(a.stop, a.interrupt) for a in answers] == [
+        (False, False),
+        (True, False),
+        (False, True),
+        (False, False),
+    ]
+    assert state.measured == {"fixed4_in8_out4": 4}
+    assert state.stopped and state.interrupted
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"arrival": "closed", "rate_per_second": 5.0},
+        {"arrival": "fixed-rate"},
+        {"arrival": "burst", "rate_per_second": 5.0},
+    ],
+)
+def test_profile_config_refuses_arrivals_it_cannot_run(
+    options: dict[str, Any], tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError):
+        profile_config(
+            [CaseSpec(1, 8, 4, 3)],
+            endpoint="http://x",
+            output=tmp_path / "a",
+            warmup=0,
+            seed=0,
+            **options,
+        )
+
+
+def test_an_open_loop_run_has_one_in_flight_limit(tmp_path: Path) -> None:
+    cases = [CaseSpec(1, 8, 4, 3), CaseSpec(2, 8, 4, 3)]
+    with pytest.raises(ValueError, match="in-flight"):
+        profile_config(
+            cases,
+            endpoint="http://x",
+            output=tmp_path / "a",
+            warmup=0,
+            seed=0,
+            arrival="poisson",
+            rate_per_second=3.0,
+        )
+
+    config = profile_config(
+        cases[:1],
+        endpoint="http://x",
+        output=tmp_path / "a",
+        warmup=0,
+        seed=0,
+        arrival="poisson",
+        rate_per_second=3.0,
+    )
+    assert [case.case_id for case in config.cases()] == [
+        cases[0].run_case_id(config.arrival_specs()[0])
+    ]
 
 
 def _samples(path: Path) -> list[dict[str, Any]]:
