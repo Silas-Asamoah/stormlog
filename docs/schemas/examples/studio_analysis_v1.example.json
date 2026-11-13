@@ -16,7 +16,8 @@
     "origin_ns": "1788609600000000000",
     "gaps_resident": true,
     "error_messages_resident": true,
-    "limits_hit": []
+    "limits_hit": [],
+    "cut": null
   },
   "status": "ready",
   "reason": "truncated_final_line",
