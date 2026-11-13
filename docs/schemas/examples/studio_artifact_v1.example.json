@@ -148,10 +148,5 @@
       }
     }
   ],
-  "warnings": [
-    {
-      "code": "insufficient_samples",
-      "message": "p95 needs at least 230 successful requests; c8_in4096_out128 has 115"
-    }
-  ]
+  "warnings": []
 }
