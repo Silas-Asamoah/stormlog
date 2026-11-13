@@ -898,12 +898,19 @@ class NotReady(Exception):
     and enveloped by C4 (``envelope("analysis", body, snapshot)``). C3
     serves it verbatim, through :func:`encode_json`, with status 202 and
     ``Retry-After: retry_after_s``, and adds nothing to it. A ``state``
-    whose ``format`` is not ``stormlog.studio.analysis`` raises ValueError.
+    whose ``format`` is not ``stormlog.studio.analysis``, or that has no
+    ``artifact`` block (the analysis document is artifact-scoped), raises
+    ValueError; so does a ``retry_after_s`` that is not an int ≥ 0 (C3
+    writes it into a header; a bool is not an int here).
     """
 
     def __init__(self, state: Mapping[str, Any], retry_after_s: int = 1) -> None:
         if state.get("format") != FORMAT_PREFIX + "analysis":
             raise ValueError("NotReady.state is a stormlog.studio.analysis document")
+        if "artifact" not in state:
+            raise ValueError("NotReady.state carries the snapshot's artifact block")
+        if type(retry_after_s) is not int or retry_after_s < 0:
+            raise ValueError("NotReady.retry_after_s is an int of at least 0")
         super().__init__("not ready")
         self.state: dict[str, Any] = dict(state)
         self.retry_after_s = retry_after_s
