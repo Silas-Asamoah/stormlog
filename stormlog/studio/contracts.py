@@ -1243,6 +1243,11 @@ class WorkspaceScanner(Protocol):
         """Queue a scan on the builder pool; BusyError while one runs."""
         ...
 
+    def wait(self, timeout_s: float) -> bool:
+        """Whether no scan is running, waiting up to ``timeout_s`` for one
+        to finish; never raises on a timeout (C4a's gap 7)."""
+        ...
+
     def state(self) -> dict[str, Any]:
         """The body of ``stormlog.studio.workspace``."""
         ...
