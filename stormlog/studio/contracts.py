@@ -38,7 +38,7 @@ from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, BinaryIO, ClassVar, Literal, Protocol
+from typing import Any, BinaryIO, ClassVar, Literal, Protocol, runtime_checkable
 
 from stormlog.infer.artifact_lines import (
     FileIdentity,
@@ -63,6 +63,9 @@ __all__ = [
     "DictRow",
     "identity_text",
     "RequestTable",
+    "GapPool",
+    "ColumnarTable",
+    "columnar",
     "DictTable",
     "IndexStatus",
     "IndexFailure",
@@ -98,6 +101,8 @@ __all__ = [
     "artifact_block",
     "envelope",
     "IndexRegistry",
+    "PublishingRegistry",
+    "publish_hook",
     "WorkspaceRoot",
     "TokenStore",
     "WorkspaceScanner",
@@ -416,16 +421,87 @@ class RequestTable(Protocol):
     def column(self, name: str) -> Sequence[Any]: ...
 
 
+@dataclass(frozen=True)
+class GapPool:
+    """Every row's chunk gaps as one flat float64 sequence (Fable's F-2).
+
+    Row ``i``'s gaps are ``values[starts[i] : starts[i] + counts[i]]``, in
+    written order, in float milliseconds, NaN where the element was not a
+    number (as :meth:`RequestRow.load_gaps`; ``report_stats.is_number``
+    drops it). ``counts[i]`` is ``RequestRow.gap_count``: 0 for a record
+    whose ``chunk_interarrival_ms`` is absent, null or not a list, and
+    ``starts[i]`` is then where its gaps would have started. ``values`` is
+    an ``array('d')`` (or another float sequence), ``starts`` and
+    ``counts`` int sequences, one element per row.
+    """
+
+    values: Sequence[float]
+    starts: Sequence[int]
+    counts: Sequence[int]
+
+
+@runtime_checkable
+class ColumnarTable(RequestTable, Protocol):
+    """A :class:`RequestTable` with flat arrays for columnar summaries (F-2).
+
+    C1's ``index.ColumnTable`` and :class:`DictTable` implement it; a
+    table that does not is still a valid :class:`RequestTable`, so a reader
+    asks :func:`columnar` and falls back on rows when it gives None.
+
+    Units and rules:
+
+    - :meth:`client_values` is float64 milliseconds, one per row, NaN where
+      ``requests[i].client[metric].value_ms`` is None.
+    - :meth:`client_reasons` gives per-row codes into a table of
+      ``(reason, not_applicable)`` pairs, ``requests[i].client[metric]``'s
+      fields; code 0 is always ``(None, False)``.
+    - The status column is ``column("status")`` (None where absent).
+    - :meth:`line_refs` is ``requests[i].ref`` for every row, built on
+      access without a row view; :meth:`line_lengths` is their
+      ``length`` (bytes without the newline).
+    - :meth:`gap_counts` is ``requests[i].gap_count``; :meth:`gap_pool` is
+      :class:`GapPool`, and raises :class:`NotResident` when the gap pool
+      is not resident (``gaps_resident`` false).
+
+    Immutability: each result is built once per table and cached, has one
+    element per row of the snapshot (``len(table)``), and is a copy, never
+    a view of the index's growing arrays, so ``numpy.frombuffer`` on an
+    ``array`` result is safe and later batches never change it. Callers
+    must not mutate it.
+    """
+
+    def client_values(self, metric: str) -> Sequence[float]: ...
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]: ...
+
+    def line_refs(self) -> Sequence[LineRef]: ...
+
+    def line_lengths(self) -> Sequence[int]: ...
+
+    def gap_counts(self) -> Sequence[int]: ...
+
+    def gap_pool(self) -> GapPool: ...
+
+
+def columnar(table: RequestTable) -> ColumnarTable | None:
+    """``table`` when it has :class:`ColumnarTable`'s arrays, else None."""
+    return table if isinstance(table, ColumnarTable) else None
+
+
 class DictTable:
-    """A :class:`RequestTable` over resident rows, for C2's tests and fixtures.
+    """A :class:`ColumnarTable` over resident rows, for C2's tests and fixtures.
 
     It reads the rows one by one, so it is as slow as row access; C1's index
-    keeps real columns.
+    keeps real columns. Its gap pool is the rows' :meth:`RequestRow.load_gaps`,
+    so it never raises :class:`NotResident`.
     """
 
     def __init__(self, rows: Sequence[RequestRow]) -> None:
         self._rows = tuple(rows)
         self._columns: dict[str, tuple[Any, ...]] = {}
+        self._pool: GapPool | None = None
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -437,6 +513,41 @@ class DictTable:
             self._columns[name] = cached
         return cached
 
+    def client_values(self, metric: str) -> Sequence[float]:
+        return array(
+            "d", (_nan_if_none(row.client[metric].value_ms) for row in self._rows)
+        )
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]:
+        table: dict[tuple[str | None, bool], int] = {(None, False): 0}
+        codes = array("H")
+        for row in self._rows:
+            value = row.client[metric]
+            key = (value.reason, value.not_applicable)
+            codes.append(table.setdefault(key, len(table)))
+        return codes, tuple(table)
+
+    def line_refs(self) -> Sequence[LineRef]:
+        return tuple(row.ref for row in self._rows)
+
+    def line_lengths(self) -> Sequence[int]:
+        return array("q", (row.ref.length for row in self._rows))
+
+    def gap_counts(self) -> Sequence[int]:
+        return array("q", (row.gap_count for row in self._rows))
+
+    def gap_pool(self) -> GapPool:
+        if self._pool is None:
+            values, starts, counts = array("d"), array("q"), array("q")
+            for row in self._rows:
+                starts.append(len(values))
+                values.extend(row.load_gaps())
+                counts.append(len(values) - starts[-1])
+            self._pool = GapPool(values, starts, counts)
+        return self._pool
+
 
 def _cell(row: RequestRow, name: str) -> Any:
     if name.startswith(CLIENT_COLUMN_PREFIX):
@@ -444,11 +555,17 @@ def _cell(row: RequestRow, name: str) -> Any:
     return row.get(name)
 
 
+def _nan_if_none(value: float | None) -> float:
+    return math.nan if value is None else value
+
+
 # --- Index snapshots --------------------------------------------------- (C1 produces)
 
 IndexStatus = Literal["building", "ready", "partial", "failed"]
+# "internal": indexing raised an unexpected error (logged); the index
+# stops for good, so it never stays "building".
 IndexFailure = Literal[
-    "unreadable", "not_an_inference_artifact", "audio", "multiple_sessions"
+    "unreadable", "not_an_inference_artifact", "audio", "multiple_sessions", "internal"
 ]
 LimitHit = Literal["rows", "gaps", "error_messages", "samples", "kept_records"]
 
@@ -515,6 +632,13 @@ class IndexSnapshot:
     limits_hit: frozenset[LimitHit]
     gaps_resident: bool
     error_messages_resident: bool
+    # the first line not indexed when a budget stopped the build
+    # ("rows" in limits_hit): bytes_read is cut.offset. None otherwise.
+    cut: LineRef | None = None
+    # complete lines consumed, blank and problem lines included (the next
+    # line's number); None from a producer that does not count lines (a
+    # test stand-in). C1 always sets it.
+    line_count: int | None = None
 
     def column(self, name: str) -> Sequence[Any]:
         """One request field for every row, in file order (D-1).
@@ -927,7 +1051,9 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
 
     ``terminal`` is False for a file with no session record: no terminal
     record exists. ``size`` is None when the file was never statted
-    (``identity`` is None). ``limits_hit`` is sorted.
+    (``identity`` is None). ``limits_hit`` is sorted. ``cut`` is the first
+    line not indexed (``line``, ``offset``, ``length``, ``sha256``) when a
+    budget stopped the build, so the partial banner can name it; else None.
     """
     session = snapshot.session
     return {
@@ -946,6 +1072,16 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
         "gaps_resident": snapshot.gaps_resident,
         "error_messages_resident": snapshot.error_messages_resident,
         "limits_hit": sorted(snapshot.limits_hit),
+        "cut": None if snapshot.cut is None else _ref_block(snapshot.cut),
+    }
+
+
+def _ref_block(ref: LineRef) -> dict[str, Any]:
+    return {
+        "line": ref.line,
+        "offset": ref.offset,
+        "length": ref.length,
+        "sha256": ref.sha256,
     }
 
 
@@ -1018,6 +1154,39 @@ class IndexRegistry(Protocol):
     def close(self) -> None:
         """Cancel builds and drop every index."""
         ...
+
+
+@runtime_checkable
+class PublishingRegistry(IndexRegistry, Protocol):
+    """An :class:`IndexRegistry` with a publish hook (Fable's F-7).
+
+    C1's ``index.ArtifactIndexes`` implements it. It is a protocol of its
+    own so that a test stand-in for :class:`IndexRegistry` stays one; C4
+    asks :func:`publish_hook` for it and warms nothing when it gives None.
+    """
+
+    def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:
+        """Call ``fn(snapshot)`` after each snapshot an index publishes.
+
+        Called on the builder pool, on the thread that built the snapshot,
+        after the snapshot is current, for each new generation and for each
+        ``dataclasses.replace`` republish (same rows; ``growing``,
+        ``identity``, ``status`` or the problems changed). Not called for
+        the zero-row ``building`` snapshot of a new index. Listeners run in
+        the order added; one that raises is logged and the others still
+        run. C4 warms caches with it, such as C2's ``case_facts``.
+
+        A replace shares the earlier snapshot's ``table`` (and its rows),
+        so a cache keyed on ``id(snapshot.table)`` survives a replace and
+        misses only on new rows or a new index; hold the snapshot (or the
+        table) beside the key, so the id is not reused.
+        """
+        ...
+
+
+def publish_hook(registry: IndexRegistry) -> PublishingRegistry | None:
+    """``registry`` when it takes publish listeners, else None."""
+    return registry if isinstance(registry, PublishingRegistry) else None
 
 
 class WorkspaceRoot(Protocol):
