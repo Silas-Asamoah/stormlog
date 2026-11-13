@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_metric_catalog_v1.schema.json",
+  "title": "Stormlog Studio metric catalog v1",
+  "description": "GET /api/v1/catalog/metrics (design §5.5): one entry per value Studio displays, with its unit, scope, sources, the function that computes it, the requests it uses, its aggregation window and whether Studio computes it. Latency entries are read from slo.CRITERIA.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "metrics",
+    "states"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.metric_catalog"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    },
+    "states": {
+      "description": "The panel states artifact_capabilities uses.",
+      "type": "array",
+      "items": {
+        "enum": [
+          "available",
+          "empty",
+          "pending",
+          "partial",
+          "unavailable",
+          "not_indexed",
+          "in_artifact_panel_later",
+          "unsupported"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "label",
+        "unit",
+        "scope",
+        "sources",
+        "computed_by",
+        "formula",
+        "missing_rule",
+        "applies_to",
+        "aggregation_window",
+        "notes",
+        "status",
+        "reason",
+        "collector"
+      ],
+      "properties": {
+        "key": {
+          "description": "The value's key; a latency key is an slo criterion key.",
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "scope": {
+          "enum": [
+            "client",
+            "server",
+            "client_local_host"
+          ]
+        },
+        "sources": {
+          "description": "Record types and fields it comes from.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "computed_by": {
+          "description": "The Stormlog function that computes it.",
+          "type": "string"
+        },
+        "formula": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "missing_rule": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "applies_to": {
+          "description": "Which requests of a selection it uses.",
+          "type": "string"
+        },
+        "aggregation_window": {
+          "description": "What it aggregates over.",
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "status": {
+          "description": "indexed: Studio computes it; not_indexed: only the analyzer report has it, shown labelled in Sources (decision 4(a)).",
+          "enum": [
+            "indexed",
+            "not_indexed"
+          ]
+        },
+        "reason": {
+          "description": "Why it is not indexed: server_evidence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "collector": {
+          "description": "The command or flag that produces its evidence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}
