@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_analysis_v1.schema.json",
+  "title": "Stormlog Studio analysis v1",
+  "description": "GET /api/v1/artifact/analysis (design §5.4, decision 12), written by analysis_cache.AnalyzerRunner.document: where the out-of-process stormlog infer analyze run for this artifact is, and its report when ready. While the analysis is pending or running this whole document is the 202 body (NotReady.state), with Retry-After. report is the analyzer's JSON report after contracts.to_wire, so it differs from the analyzer's own output on exactly one point: integers under *_ns keys, and integers beyond 2^53 - 1, are decimal strings (§5.1). NaN and infinities are null, listed in non_finite_fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "status",
+    "reason",
+    "exit_code",
+    "analysed_bytes",
+    "input",
+    "detail",
+    "elapsed_s",
+    "retry_after_s",
+    "limits",
+    "report",
+    "non_finite_fields"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.analysis"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "status": {
+      "description": "pending: queued, or waiting for the index. running: the subprocess runs. ready: report holds the analyzer's report. unavailable: nothing will run for this snapshot. failed: the run failed; reason says how.",
+      "enum": [
+        "pending",
+        "running",
+        "ready",
+        "unavailable",
+        "failed"
+      ]
+    },
+    "reason": {
+      "description": "pending: queued, index_building. ready: null, or truncated_final_line when only the complete lines were analysed. unavailable: over_size_cap, growing, empty, no_complete_lines, changed (the file changed since the index read it; a newer snapshot runs again), closed, or the index's failure (unreadable, not_an_inference_artifact, audio, multiple_sessions). failed: timeout, nonzero_exit, unreadable, bad_output, output_too_large.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "exit_code": {
+      "description": "The analyzer's exit code: 0 when ready, the code for nonzero_exit (negative for a signal), null otherwise. infer analyze exits 5 (invalid_input) on a line it cannot read.",
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "analysed_bytes": {
+      "description": "Bytes the report covers, when ready: the whole file, or its complete-line prefix.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "input": {
+      "description": "What the run read (decision 12). null until a run starts reading.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "file_size",
+            "analysed_bytes",
+            "omitted_tail_bytes"
+          ],
+          "properties": {
+            "kind": {
+              "description": "file: the artifact itself. complete_line_prefix: a private copy of its complete lines, because its last line had no newline; the report is about those lines only.",
+              "enum": [
+                "file",
+                "complete_line_prefix"
+              ]
+            },
+            "file_size": {
+              "$ref": "#/$defs/count"
+            },
+            "analysed_bytes": {
+              "$ref": "#/$defs/count"
+            },
+            "omitted_tail_bytes": {
+              "description": "The incomplete last line's bytes, left out; 0 for kind file.",
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      ]
+    },
+    "detail": {
+      "description": "On failure, the end of the analyzer's stderr or the read error, scrubbed, at most 512 bytes.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 512
+    },
+    "elapsed_s": {
+      "description": "Wall time of the finished run.",
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    },
+    "retry_after_s": {
+      "description": "While pending or running: when to ask again. null otherwise.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_bytes",
+        "timeout_s"
+      ],
+      "properties": {
+        "max_bytes": {
+          "description": "Artifacts larger than this are not analysed (over_size_cap).",
+          "$ref": "#/$defs/count"
+        },
+        "timeout_s": {
+          "description": "Wall time per run; the subprocess is killed at it (timeout).",
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "report": {
+      "description": "The analyzer's report in wire form when ready; null otherwise.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "analysis_version"
+          ]
+        }
+      ]
+    },
+    "non_finite_fields": {
+      "description": "Report paths that held NaN or an infinity, now null (contracts.finite_copy).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
