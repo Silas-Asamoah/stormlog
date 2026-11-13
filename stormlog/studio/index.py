@@ -72,6 +72,7 @@ from stormlog.studio.contracts import (
     StudioError,
     WorkspaceRoot,
     finite_copy,
+    identity_text,
 )
 
 __all__ = [
@@ -564,10 +565,6 @@ def _as_gaps(gaps: list[Any]) -> list[float]:
     return [_gap_value(gap) for gap in gaps]
 
 
-def _identity_text(value: Any, present: bool) -> str:
-    return str(value) if present else "unknown"
-
-
 class _Requests:
     """The client requests of one index: rows, client values, pools, IDs."""
 
@@ -597,9 +594,7 @@ class _Requests:
         self._add_client(client_values(record))
         self._add_gaps(row, record.get(GAPS))
         self._add_error(row, record.get(ERROR_MESSAGE))
-        self.ids.add(
-            _identity_text(record.get("request_id"), "request_id" in record), row
-        )
+        self.ids.add(identity_text(record.get("request_id")), row)
         self.count = row + 1
         return row
 
@@ -710,7 +705,7 @@ class _RequestView:
 
     def request_id(self, row: int) -> str:
         _, keys = self.store.keys(row)
-        return _identity_text(self.store.value("request_id", row), "request_id" in keys)
+        return identity_text(self.store.value("request_id", row))
 
     def rows_of(self, request_id: str) -> tuple[int, ...]:
         return self.requests.ids.lookup(request_id, self.n, self.request_id)
@@ -799,9 +794,7 @@ class ColumnRow(RequestRow):
 
     def _identity(self, key: str) -> str:
         _, keys = self._view.store.keys(self._row)
-        if key not in keys:
-            return "unknown"
-        return str(self[key])
+        return identity_text(self[key]) if key in keys else "unknown"
 
     @property
     def session_id(self) -> str:
@@ -1310,9 +1303,7 @@ class _Index:
             self.state.limits_hit.add("rows")
             self.state.stopped = True
             return False
-        self._note_session(
-            _identity_text(record.get("session_id"), "session_id" in record)
-        )
+        self._note_session(identity_text(record.get("session_id")))
         if self.state.failure is not None:
             return False
         self._add_request(record, ref)
@@ -1346,7 +1337,7 @@ class _Index:
             state.limits_hit.add("error_messages")
         if state.origin_ns is None:
             state.origin_ns = _int_or_none(record.get("started_at_ns"))
-        request_id = _identity_text(record.get("request_id"), "request_id" in record)
+        request_id = identity_text(record.get("request_id"))
         links = state.pending_links.pop(request_id, None)
         if links is not None:
             if links[0] >= 0:
@@ -1375,7 +1366,7 @@ class _Index:
 
     def _session(self, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
-        session_id = _identity_text(record.get("session_id"), "session_id" in record)
+        session_id = identity_text(record.get("session_id"))
         self._note_session(session_id)
         timestamp = _int_or_none(record.get("timestamp_ns"))
         if state.session is None:
@@ -1401,7 +1392,7 @@ class _Index:
 
     def _link(self, name: str, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
-        request_id = _identity_text(record.get("request_id"), "request_id" in record)
+        request_id = identity_text(record.get("request_id"))
         pending = state.pending_links.setdefault(request_id, [-1, -1])
         slot = _LINK_TYPES[name]
         if pending[slot] < 0:
