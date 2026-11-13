@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
+import numpy as np
+import numpy.typing as npt
 from scipy import stats
 
 Tails = Literal["symmetric", "narrowest"]
@@ -118,12 +120,26 @@ def quantile(values: Sequence[float], p: float) -> float | None:
     """
     if not values or not 0 <= p <= 1:
         return None
-    ordered = sorted(values)
-    rank = p * (len(ordered) - 1)
+    return quantile_sorted(sorted(values), p)
+
+
+def quantile_sorted(
+    ordered: Sequence[float] | npt.NDArray[np.float64], p: float
+) -> float | None:
+    """``quantile`` of values already in ascending order, without sorting them.
+
+    A caller that reads several levels from one large sample sorts it once,
+    for example into a float64 array, and reads each level here. The
+    arithmetic is ``quantile``'s, so the result is the same float.
+    """
+    count = len(ordered)
+    if not count or not 0 <= p <= 1:
+        return None
+    rank = p * (count - 1)
     lower = int(rank)
-    upper = min(lower + 1, len(ordered) - 1)
+    upper = min(lower + 1, count - 1)
     weight = rank - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+    return float(ordered[lower] * (1.0 - weight) + ordered[upper] * weight)
 
 
 def quantile_minimum_n(
@@ -394,5 +410,6 @@ __all__ = [
     "quantile",
     "quantile_interval",
     "quantile_minimum_n",
+    "quantile_sorted",
     "successful_quantile",
 ]
