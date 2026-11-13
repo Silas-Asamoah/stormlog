@@ -1,0 +1,34 @@
+{
+  "format": "stormlog.studio.workspace",
+  "schema_version": 1,
+  "scan": {
+    "status": "complete",
+    "running": false,
+    "scans": 1,
+    "started_at_utc": "2026-11-13T09:30:00Z",
+    "finished_at_utc": "2026-11-13T09:30:00Z",
+    "duration_s": 0.004,
+    "entries": 5,
+    "files_read": 4,
+    "skipped": {
+      "symlinks": 0,
+      "excluded_dirs": 0,
+      "unreadable": 0
+    },
+    "limits_hit": [],
+    "reason": null
+  },
+  "counts": {
+    "inference_artifact": 2,
+    "audio_artifact": 0,
+    "report": 1,
+    "run_envelope": 1,
+    "total": 4
+  },
+  "limits": {
+    "depth": 8,
+    "entries": 50000,
+    "seconds": 10.0,
+    "sniff_bytes": 65536
+  }
+}
