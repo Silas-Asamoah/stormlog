@@ -50,6 +50,7 @@ from itertools import chain
 from typing import Any, Literal, cast
 from urllib.parse import quote, urlencode
 
+from stormlog.infer.diagnosis_inputs import nested_too_deep
 from stormlog.infer.diagnosis_inputs import record_id as raw_record_id
 from stormlog.infer.events import REQUEST_STATUSES
 from stormlog.studio import export, metric_catalog, selection, summaries
@@ -940,6 +941,8 @@ def _record_id(snapshot: IndexSnapshot, ref: LineRef, data: bytes) -> str | None
     at = bisect_left(refs, ref.line, key=_line_of)
     if at < len(refs) and refs[at].line == ref.line:
         return snapshot.requests[at].record_id
+    if nested_too_deep(data):  # not JSON on every Python, as the reader says
+        return None
     try:
         raw = json.loads(data)
     except (ValueError, RecursionError):
