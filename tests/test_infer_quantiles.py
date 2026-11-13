@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from scipy import stats
 
+from stormlog.infer import quantiles
 from stormlog.infer.quantiles import (
     SufficiencyRule,
     penalized_quantile,
@@ -278,3 +282,33 @@ def test_quantile_levels_must_be_strictly_inside_zero_and_one(p: float) -> None:
 def test_invalid_rules_are_refused(confidence: float, margin: int) -> None:
     with pytest.raises(ValueError):
         SufficiencyRule(confidence=confidence, margin=margin)
+
+
+def _run_time_imports(tree: ast.Module) -> list[str]:
+    """The modules a file imports at run time: every import statement but
+    those under ``if TYPE_CHECKING:``."""
+    found: list[str] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "TYPE_CHECKING":
+            for child in node.orelse:
+                visit(child)
+            return
+        if isinstance(node, ast.Import):
+            found.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            found.append(node.module)
+        for inner in ast.iter_child_nodes(node):
+            visit(inner)
+
+    visit(tree)
+    return found
+
+
+def test_the_analyzer_never_imports_numpy_typing_at_run_time() -> None:
+    # Fable's c2-core P3-1: numpy.typing needs numpy >= 1.21, above the
+    # declared numpy>=1.19 floor, so it may only serve annotations.
+    infer = Path(quantiles.__file__).parent
+    for path in sorted(infer.rglob("*.py")):
+        imports = _run_time_imports(ast.parse(path.read_text(encoding="utf-8")))
+        assert "numpy.typing" not in imports, path.name
