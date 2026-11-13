@@ -1332,6 +1332,37 @@ def test_a_forged_cursor_key_is_a_400_never_a_crash(sort: str, key: list[Any]) -
     assert raised.value.field == "cursor"
 
 
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"generation": 1},  # ahead of the snapshot's generation 0
+        {"generation": 10**6},
+        {"generation": -1},
+        {"extra": 1},
+        {"note": None},
+    ],
+    ids=["one_ahead", "far_ahead", "negative", "extra_key", "null_extra_key"],
+)
+def test_a_cursor_from_the_future_or_with_extra_keys_is_a_400(
+    changes: dict[str, Any],
+) -> None:
+    """Fable's P3-6: such a cursor paged (200); this server never issued
+    it, so it is the 400 the docstring promises."""
+    snapshot = _paging_snapshot()
+    assert snapshot.generation == 0
+    sel = select(snapshot, RequestFilter())
+    issued = page(snapshot, sel, sort="artifact", order="asc", cursor=None, limit=5)
+    assert issued.next_cursor is not None
+    forged = _forged(issued.next_cursor, **changes)
+    with pytest.raises(UsageError) as raised:
+        page(snapshot, sel, sort="artifact", order="asc", cursor=forged, limit=5)
+    assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
+    current = page(
+        snapshot, sel, sort="artifact", order="asc", cursor=issued.next_cursor, limit=5
+    )
+    assert current.rows == tuple(sel.rows[5:10]) and not current.generation_moved
+
+
 @pytest.mark.parametrize("sort", sorted(selection.SORT_KEYS))
 def test_every_issued_cursor_key_still_fits_its_sort(sort: str) -> None:
     snapshot = _paging_snapshot()
