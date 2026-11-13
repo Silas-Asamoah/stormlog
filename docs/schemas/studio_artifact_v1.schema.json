@@ -183,6 +183,23 @@
         "count": {
           "$ref": "#/$defs/count"
         },
+        "by_code": {
+          "description": "contracts.IndexSnapshot.problem_counts: problem lines by code, summing to count. unsupported_version counts the client infer.request lines at another schema version, which are never rows, so the partial banner can say the numbers leave them out (Fable's F-8).",
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "not_json",
+              "not_object",
+              "undecodable",
+              "oversized",
+              "unsupported_version",
+              "truncated_final_line"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
         "first": {
           "type": "array",
           "maxItems": 100,
@@ -278,7 +295,7 @@
       }
     },
     "warnings": {
-      "description": "Artifact-level warnings. Sample sufficiency is not one: C2's summary carries it (latency sufficiency), so the artifact document does not repeat C2's rule and the code insufficient_samples is refused here.",
+      "description": "Artifact-level warnings, the banner's text: index_cut (a budget stopped the index; artifact.cut names the first line left out), unsupported_version (client request lines at another schema version, left out of every number), problem_lines, growing, no_terminal_record, gaps_not_resident, error_messages_not_resident. Sample sufficiency is not one: C2's summary carries it (latency sufficiency), so the artifact document does not repeat C2's rule and the code insufficient_samples is refused here.",
       "type": "array",
       "items": {
         "type": "object",
