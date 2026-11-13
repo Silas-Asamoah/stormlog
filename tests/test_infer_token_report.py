@@ -191,3 +191,14 @@ def test_each_case_of_the_analyzer_reports_its_token_coverage(tmp_path: Path) ->
         assert tokens["coverage"]["output"]["known_sum"] == tokens["output_tokens"]
     assert cases["a"]["tokens"]["coverage"]["output"]["partial"] is True
     assert cases["b"]["tokens"]["coverage"]["prompt"]["exact"] == 1
+
+
+def test_the_report_contract_lists_coverage_as_an_addition_not_a_break() -> None:
+    # Fable's c2-core P3-4: the additive tokens.coverage key sat in the list
+    # of changes that break callers.
+    contract = Path(__file__).resolve().parents[1] / "docs" / "report_contract.md"
+    text = contract.read_text(encoding="utf-8")
+    changes = text.split("### Changes from earlier releases", 1)[1]
+    breaking, rest = changes.split("These additions break no caller:", 1)
+    assert "coverage" not in breaking
+    assert "`coverage`" in rest.split("\n## ", 1)[0]
