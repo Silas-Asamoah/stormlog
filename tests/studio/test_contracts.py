@@ -964,6 +964,16 @@ def test_error_schema_names_the_route_and_media_type_codes() -> None:
         assert _errors("studio_error_v1.schema.json", document) == []
 
 
+def test_error_schema_names_c3s_malformed_request() -> None:
+    schema = _load(SCHEMA_DIR / "studio_error_v1.schema.json")
+    codes = schema["properties"]["error"]["properties"]["code"]["description"]
+    assert "malformed_request (400)" in codes
+    assert "malformed_request" in schema["description"]
+    examples = {doc["error"]["code"]: doc for doc in schema["examples"]}
+    document = UsageError("malformed_request", "the Host header is repeated")
+    assert examples["malformed_request"] == document.document()
+
+
 class UnsupportedMediaTypeError(StudioError):
     """415, as C3's httpd will define it."""
 
