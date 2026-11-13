@@ -565,6 +565,16 @@ def test_the_contract_states_unknown_is_never_a_second_session() -> None:
     assert "never counts as a second session" in _doc(session_id)
 
 
+def test_the_artifact_document_leaves_sample_sufficiency_to_the_summary() -> None:
+    name = "studio_artifact_v1.schema.json"
+    document = _load(EXAMPLE_DIR / "studio_artifact_v1.example.json")
+    assert all(w["code"] != "insufficient_samples" for w in document["warnings"])
+    document["warnings"] = [{"code": "insufficient_samples", "message": "p95"}]
+    assert _errors(name, document)
+    document["warnings"] = [{"code": "growing", "message": "still written"}]
+    assert _errors(name, document) == []
+
+
 def test_the_artifact_document_is_never_a_202_body() -> None:
     description = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")["description"]
     assert "also the 202 body" not in description.lower()
