@@ -29,12 +29,14 @@ from stormlog.studio.contracts import LineProblem
 from tests.studio.artifacts import (
     MIXED_CASES,
     STANDARD_ARTIFACTS,
+    UNSUPPORTED,
     CaseSpec,
     GrowingCopy,
     rewrite_in_place,
     with_execution_import,
 )
 from tests.studio.conftest import StandardArtifacts
+from tests.studio.test_index import same
 
 
 class Clock:
@@ -133,7 +135,14 @@ def test_records_equal_the_codecs_decoding(
     items = read_all(reader_for(path), max_bytes=1024)
     records = [item.record for item in items if item.record is not None]
     lines = [line for line in path.read_bytes().split(b"\n") if line]
-    assert records == expand_inference_records(json.loads(line) for line in lines)
+    try:
+        expected = expand_inference_records(json.loads(line) for line in lines)
+    except ValueError:  # C5's not_an_inference_artifact: the codec refuses it
+        assert name in UNSUPPORTED
+        problems = [item.problem for item in items if item.problem is not None]
+        assert problems and {p.code for p in problems} == {"undecodable"}
+        return
+    assert same(records, expected)
     assert all(item.problem is None for item in items)
     contexts = sum(1 for line in lines if b'"infer.context"' in line)
     assert sum(1 for item in items if item.kind == "context") == contexts
