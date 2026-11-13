@@ -33,6 +33,7 @@ from stormlog.infer.correlation_codec import expand_inference_records
 from stormlog.infer.events import (
     InferencePhaseStartEvent,
     InferenceRequestEvent,
+    InferenceSystemSample,
     JsonlEventWriter,
 )
 from stormlog.infer.profile import InferenceProfiler, _PhaseRequest, _PhaseWindow
@@ -120,12 +121,16 @@ def profile_config(
     output: Path,
     warmup: int,
     seed: int,
+    system_sampler: str = "none",
+    sample_interval_seconds: float = 1.0,
 ) -> ProfileConfig:
     """The config one profile run of ``cases`` takes.
 
     Raises ``ValueError`` for cases one run cannot hold: mixed request
     counts or stream settings, or a set that is not the full product of its
-    concurrencies and token lengths.
+    concurrencies and token lengths. ``system_sampler`` and
+    ``sample_interval_seconds`` are the run's, as ``--system-sampler`` and
+    its interval set them.
     """
     concurrency, inputs, outputs = _run_shape(cases)
     return ProfileConfig(
@@ -139,7 +144,8 @@ def profile_config(
         stream=cases[0].stream,
         warmup_requests=warmup,
         seed=seed,
-        system_sampler="none",
+        system_sampler=system_sampler,
+        sample_interval_seconds=sample_interval_seconds,
         tokenizer="none",
         server_probe="none",
     )
@@ -152,6 +158,8 @@ def profile_artifact(
     name: str = "run.jsonl",
     warmup: int = 2,
     seed: int = 0,
+    system_sampler: str = "none",
+    sample_interval_seconds: float = 1.0,
 ) -> Path:
     """Profile ``fake_openai`` with the real ``InferenceProfiler``.
 
@@ -159,12 +167,20 @@ def profile_artifact(
     measured ones per case, phase windows, the analyzer's summary and the
     terminal session record. An existing file at the path is truncated and
     rewritten in place, as a rerun of ``infer profile`` does.
+    ``system_sampler="psutil"`` writes the run's real ``infer.system_sample``
+    rows (this process's RSS), one every ``sample_interval_seconds``.
     """
     output = Path(directory) / name
     policies = {case.case_id: case.policy() for case in cases}
     with fake_openai(policies) as server:
         config = profile_config(
-            cases, endpoint=server.endpoint, output=output, warmup=warmup, seed=seed
+            cases,
+            endpoint=server.endpoint,
+            output=output,
+            warmup=warmup,
+            seed=seed,
+            system_sampler=system_sampler,
+            sample_interval_seconds=sample_interval_seconds,
         )
         with contextlib.redirect_stdout(io.StringIO()):
             InferenceProfiler(config).run()
@@ -213,6 +229,100 @@ class SyntheticPlan:
     @property
     def case_id(self) -> str:
         return f"c{self.concurrency}_in{self.input_tokens}_out{self.output_tokens}"
+
+
+GIB = 1024**3
+MIB = 1024**2
+
+
+@dataclass(frozen=True)
+class SamplePlan:
+    """The ``infer.system_sample`` rows ``synthetic_artifact`` writes.
+
+    One tick every ``interval_ms`` from the measured phase's start to its
+    drain. Each tick gives a ``psutil`` row (the client's RSS) when
+    ``client`` is set, and an ``nvidia-smi`` row (device memory and
+    utilisation, ``client_local`` like every client sample) for each of
+    ``devices``. ``stale_device`` writes nothing in ticks
+    ``gap_ticks[0]`` to ``gap_ticks[1] - 1`` and from ``stop_tick`` on, so
+    its series has a gap and then goes stale; the real samplers write no row
+    when they cannot read a value, so that is how a missing sample looks.
+    Values are a function of the tick and device only. A real run has one
+    sampler watching one device (``samplers.py``); mixing two here exercises
+    grouping by ``(sampler, device_id)``.
+    """
+
+    interval_ms: int = 50
+    client: bool = True
+    devices: tuple[int, ...] = (0, 1)
+    stale_device: int | None = 1
+    gap_ticks: tuple[int, int] = (6, 12)
+    stop_tick: int = 24
+
+    @property
+    def sampler(self) -> str:
+        """The sampler the header records name."""
+        return "psutil" if self.client else "nvidia-smi"
+
+    def writes(self, device: int, tick: int) -> bool:
+        if device != self.stale_device:
+            return True
+        start, end = self.gap_ticks
+        return not (start <= tick < end or tick >= self.stop_tick)
+
+    def rows(self, session_id: str, tick: int, at_ns: int) -> Iterator[dict[str, Any]]:
+        """The rows of one tick, client first, then by device ID."""
+        if self.client:
+            yield InferenceSystemSample(
+                session_id=session_id,
+                timestamp_ns=at_ns,
+                sampler="psutil",
+                process_rss_bytes=180 * MIB + (tick * 7 % 17) * MIB,
+            ).to_record()
+        for device in self.devices:
+            if self.writes(device, tick):
+                yield _device_sample(session_id, device, tick, at_ns + 1_000 * device)
+
+
+def _device_sample(
+    session_id: str, device: int, tick: int, at_ns: int
+) -> dict[str, Any]:
+    used = (8 + 2 * device) * GIB + (tick * 37 % 101) * MIB
+    return InferenceSystemSample(
+        session_id=session_id,
+        timestamp_ns=at_ns,
+        sampler="nvidia-smi",
+        device_id=device,
+        device_name="Fake GPU 80GB",
+        device_used_bytes=used,
+        device_free_bytes=80 * GIB - used,
+        device_total_bytes=80 * GIB,
+        gpu_utilization_percent=float(tick * 13 % 100),
+    ).to_record()
+
+
+class _SampleClock:
+    """Writes a ``SamplePlan``'s ticks as the phase's requests pass them."""
+
+    def __init__(
+        self, plan: SamplePlan | None, session_id: str, started_ns: int
+    ) -> None:
+        self.plan = plan
+        self.session_id = session_id
+        self.started_ns = started_ns
+        self.tick = 0
+
+    def until(self, writer: JsonlEventWriter, at_ns: int) -> None:
+        """Write every tick at or before ``at_ns`` not yet written."""
+        plan = self.plan
+        if plan is None:
+            return
+        step = plan.interval_ms * 1_000_000
+        while self.started_ns + self.tick * step <= at_ns:
+            tick_ns = self.started_ns + self.tick * step
+            for row in plan.rows(self.session_id, self.tick, tick_ns):
+                writer.append(row)
+            self.tick += 1
 
 
 def _tokens(plan: SyntheticPlan, index: int, chunks: int) -> dict[str, Any]:
@@ -336,10 +446,16 @@ def synthetic_requests(
 
 
 def _synthetic_profiler(
-    plan: SyntheticPlan, path: Path, seed: int
+    plan: SyntheticPlan, path: Path, seed: int, samples: SamplePlan | None = None
 ) -> InferenceProfiler:
     """A profiler whose header records describe ``plan``; it never sends."""
     rng = random.Random(seed)
+    sampling: dict[str, Any] = {"system_sampler": "none"}
+    if samples is not None:
+        sampling = {
+            "system_sampler": samples.sampler,
+            "sample_interval_seconds": samples.interval_ms / 1000,
+        }
     config = ProfileConfig(
         endpoint="http://127.0.0.1:9/v1/chat/completions",
         model=MODEL,
@@ -349,10 +465,10 @@ def _synthetic_profiler(
         output_path=str(path),
         request_count=plan.requests,
         seed=seed,
-        system_sampler="none",
         tokenizer="none",
         server_probe="none",
         run_id=str(uuid.UUID(int=rng.getrandbits(128), version=4)),
+        **sampling,
     )
     profiler = InferenceProfiler(config)
     profiler.request_executor.shutdown()
@@ -395,9 +511,15 @@ def _template_request(
 
 
 def _write_phase(
-    writer: JsonlEventWriter, profiler: InferenceProfiler, plan: SyntheticPlan
+    writer: JsonlEventWriter,
+    profiler: InferenceProfiler,
+    plan: SyntheticPlan,
+    samples: SamplePlan | None = None,
 ) -> int:
-    """The measured phase of ``plan``'s case; returns when it drained."""
+    """The measured phase of ``plan``'s case; returns when it drained.
+
+    ``samples`` rows are written in time order among the requests, as the
+    profiler's sampling task writes them while requests finish."""
     case = profiler.config.cases()[0]
     session_id = profiler.session.session_id
     started = SYNTHETIC_ORIGIN_NS + 5_000_000
@@ -430,8 +552,11 @@ def _write_phase(
     prompt = prompts.take(0)
     template = _template_request(profiler, plan, prompt.digest)
     timeline = _Timeline(plan, started)
+    clock = _SampleClock(samples, session_id, started)
     for record in synthetic_requests(plan, template, timeline, profiler.config.seed):
+        clock.until(writer, record["started_at_ns"])
         writer.append(record)
+    clock.until(writer, timeline.last_ended_ns)
     for index in range(1, plan.requests):
         prompts.take(index)
     window = _PhaseWindow(started, timeline.last_sent_ns, timeline.last_ended_ns)
@@ -456,6 +581,7 @@ def synthetic_artifact(
     concurrency: int = 64,
     fail_every: int | None = None,
     tokens: TokenMode = "exact",
+    samples: SamplePlan | bool = False,
 ) -> Path:
     """One closed-loop case of ``requests`` streamed requests.
 
@@ -465,8 +591,10 @@ def synthetic_artifact(
     start at ``SYNTHETIC_ORIGIN_NS``, so a seed always writes the same
     requests. ``fail_every`` makes every Nth request a server 500;
     ``tokens`` picks exact, estimated or missing output counts, or all three
-    in turn. No ``infer.dispatch``, ``infer.first_content`` or
-    ``infer.summary`` records are written.
+    in turn. ``samples`` writes ``InferenceSystemSample`` rows through the
+    same writer: True for the default ``SamplePlan``. No
+    ``infer.dispatch``, ``infer.first_content`` or ``infer.summary``
+    records are written.
     """
     if not 0 <= gaps_per_request <= MAX_SYNTHETIC_GAPS:
         raise ValueError(f"gaps_per_request must be 0 to {MAX_SYNTHETIC_GAPS}")
@@ -477,12 +605,15 @@ def synthetic_artifact(
         fail_every=fail_every,
         tokens=tokens,
     )
+    sample_plan = samples if isinstance(samples, SamplePlan) else None
+    if samples is True:
+        sample_plan = SamplePlan()
     path = Path(directory) / name
-    profiler = _synthetic_profiler(plan, path, seed)
+    profiler = _synthetic_profiler(plan, path, seed, sample_plan)
     with JsonlEventWriter(path) as writer:
         writer.append(profiler._session_record())
         profiler._write_run_records(writer)
-        drained = _write_phase(writer, profiler, plan)
+        drained = _write_phase(writer, profiler, plan, sample_plan)
     with mock.patch("stormlog.session.now_ns", return_value=drained + 1_000_000):
         profiler._write_terminal_session(
             output_path=path, report=None, status="completed"
@@ -738,6 +869,13 @@ STANDARD_ARTIFACTS: Mapping[str, Builder] = {
     "tokens_mixed": _synthetic("tokens_mixed", 60, tokens="mixed", fail_every=10),
     "warmup_measured": _profiled("warmup_measured", [CaseSpec(2, 8, 4, 8)], warmup=4),
     "empty": _synthetic("empty", 0),
+    "samples": _synthetic("samples", 60, samples=True),
+    "samples_psutil": _profiled(
+        "samples_psutil",
+        [CaseSpec(2, 8, 4, 8)],
+        system_sampler="psutil",
+        sample_interval_seconds=0.02,
+    ),
     "synthetic": _synthetic("synthetic", 2_000, fail_every=50),
     "execution_import": _execution_import,
     "truncated_mid_line": _truncated("truncated_mid_line", "mid_line"),
