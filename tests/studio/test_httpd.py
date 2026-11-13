@@ -597,6 +597,10 @@ def test_request_log_names_the_route_never_the_query(
 ) -> None:
     studio = make_studio(log_requests=True)
     studio.get("/api/v1/health?secret=hunter2")
+    # The line is written after the response is sent, so wait for it.
+    deadline = time.monotonic() + 5.0
+    while "\n" not in studio.stderr.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.01)
     logged = studio.stderr.getvalue()
     assert "GET /api/v1/health 200" in logged
     assert "hunter2" not in logged
