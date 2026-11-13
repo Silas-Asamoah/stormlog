@@ -20,7 +20,8 @@
     "origin_ns",
     "gaps_resident",
     "error_messages_resident",
-    "limits_hit"
+    "limits_hit",
+    "cut"
   ],
   "properties": {
     "path": {
@@ -114,6 +115,17 @@
           "kept_records"
         ]
       }
+    },
+    "cut": {
+      "description": "The first line not indexed when a budget stopped the build (limits_hit has rows); bytes_read is its offset. null otherwise.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/line_ref"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -143,6 +155,31 @@
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "line_ref": {
+      "description": "contracts.LineRef: a 0-based line number, its byte offset, its length without the newline, and the SHA-256 of those bytes.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line",
+        "offset",
+        "length",
+        "sha256"
+      ],
+      "properties": {
+        "line": {
+          "$ref": "#/$defs/count"
+        },
+        "offset": {
+          "$ref": "#/$defs/count"
+        },
+        "length": {
+          "$ref": "#/$defs/count"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
     }
   }
 }
