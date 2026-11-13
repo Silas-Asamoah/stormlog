@@ -788,7 +788,11 @@ def page(
     if order not in ("asc", "desc"):
         raise _bad("order", f"unknown value {order!r}", allowed=["asc", "desc"])
     _check_limit(limit)
-    last = None if cursor is None else _read_cursor(cursor, sel, sort, order)
+    last = (
+        None
+        if cursor is None
+        else _read_cursor(cursor, sel, sort, order, len(snapshot.table))
+    )
     ordered, keys = _ordered(snapshot, sel.rows, sort, order)
     start = 0 if last is None else _after(keys, last["key"], order)
     chosen = tuple(ordered[start : start + limit])
@@ -888,7 +892,15 @@ def _cursor(sel: Selection, sort: str, order: str, key: SortKeyValue) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def _read_cursor(cursor: str, sel: Selection, sort: str, order: str) -> dict[str, Any]:
+def _read_cursor(
+    cursor: str, sel: Selection, sort: str, order: str, size: int
+) -> dict[str, Any]:
+    """The cursor's payload, its key a :data:`SortKeyValue` of ``sort``.
+
+    The key is checked against the sort, as :func:`_ordered` makes keys,
+    and its row against the snapshot's ``size`` rows, so a forged key is
+    a 400 and never reaches a comparison it would break (Fable's F-6).
+    """
     payload = _decode_cursor(cursor)
     if payload["index_id"] != sel.index_id:
         raise _mismatch("index_rebuilt", "the index was rebuilt; restart paging")
@@ -897,8 +909,27 @@ def _read_cursor(cursor: str, sel: Selection, sort: str, order: str) -> dict[str
     if payload["sort"] != sort or payload["order"] != order:
         raise _mismatch("other_sort", "the cursor belongs to another sort")
     key = payload["key"]
+    if not _key_fits(sort, key, size):
+        raise _bad("cursor", "not a cursor this server issued")
     payload["key"] = (key[0], key[1], key[2])
     return payload
+
+
+def _key_fits(sort: str, key: Sequence[Any], size: int) -> bool:
+    """Whether ``key`` is one :func:`_ordered` could have made for ``sort``
+    over ``size`` rows: ``(1, None, row)`` for a null; ``(0, row, row)``
+    in file order; else ``(0, value, row)`` with text for a text sort and
+    a finite number for any other."""
+    flag, value, row = key
+    if not 0 <= row < size:
+        return False
+    if sort == "artifact":
+        return flag == 0 and value == row and _is_int(value)
+    if flag == 1:
+        return value is None
+    if sort in _TEXT_SORTS:
+        return isinstance(value, str)
+    return is_number(value)
 
 
 def _decode_cursor(cursor: str) -> dict[str, Any]:
@@ -920,9 +951,15 @@ def _check_cursor(payload: Any) -> None:
             raise ValueError(name)
     if not _is_int(payload.get("generation")):
         raise ValueError("generation")
-    key = payload.get("key")
-    if not isinstance(key, list) or len(key) != 3 or key[0] not in (0, 1):
+    _check_key_shape(payload.get("key"))
+
+
+def _check_key_shape(key: Any) -> None:
+    """Three items: an int flag of 0 or 1, a value, an int row."""
+    if not isinstance(key, list) or len(key) != 3:
         raise ValueError("key")
+    if not _is_int(key[0]) or key[0] not in (0, 1):
+        raise ValueError("key flag")
     if not _is_int(key[2]):
         raise ValueError("key row")
 
