@@ -12,6 +12,7 @@ import pytest
 
 from stormlog.infer import quantiles
 from stormlog.infer.analysis import analyze_inference_events
+from stormlog.infer.cli import main as infer_main
 from stormlog.infer.latency_report import (
     elapsed_ms,
     failure_share,
@@ -82,6 +83,26 @@ def test_tokens_per_chunk_uses_only_counts_the_server_reported() -> None:
     assert streaming_summary(local)["mean_tokens_per_chunk"] is None
     mixed = [_streamed(0), _streamed(1, output_token_source="tiktoken")]
     assert streaming_summary(mixed)["mean_tokens_per_chunk"] == 16.0
+
+
+@pytest.mark.parametrize("tokens", [float("inf"), float("-inf"), float("nan")])
+def test_a_token_count_that_is_not_finite_adds_nothing_and_analyze_still_runs(
+    tmp_path: Path, tokens: float, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Fable's c2-core P3-3: int() of an infinite or NaN count raised and
+    # killed the whole analysis; int_value adds 0, as every other sum does.
+    records: list[dict[str, Any]] = [
+        {"event_type": "infer.session", "session_id": "s1"},
+        _streamed(0),
+        _streamed(1, output_tokens=tokens),
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+    code = infer_main(["analyze", str(path), "--format", "json"])
+    assert code == 0
+    report = json.loads(capsys.readouterr().out)
+    # 128 counted tokens over the two responses' 16 chunks.
+    assert report["cases"]["c1"]["streaming"]["mean_tokens_per_chunk"] == 8.0
 
 
 def test_no_inter_token_latency_appears_outside_vllms_own_block(tmp_path: Path) -> None:
