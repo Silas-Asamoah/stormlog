@@ -29,6 +29,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from .query_cli import main as query_main
 
         return query_main(resolved_argv[1:])
+    if command == "studio":
+        # Imported only here, so no other command loads Studio (decision 9).
+        from .studio.cli import main as studio_main
+
+        return studio_main(resolved_argv[1:])
     if command in {"-h", "--help"}:
         _build_parser().print_help()
         return 0
@@ -65,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["tui", "query", "infer"],
+        choices=["tui", "query", "infer", "studio"],
         help="Command group. Omit to launch the TUI.",
     )
     return parser
