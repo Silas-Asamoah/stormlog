@@ -13,6 +13,7 @@ import json
 import math
 import shutil
 import time
+from array import array
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -39,7 +40,14 @@ from stormlog.studio.contracts import (
     to_wire,
 )
 from stormlog.studio.metric_catalog import metric_catalog, panels
-from stormlog.studio.selection import case_facts, page, parse_filter, select, warm
+from stormlog.studio.selection import (
+    case_facts,
+    page,
+    parse_filter,
+    select,
+    selection_of,
+    warm,
+)
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     MULTI_SESSION,
@@ -939,6 +947,54 @@ def test_every_case_summary_equals_the_analyzers_case_block(
             ), f"{name} {case} {key}"
         assert body["counts"]["server_evidence"] == "not_indexed"
         assert body["counts"]["server_admitted"] is None
+
+
+def _cases_by_select(snapshot: Any) -> dict[str, Any]:
+    """``summaries.cases`` as it was: one ``select`` per case."""
+    facts = case_facts(snapshot)
+    planned = set(facts.planned)
+    entries = []
+    for case_id in sorted(planned | set(facts.by_case)):
+        sel = select(snapshot, RequestFilter(cases=(case_id,)))
+        entries.append(
+            {
+                "case_id": case_id,
+                "planned": case_id in planned,
+                "observed": case_id in facts.by_case,
+                "summary": summaries.summary(snapshot, sel),
+            }
+        )
+    return {"comparison_scope": "full_measured_case", "cases": entries}
+
+
+@pytest.mark.parametrize("name", STUDIO_ARTIFACTS)
+@pytest.mark.parametrize("kind", ["rows", "columns"])
+def test_cases_group_rows_once_and_equal_a_select_per_case(
+    name: str,
+    kind: str,
+    studio_artifacts: StandardArtifacts,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fable's P3-2: the case facts' grouping replaces a whole-table scan
+    per case, and every fixture's cases document is the same JSON text."""
+    path = studio_artifacts[name]
+    snapshot = snapshot_of(path) if kind == "rows" else column_snapshot_of(path)
+    expected = _cases_by_select(snapshot)
+    facts = case_facts(snapshot)
+    for case_id in summaries.case_ids(snapshot):
+        f = RequestFilter(cases=(case_id,))
+        rows = array("q", facts.by_case.get(case_id, ()))
+        assert selection_of(snapshot, f, rows) == select(snapshot, f), case_id
+    scans: list[RequestFilter] = []
+
+    def counted(snapshot: Any, f: RequestFilter) -> Any:
+        scans.append(f)
+        return select(snapshot, f)
+
+    monkeypatch.setattr(summaries, "select", counted)
+    document = summaries.cases(snapshot)
+    assert scans == []
+    assert json.dumps(document, sort_keys=True) == json.dumps(expected, sort_keys=True)
 
 
 def test_parity_covers_every_fixture_studio_reads_whole() -> None:
