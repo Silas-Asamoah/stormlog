@@ -432,6 +432,16 @@ def test_a_snapshot_names_its_cut_and_line_count() -> None:
     assert _errors("studio_artifact_block_v1.schema.json", bad)
 
 
+def test_contexts_is_a_limit_of_the_contract_and_the_schema() -> None:
+    assert contracts.Limits().context_bytes == 16 * 2**20
+    hits = set(get_args(contracts.LimitHit))
+    assert "contexts" in hits
+    schema = _load(SCHEMA_DIR / "studio_artifact_block_v1.schema.json")
+    assert set(schema["properties"]["limits_hit"]["items"]["enum"]) == hits
+    block = to_wire(artifact_block(snapshot(limits_hit=frozenset({"contexts"}))))
+    assert _errors("studio_artifact_block_v1.schema.json", block) == []
+
+
 def test_internal_is_a_failure_of_the_contract_and_the_schema() -> None:
     failures = set(get_args(contracts.IndexFailure))
     assert "internal" in failures

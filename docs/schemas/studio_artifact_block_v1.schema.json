@@ -103,7 +103,7 @@
       "type": "boolean"
     },
     "limits_hit": {
-      "description": "Index budgets reached, sorted.",
+      "description": "Index budgets reached, sorted. rows, samples and contexts make the status partial; contexts: the reader refused new infer.context definitions, so the lines that refer to them are undecodable problems.",
       "type": "array",
       "uniqueItems": true,
       "items": {
@@ -112,7 +112,8 @@
           "gaps",
           "error_messages",
           "samples",
-          "kept_records"
+          "kept_records",
+          "contexts"
         ]
       }
     },
