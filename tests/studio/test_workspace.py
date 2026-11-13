@@ -503,6 +503,33 @@ def test_a_missing_root_fails_the_scan(
     assert "cannot read the root" in scan["reason"]
 
 
+def test_an_unexpected_error_mid_walk_fails_the_scan_and_frees_the_scanner(
+    tmp_path: Path, pool: ThreadPoolExecutor, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_artifact(tmp_path / "a.jsonl")
+    write_artifact(tmp_path / "b.jsonl")
+    real_classify = workspace._classify_fd
+
+    def broken(fd: int, name: str, rel: str) -> WorkspaceItem | None:
+        if name == "b.jsonl":
+            raise RuntimeError("token=sk-abcdefghijklmnopqrstuvwxyz0123 boom")
+        return real_classify(fd, name, rel)
+
+    monkeypatch.setattr(workspace, "_classify_fd", broken)
+    scanner = ArtifactScanner(Root(tmp_path), pool)
+    scanner.scan()
+    assert scanner.wait(30)
+    scan = scanner.state()["scan"]
+    assert (scan["status"], scan["running"]) == ("failed", False)
+    assert "unexpected error: RuntimeError" in scan["reason"]
+    assert "sk-abcdefghijklmnopqrstuvwxyz0123" not in scan["reason"]
+    monkeypatch.setattr(workspace, "_classify_fd", real_classify)
+    scanner.scan()  # not busy: the failed scan freed the scanner
+    assert scanner.wait(30)
+    assert scanner.state()["scan"]["status"] == "complete"
+    assert listed(scanner) == ["a.jsonl", "b.jsonl"]
+
+
 def test_one_scan_at_a_time(tmp_path: Path) -> None:
     class Held:
         """A pool that holds the submitted scan until released."""
