@@ -717,6 +717,12 @@ ERROR_CASES: dict[str, tuple[str, dict[str, Any], int, str]] = {
         "unsupported_artifact",
     ),
     "report_not_a_report": ("/api/v1/report", {"path": MIXED}, 422, "unreadable"),
+    "health_unknown_parameter": (
+        "/api/v1/health",
+        {"x": 1},
+        400,
+        "unknown_parameter",
+    ),
     "items_bad_kind": (
         "/api/v1/workspace/items",
         {"kind": "zip"},
