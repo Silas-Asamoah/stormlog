@@ -264,6 +264,29 @@ def test_to_wire_refuses_values_json_cannot_carry_exactly(value: Any) -> None:
         to_wire(value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"ab",
+        bytearray(b"ab"),
+        memoryview(b"ab"),
+        memoryview(bytearray(b"ab")),
+        memoryview(array("b", [1, 2])),
+        memoryview(b"ab").cast("c"),
+    ],
+)
+def test_bytes_and_byte_memoryviews_have_no_wire_form(value: Any) -> None:
+    with pytest.raises(TypeError):
+        to_wire(value)
+    with pytest.raises(TypeError):
+        to_wire({"payload": [value]})
+
+
+def test_a_memoryview_of_numbers_is_a_list() -> None:
+    assert to_wire(memoryview(array("q", [1, 2]))) == [1, 2]
+    assert to_wire({"t_ns": memoryview(array("q", [3]))}) == {"t_ns": ["3"]}
+
+
 # --- finite_copy and encode_json ---------------------------------------------
 
 
