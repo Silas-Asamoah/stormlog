@@ -231,9 +231,12 @@ def _check_admin(request: HttpRequest, tokens: TokenStore) -> None:
 def _check_ticket(request: HttpRequest, route: Route, tokens: TokenStore) -> None:
     values = request.query[TICKET_PARAM]
     query = canonical_query(query_pairs(request.query))
-    if len(values) != 1 or not tokens.redeem_ticket(
-        values[0], route=route.path, query=query
-    ):
+    # Every ticket presented is spent, even when the request is refused for
+    # carrying more than one: a URL with a ticket in it is used up.
+    redeemed = [
+        tokens.redeem_ticket(value, route=route.path, query=query) for value in values
+    ]
+    if redeemed != [True]:
         raise UnauthorizedError(
             "ticket_invalid",
             "this link was for one use within 30 s; open it again from Studio",
