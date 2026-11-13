@@ -1,0 +1,849 @@
+{
+  "format": "stormlog.studio.metric_catalog",
+  "schema_version": 1,
+  "metrics": [
+    {
+      "key": "client.ttft",
+      "label": "send to the first non-empty content delta, on the client",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request ttft_ms"
+      ],
+      "computed_by": "latency_report.latency_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a missing, negative or non-finite value is no value (slo.client_values); counted in successful_missing",
+      "applies_to": "successful requests (successful); every offered request with the ones that did not succeed ranked worst (failure_penalized)",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "client.ttft_from_intended",
+      "label": "intended arrival to the first non-empty content delta, on the client",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request ttft_ms + dispatch_lag_ms"
+      ],
+      "computed_by": "latency_report.latency_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a missing, negative or non-finite value is no value (slo.client_values); counted in successful_missing",
+      "applies_to": "successful requests (successful); every offered request with the ones that did not succeed ranked worst (failure_penalized)",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "client.e2e",
+      "label": "send to the end of the response, after [DONE] is parsed, on the client",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request e2e_latency_ms"
+      ],
+      "computed_by": "latency_report.latency_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a missing, negative or non-finite value is no value (slo.client_values); counted in successful_missing",
+      "applies_to": "successful requests (successful); every offered request with the ones that did not succeed ranked worst (failure_penalized)",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "client.e2e_from_intended",
+      "label": "intended arrival to the end of the response, on the client",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request ended_at_ns - intended_at_ns"
+      ],
+      "computed_by": "latency_report.latency_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a missing, negative or non-finite value is no value (slo.client_values); counted in successful_missing",
+      "applies_to": "successful requests (successful); every offered request with the ones that did not succeed ranked worst (failure_penalized)",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "client.tpot",
+      "label": "(e2e - ttft) / (output_tokens - 1) with server-reported output tokens; a per-request mean, not inter-token latency",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request with output_token_source server_usage"
+      ],
+      "computed_by": "latency_report.latency_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a missing, negative or non-finite value is no value (slo.client_values); counted in successful_missing",
+      "applies_to": "successful requests (successful); every offered request with the ones that did not succeed ranked worst (failure_penalized)",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "server.ttft",
+      "label": "vLLM's own time to first token",
+      "unit": "ms",
+      "scope": "server",
+      "sources": [
+        "span gen_ai.latency.time_to_first_token",
+        "vllm:time_to_first_token_seconds"
+      ],
+      "computed_by": "latency_report.latency_summary with joined spans",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [
+        "the index does not keep joined spans or execution records; the analyzer report's value is shown, labelled, in Sources"
+      ],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "server.e2e",
+      "label": "vLLM's own end-to-end latency",
+      "unit": "ms",
+      "scope": "server",
+      "sources": [
+        "span gen_ai.latency.e2e",
+        "vllm:e2e_request_latency_seconds"
+      ],
+      "computed_by": "latency_report.latency_summary with joined spans",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [
+        "the index does not keep joined spans or execution records; the analyzer report's value is shown, labelled, in Sources"
+      ],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "server.queue",
+      "label": "vLLM's first wait in the scheduler queue",
+      "unit": "ms",
+      "scope": "server",
+      "sources": [
+        "span gen_ai.latency.time_in_queue",
+        "vllm:request_queue_time_seconds"
+      ],
+      "computed_by": "latency_report.latency_summary with joined spans",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [
+        "the index does not keep joined spans or execution records; the analyzer report's value is shown, labelled, in Sources"
+      ],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "server.itl",
+      "label": "vLLM's inter-token latency, as vLLM defines it",
+      "unit": "ms",
+      "scope": "server",
+      "sources": [
+        "vllm:inter_token_latency_seconds"
+      ],
+      "computed_by": "the vLLM metrics block of infer analyze",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [
+        "the index does not keep joined spans or execution records; the analyzer report's value is shown, labelled, in Sources"
+      ],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "server.tpot",
+      "label": "vLLM's time per output token",
+      "unit": "ms",
+      "scope": "server",
+      "sources": [
+        "vllm:request_time_per_output_token_seconds"
+      ],
+      "computed_by": "the vLLM metrics block of infer analyze",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [
+        "the index does not keep joined spans or execution records; the analyzer report's value is shown, labelled, in Sources"
+      ],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "counts.offered",
+      "label": "requests offered: every measured request of the selection",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.dropped",
+      "label": "never sent: the client's queue was full",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.sent",
+      "label": "offered and not dropped",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.unreachable",
+      "label": "never reached the server",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.delivery_unknown",
+      "label": "may or may not have reached the server",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.rejected",
+      "label": "refused by the server",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.accepted",
+      "label": "sent and not refused, on the client's view",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.successful",
+      "label": "status ok",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.failed",
+      "label": "status error",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.timed_out",
+      "label": "status timeout",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.cancelled",
+      "label": "status cancelled",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.censored",
+      "label": "timed out or cancelled: latency known only to exceed the time seen",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.scheduled",
+      "label": "arrivals the phase window or the seeded workload scheduled",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "populations.populations_from_records for a whole case, else populations.count_population",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "failure.share",
+      "label": "share of offered requests that did not succeed",
+      "unit": "ratio",
+      "scope": "client",
+      "sources": [
+        "infer.request status"
+      ],
+      "computed_by": "latency_report.failure_share",
+      "formula": "(offered - successful) / offered",
+      "missing_rule": "null with empty_selection when nothing was offered",
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "counts.server_admitted",
+      "label": "requests the server confirmed it saw",
+      "unit": "requests",
+      "scope": "server",
+      "sources": [
+        "joined vLLM spans",
+        "infer.request (execution import)"
+      ],
+      "computed_by": "populations.count_population with server IDs",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "counts.server_evidence_coverage",
+      "label": "share of accepted requests the server saw",
+      "unit": "ratio",
+      "scope": "server",
+      "sources": [
+        "joined vLLM spans",
+        "infer.request (execution import)"
+      ],
+      "computed_by": "populations.count_population with server IDs",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "the selection",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "not_indexed",
+      "reason": "server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution"
+    },
+    {
+      "key": "throughput.requests_per_second",
+      "label": "successful requests per second",
+      "unit": "requests/s",
+      "scope": "client",
+      "sources": [
+        "infer.request status, output_tokens, total_tokens",
+        "infer.phase_window",
+        "infer.workload"
+      ],
+      "computed_by": "token_report.successful_throughput",
+      "formula": "count / interval seconds; a missing token count adds 0",
+      "missing_rule": null,
+      "applies_to": "successful requests",
+      "aggregation_window": "the case's rate interval (populations.CaseIntervals.rate), or the part of it a window clamps to; none for a selection that is not rate-eligible",
+      "notes": [
+        "0.0 for a case where nothing succeeded, over a defined interval"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "throughput.output_tokens_per_second",
+      "label": "output tokens of successful requests per second",
+      "unit": "tokens/s",
+      "scope": "client",
+      "sources": [
+        "infer.request status, output_tokens, total_tokens",
+        "infer.phase_window",
+        "infer.workload"
+      ],
+      "computed_by": "token_report.successful_throughput",
+      "formula": "count / interval seconds; a missing token count adds 0",
+      "missing_rule": null,
+      "applies_to": "successful requests",
+      "aggregation_window": "the case's rate interval (populations.CaseIntervals.rate), or the part of it a window clamps to; none for a selection that is not rate-eligible",
+      "notes": [
+        "0.0 for a case where nothing succeeded, over a defined interval"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "throughput.total_tokens_per_second",
+      "label": "total tokens of successful requests per second",
+      "unit": "tokens/s",
+      "scope": "client",
+      "sources": [
+        "infer.request status, output_tokens, total_tokens",
+        "infer.phase_window",
+        "infer.workload"
+      ],
+      "computed_by": "token_report.successful_throughput",
+      "formula": "count / interval seconds; a missing token count adds 0",
+      "missing_rule": null,
+      "applies_to": "successful requests",
+      "aggregation_window": "the case's rate interval (populations.CaseIntervals.rate), or the part of it a window clamps to; none for a selection that is not rate-eligible",
+      "notes": [
+        "0.0 for a case where nothing succeeded, over a defined interval"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "streaming.chunk_interarrival_ms",
+      "label": "gap between content chunks: p50, p95, max",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request chunk_interarrival_ms, stream, ttft_ms"
+      ],
+      "computed_by": "latency_report.streaming_summary",
+      "formula": "rank p * (n - 1), linear interpolation between order statistics; sufficiency by the order-statistic interval rule (quantiles.py)",
+      "missing_rule": "a gap that is not a finite number is left out",
+      "applies_to": "successful streamed responses with a TTFT",
+      "aggregation_window": "the selection",
+      "notes": [
+        "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "streaming.content_chunks_per_response",
+      "label": "content chunks per response: p50, p95, max",
+      "unit": "chunks",
+      "scope": "client",
+      "sources": [
+        "infer.request chunk_interarrival_ms, stream, ttft_ms"
+      ],
+      "computed_by": "latency_report.streaming_summary",
+      "formula": null,
+      "missing_rule": "a gap that is not a finite number is left out",
+      "applies_to": "successful streamed responses with a TTFT",
+      "aggregation_window": "the selection",
+      "notes": [
+        "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "streaming.mean_tokens_per_chunk",
+      "label": "server-reported output tokens per chunk",
+      "unit": "tokens/chunk",
+      "scope": "client",
+      "sources": [
+        "infer.request chunk_interarrival_ms, stream, ttft_ms"
+      ],
+      "computed_by": "latency_report.streaming_summary",
+      "formula": "sum of tokens / sum of chunks, server_usage counts only",
+      "missing_rule": "a gap that is not a finite number is left out",
+      "applies_to": "successful streamed responses with a TTFT",
+      "aggregation_window": "the selection",
+      "notes": [
+        "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "tokens.output.eligible",
+      "label": "output tokens: successful requests",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request output_tokens, output_token_source, output_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.output.known",
+      "label": "output tokens: successful requests with a numeric count",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request output_tokens, output_token_source, output_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.output.exact",
+      "label": "output tokens: known counts flagged exact",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request output_tokens, output_token_source, output_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.output.known_sum",
+      "label": "output tokens: sum of the known counts",
+      "unit": "tokens",
+      "scope": "client",
+      "sources": [
+        "infer.request output_tokens, output_token_source, output_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.prompt.eligible",
+      "label": "prompt tokens: successful requests",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request prompt_tokens, prompt_token_source, prompt_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.prompt.known",
+      "label": "prompt tokens: successful requests with a numeric count",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request prompt_tokens, prompt_token_source, prompt_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.prompt.exact",
+      "label": "prompt tokens: known counts flagged exact",
+      "unit": "requests",
+      "scope": "client",
+      "sources": [
+        "infer.request prompt_tokens, prompt_token_source, prompt_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "tokens.prompt.known_sum",
+      "label": "prompt tokens: sum of the known counts",
+      "unit": "tokens",
+      "scope": "client",
+      "sources": [
+        "infer.request prompt_tokens, prompt_token_source, prompt_token_exact"
+      ],
+      "computed_by": "token_report.token_coverage",
+      "formula": null,
+      "missing_rule": "a count that is not a number is not known; it is never zero",
+      "applies_to": "successful requests",
+      "aggregation_window": "the selection",
+      "notes": [],
+      "status": "indexed",
+      "reason": null,
+      "collector": "a server that reports usage, or --tokenizer"
+    },
+    {
+      "key": "client_memory.peak_process_rss_bytes",
+      "label": "peak process rss bytes per sampler and device",
+      "unit": "bytes",
+      "scope": "client_local_host",
+      "sources": [
+        "infer.system_sample process_rss_bytes"
+      ],
+      "computed_by": "sample_report.sample_peaks",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "system samples of the client's host, by (sampler, device_id)",
+      "aggregation_window": "first start to last end of the selection's successful requests, both ends included (sample_report.request_window)",
+      "notes": [
+        "the machine running Stormlog's client, not the server"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile --system-sampler psutil (or nvml)"
+    },
+    {
+      "key": "client_memory.peak_device_used_bytes",
+      "label": "peak device used bytes per sampler and device",
+      "unit": "bytes",
+      "scope": "client_local_host",
+      "sources": [
+        "infer.system_sample device_used_bytes"
+      ],
+      "computed_by": "sample_report.sample_peaks",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "system samples of the client's host, by (sampler, device_id)",
+      "aggregation_window": "first start to last end of the selection's successful requests, both ends included (sample_report.request_window)",
+      "notes": [
+        "the machine running Stormlog's client, not the server"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile --system-sampler psutil (or nvml)"
+    },
+    {
+      "key": "request.elapsed_ms",
+      "label": "how long a request that did not succeed ran",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request e2e_latency_ms, started_at_ns, ended_at_ns"
+      ],
+      "computed_by": "latency_report.elapsed_ms",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "one request whose status is not ok",
+      "aggregation_window": "one request",
+      "notes": [
+        "only a timeout's is a lower bound on a latency"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    },
+    {
+      "key": "request.gaps",
+      "label": "one response's chunk gaps: p50, p95, max",
+      "unit": "ms",
+      "scope": "client",
+      "sources": [
+        "infer.request chunk_interarrival_ms"
+      ],
+      "computed_by": "latency_report.spread",
+      "formula": null,
+      "missing_rule": null,
+      "applies_to": "one request",
+      "aggregation_window": "one request",
+      "notes": [
+        "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile"
+    }
+  ],
+  "states": [
+    "available",
+    "empty",
+    "pending",
+    "partial",
+    "unavailable",
+    "not_indexed",
+    "in_artifact_panel_later",
+    "unsupported"
+  ]
+}

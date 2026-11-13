@@ -1,0 +1,289 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_samples_v1.schema.json",
+  "title": "Stormlog Studio samples v1",
+  "description": "GET /api/v1/artifact/samples (design §5.4, §5.7): the client host's system samples, one series per (sampler, device_id) as sample_report.group_samples groups them, each with its sample_peaks entry. Per field, a series of at most max_points samples is given whole; a longer one in max_points // 3 equal time buckets with the minimum, maximum and last value. A gap is marked where consecutive samples are more than gap_factor times the series' median interval apart.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "observation_scope",
+    "window",
+    "total",
+    "series",
+    "bounds",
+    "gap_factor"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.samples"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "observation_scope": {
+      "const": "client_local"
+    },
+    "window": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/time_window"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "total": {
+      "description": "Samples in the window.",
+      "$ref": "#/$defs/count"
+    },
+    "series": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sampler",
+          "device_id",
+          "samples",
+          "peaks",
+          "gaps",
+          "fields"
+        ],
+        "properties": {
+          "sampler": {
+            "description": "As sample_report groups it: a string, number, boolean or null; any other value as its repr.",
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "device_id": {
+            "description": "As sample_report groups it: a string, number, boolean or null; any other value as its repr.",
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "samples": {
+            "$ref": "#/$defs/count"
+          },
+          "peaks": {
+            "$ref": "studio_summary_v1.schema.json#/$defs/peak"
+          },
+          "gaps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "after_ns",
+                "before_ns"
+              ],
+              "properties": {
+                "after_ns": {
+                  "$ref": "#/$defs/ns"
+                },
+                "before_ns": {
+                  "$ref": "#/$defs/ns"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "object",
+            "propertyNames": {
+              "enum": [
+                "process_rss_bytes",
+                "device_used_bytes",
+                "device_total_bytes",
+                "gpu_utilization_percent"
+              ]
+            },
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "method",
+                    "points"
+                  ],
+                  "properties": {
+                    "method": {
+                      "const": "all"
+                    },
+                    "points": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "t_ns",
+                          "t_ms",
+                          "value"
+                        ],
+                        "properties": {
+                          "t_ns": {
+                            "$ref": "#/$defs/ns"
+                          },
+                          "t_ms": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "value": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "method",
+                    "buckets"
+                  ],
+                  "properties": {
+                    "method": {
+                      "const": "bucket_min_max_last"
+                    },
+                    "buckets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "start_ns",
+                          "end_ns",
+                          "start_ms",
+                          "count",
+                          "min",
+                          "min_ns",
+                          "max",
+                          "max_ns",
+                          "last",
+                          "last_ns"
+                        ],
+                        "properties": {
+                          "start_ns": {
+                            "$ref": "#/$defs/ns"
+                          },
+                          "end_ns": {
+                            "$ref": "#/$defs/ns"
+                          },
+                          "start_ms": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "count": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "min": {
+                            "type": "number"
+                          },
+                          "min_ns": {
+                            "$ref": "#/$defs/ns"
+                          },
+                          "max": {
+                            "type": "number"
+                          },
+                          "max_ns": {
+                            "$ref": "#/$defs/ns"
+                          },
+                          "last": {
+                            "type": "number"
+                          },
+                          "last_ns": {
+                            "$ref": "#/$defs/ns"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_points",
+        "buckets"
+      ],
+      "properties": {
+        "max_points": {
+          "type": "integer",
+          "minimum": 3,
+          "maximum": 5000
+        },
+        "buckets": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "gap_factor": {
+      "description": "observers.SCRAPE_GAP_FACTOR.",
+      "type": "number"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "time_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_ns",
+        "end_ns",
+        "membership"
+      ],
+      "properties": {
+        "start_ns": {
+          "description": "Inclusive.",
+          "$ref": "#/$defs/ns"
+        },
+        "end_ns": {
+          "description": "Exclusive.",
+          "$ref": "#/$defs/ns"
+        },
+        "membership": {
+          "enum": [
+            "arrival",
+            "overlap"
+          ]
+        }
+      }
+    }
+  }
+}

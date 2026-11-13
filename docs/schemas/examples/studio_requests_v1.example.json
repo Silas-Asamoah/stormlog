@@ -2,18 +2,18 @@
   "format": "stormlog.studio.requests",
   "schema_version": 1,
   "artifact": {
-    "path": "runs/042.jsonl",
-    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
-    "generation": 7,
+    "path": "runs/tokens_mixed.jsonl",
+    "index_id": "0123456789abcdef0123456789abcdef",
+    "generation": 3,
     "status": "ready",
-    "size": 2457600,
-    "bytes_read": 2457600,
-    "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "size": 113467,
+    "bytes_read": 113467,
+    "sha256": "877f73b2321282360b792966250abb83edd4416fb1bb40141bd02edb6dc4f2f9",
     "growing": false,
-    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
     "session_status": "completed",
     "terminal": true,
-    "origin_ns": "1788609595000000000",
+    "origin_ns": "1790000000000000000",
     "gaps_resident": true,
     "error_messages_resident": true,
     "limits_hit": []
@@ -22,7 +22,7 @@
     "filter": {
       "phase": "measured",
       "cases": [
-        "c8_in4096_out128"
+        "c8_in128_out64"
       ],
       "statuses": [],
       "stream": null,
@@ -32,11 +32,11 @@
       "completed_by_ns": null,
       "latency": null
     },
-    "params": "case=c8_in4096_out128&phase=measured",
-    "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
-    "size": 120,
+    "params": "case=c8_in128_out64&phase=measured",
+    "fingerprint": "sha256:cfb96db314262a6265906d892925bbbb03e5156bafb09ad3484000739c3f8558",
+    "size": 60,
     "pooled_cases": 1,
-    "whole_case": "c8_in4096_out128",
+    "whole_case": "c8_in128_out64",
     "cohort": {
       "valid": true,
       "issues": [],
@@ -48,9 +48,9 @@
       "reason": null,
       "interval": {
         "kind": "measured_span",
-        "started_at_ns": "1788609600123456789",
-        "ended_at_ns": "1788609661323456789",
-        "seconds": 61.2,
+        "started_at_ns": "1790000000005000000",
+        "ended_at_ns": "1790000001765441000",
+        "seconds": 1.760441,
         "numerator_cohort": "all_measured"
       }
     },
@@ -58,147 +58,39 @@
   },
   "rows": [
     {
-      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
-      "request_id": "measured_000",
-      "line": 14,
-      "record_id": "infer.request/measured_000",
-      "line_sha256": "585ad236ad3e95d245aa36dcfb7dc3f2dbdca5a47d2ab7185d752c55a6d96163",
-      "case_id": "c8_in4096_out128",
+      "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+      "request_id": "c8_in128_out64_measured_6_22",
+      "line": 28,
+      "record_id": "infer.request/c8_in128_out64_measured_6_22",
+      "line_sha256": "57701b4e660c59fe4a2b5be96a7f41ae9e1d46adefb862114588a2a7a1b6454c",
+      "case_id": "c8_in128_out64",
       "phase": "measured",
       "status": "ok",
       "http_status": 200,
       "error_type": null,
-      "started_at_ns": "1788609600157226987",
-      "ended_at_ns": "1788609600869426987",
-      "start_ms": 5157.226987,
-      "end_ms": 5869.426987,
+      "started_at_ns": "1790000000406561000",
+      "ended_at_ns": "1790000000701475000",
+      "start_ms": 406.561,
+      "end_ms": 701.475,
       "client": {
         "client.ttft": {
-          "value_ms": 575.1,
+          "value_ms": 95.35,
           "reason": null,
           "not_applicable": false
         },
         "client.ttft_from_intended": {
-          "value_ms": null,
-          "reason": "no_dispatch_lag",
+          "value_ms": 95.38,
+          "reason": null,
           "not_applicable": false
         },
         "client.e2e": {
-          "value_ms": 712.2,
+          "value_ms": 294.914,
           "reason": null,
           "not_applicable": false
         },
         "client.e2e_from_intended": {
-          "value_ms": null,
-          "reason": "no_intended_or_end_time",
-          "not_applicable": false
-        },
-        "client.tpot": {
-          "value_ms": 1.0795275590551183,
+          "value_ms": 294.944,
           "reason": null,
-          "not_applicable": false
-        }
-      },
-      "first_chunk_latency_ms": 567.1,
-      "prompt_tokens": 4096,
-      "prompt_token_source": "server_usage",
-      "prompt_token_exact": true,
-      "output_tokens": 128,
-      "output_token_source": "server_usage",
-      "output_token_exact": true,
-      "stream": true,
-      "gap_count": 15,
-      "chunk_count": 16,
-      "finish_reason": "length"
-    },
-    {
-      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
-      "request_id": "measured_001",
-      "line": 17,
-      "record_id": "infer.request/measured_001",
-      "line_sha256": "72c5c3c8110b7a54b99a1c86bd239c2f7bca83142cc1f97807913fee4a9a329f",
-      "case_id": "c8_in4096_out128",
-      "phase": "measured",
-      "status": "ok",
-      "http_status": 200,
-      "error_type": null,
-      "started_at_ns": "1788609600644224319",
-      "ended_at_ns": "1788609601382824319",
-      "start_ms": 5644.224319,
-      "end_ms": 6382.824319,
-      "client": {
-        "client.ttft": {
-          "value_ms": 449.2,
-          "reason": null,
-          "not_applicable": false
-        },
-        "client.ttft_from_intended": {
-          "value_ms": null,
-          "reason": "no_dispatch_lag",
-          "not_applicable": false
-        },
-        "client.e2e": {
-          "value_ms": 738.6,
-          "reason": null,
-          "not_applicable": false
-        },
-        "client.e2e_from_intended": {
-          "value_ms": null,
-          "reason": "no_intended_or_end_time",
-          "not_applicable": false
-        },
-        "client.tpot": {
-          "value_ms": 2.2787401574803154,
-          "reason": null,
-          "not_applicable": false
-        }
-      },
-      "first_chunk_latency_ms": 441.2,
-      "prompt_tokens": 4096,
-      "prompt_token_source": "server_usage",
-      "prompt_token_exact": true,
-      "output_tokens": 128,
-      "output_token_source": "server_usage",
-      "output_token_exact": true,
-      "stream": true,
-      "gap_count": 15,
-      "chunk_count": 16,
-      "finish_reason": "length"
-    },
-    {
-      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
-      "request_id": "measured_002",
-      "line": 20,
-      "record_id": "infer.request/measured_002",
-      "line_sha256": "82d308351e2afbdd7e89231694ccb50f122814dc45fd0bf9c55af5b94562c67b",
-      "case_id": "c8_in4096_out128",
-      "phase": "measured",
-      "status": "timeout",
-      "http_status": null,
-      "error_type": "timeout",
-      "started_at_ns": "1788609601131516432",
-      "ended_at_ns": "1788609631131516432",
-      "start_ms": 6131.516432,
-      "end_ms": 36131.516432,
-      "client": {
-        "client.ttft": {
-          "value_ms": null,
-          "reason": "no_client_ttft",
-          "not_applicable": false
-        },
-        "client.ttft_from_intended": {
-          "value_ms": null,
-          "reason": "no_client_ttft",
-          "not_applicable": false
-        },
-        "client.e2e": {
-          "value_ms": null,
-          "reason": "no_client_e2e",
-          "not_applicable": false
-        },
-        "client.e2e_from_intended": {
-          "value_ms": null,
-          "reason": "no_intended_or_end_time",
           "not_applicable": false
         },
         "client.tpot": {
@@ -207,65 +99,173 @@
           "not_applicable": false
         }
       },
-      "first_chunk_latency_ms": null,
-      "prompt_tokens": 4096,
-      "prompt_token_source": "server_usage",
-      "prompt_token_exact": true,
-      "output_tokens": null,
-      "output_token_source": "unknown",
+      "first_chunk_latency_ms": 85.815,
+      "prompt_tokens": 128,
+      "prompt_token_source": "estimated",
+      "prompt_token_exact": false,
+      "output_tokens": 16,
+      "output_token_source": "estimated",
       "output_token_exact": false,
       "stream": true,
-      "gap_count": 0,
-      "chunk_count": null,
-      "finish_reason": null
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
     },
     {
-      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
-      "request_id": "measured_003",
-      "line": 23,
-      "record_id": "infer.request/measured_003",
-      "line_sha256": "afb63dcec8d3a17f8c97eeb5f43cfbdcde94efe7e6f60da7ac70a42f959c4fa4",
-      "case_id": "c8_in4096_out128",
+      "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+      "request_id": "c8_in128_out64_measured_2_42",
+      "line": 48,
+      "record_id": "infer.request/c8_in128_out64_measured_2_42",
+      "line_sha256": "e70550482e55c2c21f20a48133f32ae6ba4fe98bcd7731e4c41d82c12cff5cf5",
+      "case_id": "c8_in128_out64",
       "phase": "measured",
       "status": "ok",
       "http_status": 200,
       "error_type": null,
-      "started_at_ns": "1788609601654140237",
-      "ended_at_ns": "1788609602368740237",
-      "start_ms": 6654.140237,
-      "end_ms": 7368.740237,
+      "started_at_ns": "1790000001033418000",
+      "ended_at_ns": "1790000001327005000",
+      "start_ms": 1033.418,
+      "end_ms": 1327.005,
       "client": {
         "client.ttft": {
-          "value_ms": 573.7,
+          "value_ms": 82.789,
           "reason": null,
           "not_applicable": false
         },
         "client.ttft_from_intended": {
-          "value_ms": null,
-          "reason": "no_dispatch_lag",
+          "value_ms": 82.819,
+          "reason": null,
           "not_applicable": false
         },
         "client.e2e": {
-          "value_ms": 714.6,
+          "value_ms": 293.587,
           "reason": null,
           "not_applicable": false
         },
         "client.e2e_from_intended": {
-          "value_ms": null,
-          "reason": "no_intended_or_end_time",
+          "value_ms": 293.617,
+          "reason": null,
           "not_applicable": false
         },
         "client.tpot": {
-          "value_ms": 1.1094488188976377,
+          "value_ms": 14.0532,
           "reason": null,
           "not_applicable": false
         }
       },
-      "first_chunk_latency_ms": 565.7,
-      "prompt_tokens": 4096,
+      "first_chunk_latency_ms": 74.51,
+      "prompt_tokens": 128,
       "prompt_token_source": "server_usage",
       "prompt_token_exact": true,
-      "output_tokens": 128,
+      "output_tokens": 16,
+      "output_token_source": "server_usage",
+      "output_token_exact": true,
+      "stream": true,
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
+    },
+    {
+      "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+      "request_id": "c8_in128_out64_measured_3_43",
+      "line": 49,
+      "record_id": "infer.request/c8_in128_out64_measured_3_43",
+      "line_sha256": "05002e6cfd98e5165a2ce60da3bbd76c03349c566489fd4ff379eee726be1cdc",
+      "case_id": "c8_in128_out64",
+      "phase": "measured",
+      "status": "ok",
+      "http_status": 200,
+      "error_type": null,
+      "started_at_ns": "1790000000939811000",
+      "ended_at_ns": "1790000001229957000",
+      "start_ms": 939.811,
+      "end_ms": 1229.957,
+      "client": {
+        "client.ttft": {
+          "value_ms": 97.444,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": 97.474,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": 290.146,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": 290.176,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": null,
+          "reason": "output_tokens_not_server_reported",
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": 87.7,
+      "prompt_tokens": 128,
+      "prompt_token_source": "estimated",
+      "prompt_token_exact": false,
+      "output_tokens": 16,
+      "output_token_source": "estimated",
+      "output_token_exact": false,
+      "stream": true,
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
+    },
+    {
+      "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+      "request_id": "c8_in128_out64_measured_5_21",
+      "line": 27,
+      "record_id": "infer.request/c8_in128_out64_measured_5_21",
+      "line_sha256": "4c0aa41a9b3347a7f15dd842ca81c16f970928da8b889b292edff6324a741ece",
+      "case_id": "c8_in128_out64",
+      "phase": "measured",
+      "status": "ok",
+      "http_status": 200,
+      "error_type": null,
+      "started_at_ns": "1790000000464434000",
+      "ended_at_ns": "1790000000744063000",
+      "start_ms": 464.434,
+      "end_ms": 744.063,
+      "client": {
+        "client.ttft": {
+          "value_ms": 87.266,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": 87.296,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": 279.629,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": 279.659,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": 12.8242,
+          "reason": null,
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": 78.539,
+      "prompt_tokens": 128,
+      "prompt_token_source": "server_usage",
+      "prompt_token_exact": true,
+      "output_tokens": 16,
       "output_token_source": "server_usage",
       "output_token_exact": true,
       "stream": true,
@@ -274,7 +274,7 @@
       "finish_reason": "length"
     }
   ],
-  "next_cursor": "eyJpIjogIjlhM2U1YjdjMWQyZjRhNmI4YzBlMmQ0ZjZhOGIwYzFkIiwgInAiOiAiY2FzZT1jOF9pbjQwOTZfb3V0MTI4JnBoYXNlPW1lYXN1cmVkIiwgInMiOiAiYXJ0aWZhY3QiLCAibyI6ICJhc2MiLCAidiI6IG51bGwsICJsIjogMjN9",
-  "total": 120,
+  "next_cursor": "eyJ2IjoxLCJpbmRleF9pZCI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIiwiZ2VuZXJhdGlvbiI6MywicGFyYW1zIjoiY2FzZT1jOF9pbjEyOF9vdXQ2NCZwaGFzZT1tZWFzdXJlZCIsInNvcnQiOiJjbGllbnQuZTJlIiwib3JkZXIiOiJkZXNjIiwia2V5IjpbMCwyNzkuNjI5LDIxXX0",
+  "total": 60,
   "generation_moved": false
 }
