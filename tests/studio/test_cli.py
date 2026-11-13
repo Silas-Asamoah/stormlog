@@ -425,6 +425,50 @@ def test_sigint_and_sigterm_stop_cleanly(
     assert not list(state.glob("*.json"))
 
 
+# Sends the signal from inside the write of the "Open ..." line: the earliest
+# moment a caller reading stdout can act on it. Studio must already be
+# handling SIGINT and SIGTERM by then.
+SIGNAL_ON_OPEN_SCRIPT = """
+import io
+import os
+import sys
+from stormlog.studio import cli
+from tests.studio.test_httpd import stub_compose
+
+
+class SignalOnOpen(io.StringIO):
+    def write(self, text):
+        sys.stdout.write(text)
+        if text.startswith("Open http"):
+            sys.stdout.flush()
+            os.kill(os.getpid(), int(sys.argv[1]))
+        return len(text)
+
+
+sys.exit(cli.main(sys.argv[2:], compose=stub_compose, stdout=SignalOnOpen()))
+"""
+
+
+@pytest.mark.parametrize("signum", [signal.SIGINT, signal.SIGTERM])
+def test_a_signal_sent_as_the_url_prints_stops_cleanly(
+    root: Path, state: Path, tmp_path: Path, signum: int
+) -> None:
+    script = tmp_path / "signal_on_open.py"
+    script.write_text(SIGNAL_ON_OPEN_SCRIPT)
+    done = subprocess.run(
+        [sys.executable, str(script), str(int(signum)), str(root), "--port", "0"]
+        + ["--no-browser"],
+        cwd=REPO_ROOT,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert "Open http" in done.stdout, done.stderr
+    assert done.returncode == 0, done.stderr
+    assert not list(state.glob("*.json"))
+
+
 # --- The stormlog entrypoint ---------------------------------------------------
 
 
