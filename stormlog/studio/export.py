@@ -147,10 +147,15 @@ def stream(
     Lazy: it reads lines through ``indexes.read_lines`` as the caller
     iterates and yields whole lines joined into chunks of about
     :data:`CHUNK_BYTES`. Each line must have the length and SHA-256 the
-    index recorded, else ConflictError ``stale_line`` (details: ``line``
-    and ``reason``, one of ``length``, ``sha256``, ``newline``,
-    ``missing``, ``unexpected``), raised before the chunk holding that line
-    is yielded.
+    index recorded, else ConflictError ``stale_line``, raised before the
+    chunk holding that line is yielded.
+
+    Its ``details`` always carry ``line``. ``reason`` (one of ``length``,
+    ``sha256``, ``newline``, ``missing``, ``unexpected``) is there when
+    this module's own checks catch the line. Usually the index's
+    ``read_lines`` catches it first and raises its own ``stale_line``,
+    which passes through unchanged: with the index's ``reason`` when it
+    sends one, and today C1's sends only ``line``.
     """
     _check_same_index(snapshot, sel)
     return _verified(indexes, snapshot, sel.rows)
