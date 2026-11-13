@@ -1,0 +1,315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_artifact_v1.schema.json",
+  "title": "Stormlog Studio artifact v1",
+  "description": "GET /api/v1/artifact (design §5.4): an artifact's identity, session, index state and progress, inventory, problems, cases and warnings. Also the 202 body while the index builds.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "session",
+    "index",
+    "inventory",
+    "problems",
+    "cases",
+    "warnings"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.artifact"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "session": {
+      "description": "contracts.SessionInfo; null for a file with no session record.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "status",
+        "started_at_ns",
+        "ended_at_ns",
+        "terminal",
+        "config"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at_ns": {
+          "$ref": "#/$defs/ns_or_null"
+        },
+        "ended_at_ns": {
+          "$ref": "#/$defs/ns_or_null"
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "config": {
+          "description": "The first record's config, as written.",
+          "type": "object"
+        }
+      }
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "failure",
+        "bytes_read",
+        "size",
+        "progress",
+        "pending_tail_bytes",
+        "prefix_sha256",
+        "requests",
+        "samples"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "building",
+            "ready",
+            "partial",
+            "failed"
+          ]
+        },
+        "failure": {
+          "enum": [
+            "unreadable",
+            "not_an_inference_artifact",
+            "audio",
+            "multiple_sessions",
+            null
+          ]
+        },
+        "bytes_read": {
+          "$ref": "#/$defs/count"
+        },
+        "size": {
+          "$ref": "#/$defs/count"
+        },
+        "progress": {
+          "description": "bytes_read / size, computed by the server; null for an empty file.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "pending_tail_bytes": {
+          "$ref": "#/$defs/count"
+        },
+        "prefix_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requests": {
+          "description": "Client request rows, all phases.",
+          "$ref": "#/$defs/count"
+        },
+        "samples": {
+          "description": "infer.system_sample rows.",
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "inventory": {
+      "description": "Every event type in file order of first appearance.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "total",
+          "by_version"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/$defs/count"
+          },
+          "by_version": {
+            "description": "Decoded schema_version (as a string) to count.",
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[0-9]+$"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      }
+    },
+    "problems": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "first"
+      ],
+      "properties": {
+        "count": {
+          "$ref": "#/$defs/count"
+        },
+        "first": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "description": "contracts.LineProblem, its LineRef flattened.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "line",
+              "offset",
+              "length",
+              "sha256",
+              "code",
+              "detail"
+            ],
+            "properties": {
+              "line": {
+                "$ref": "#/$defs/count"
+              },
+              "offset": {
+                "$ref": "#/$defs/count"
+              },
+              "length": {
+                "$ref": "#/$defs/count"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "code": {
+                "enum": [
+                  "not_json",
+                  "not_object",
+                  "undecodable",
+                  "oversized",
+                  "unsupported_version",
+                  "truncated_final_line"
+                ]
+              },
+              "detail": {
+                "type": "string",
+                "maxLength": 200
+              }
+            }
+          }
+        }
+      }
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "planned",
+          "observed",
+          "measured_requests",
+          "by_status"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "planned": {
+            "type": "boolean"
+          },
+          "observed": {
+            "type": "boolean"
+          },
+          "measured_requests": {
+            "$ref": "#/$defs/count"
+          },
+          "by_status": {
+            "description": "Measured client requests by status.",
+            "type": "object",
+            "propertyNames": {
+              "enum": [
+                "ok",
+                "timeout",
+                "rejected",
+                "error",
+                "dropped",
+                "cancelled",
+                "unreachable",
+                "delivery_unknown"
+              ]
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "ns_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ns"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
