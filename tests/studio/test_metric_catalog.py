@@ -9,7 +9,7 @@ import pytest
 
 from stormlog.infer.latency_report import CLIENT_METRICS
 from stormlog.infer.slo import CRITERIA
-from stormlog.studio.contracts import AnalysisState, DictTable
+from stormlog.studio.contracts import AnalysisState, DictTable, envelope, to_wire
 from stormlog.studio.metric_catalog import (
     PANEL_STATES,
     PANELS,
@@ -22,6 +22,7 @@ from tests.studio.test_selection import (
     snapshot_from_records,
     snapshot_of,
 )
+from tests.studio.test_summaries import schema_errors
 
 READY = AnalysisState("ready", None, 0, {"observers": {"observers": {}}}, 100)
 PENDING = AnalysisState("pending", None, None, None, None)
@@ -93,9 +94,17 @@ def test_every_panel_has_a_known_state(studio_artifacts: StandardArtifacts) -> N
         "growing",
         "empty",
     ):
-        document = panels(snapshot_of(studio_artifacts[name]), READY)
+        snapshot = snapshot_of(studio_artifacts[name])
+        document = panels(snapshot, READY)
         assert set(document["panels"]) == set(PANELS)
         assert set(_states(document).values()) <= set(PANEL_STATES), name
+        wire = to_wire(envelope("artifact_capabilities", document, snapshot))
+        assert schema_errors("artifact_capabilities", wire) == [], name
+
+
+def test_the_catalog_validates_against_its_schema() -> None:
+    wire = to_wire(envelope("metric_catalog", metric_catalog()))
+    assert schema_errors("metric_catalog", wire) == []
 
 
 def test_server_evidence_in_the_artifact_is_not_indexed(
