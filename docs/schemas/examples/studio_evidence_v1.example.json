@@ -1,0 +1,36 @@
+{
+  "format": "stormlog.studio.evidence",
+  "schema_version": 1,
+  "artifact": {
+    "path": "mixed.jsonl",
+    "index_id": "93e3498e668ecde315750ce3d31ed65a",
+    "generation": 1,
+    "status": "ready",
+    "size": 186541,
+    "bytes_read": 186541,
+    "sha256": "0a23851293dfa7df5cbd6b902e37d74ed4664b6175ce076b92dc804e9f6c94c7",
+    "growing": false,
+    "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1794557686590216755",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": [],
+    "cut": null
+  },
+  "query": {
+    "line": 0,
+    "record_id": null,
+    "sha256": null
+  },
+  "state": "resolved",
+  "reason": null,
+  "found": {
+    "line": 0,
+    "offset": 0,
+    "length": 1488,
+    "sha256": "1674749bbe694d3ba1d5493c307df9549457e171136051a15040924d7fae6e7d",
+    "record_id": "infer.session@1794557686590216755"
+  }
+}
