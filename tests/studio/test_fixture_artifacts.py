@@ -19,7 +19,7 @@ import pytest
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.events import InferenceRequestEvent
+from stormlog.infer.events import InferenceRequestEvent, InferenceSystemSample
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     LARGE_GAPS,
@@ -29,6 +29,7 @@ from tests.studio.artifacts import (
     STANDARD_ARTIFACTS,
     CaseSpec,
     GrowingCopy,
+    SamplePlan,
     decoded_records,
     last_line_start,
     profile_artifact,
@@ -406,6 +407,111 @@ def test_fresh_artifact_gives_a_private_copy(
 
     assert copy.read_bytes() == studio_artifacts["empty"].read_bytes()
     assert copy != studio_artifacts["empty"]
+
+
+def _samples(path: Path) -> list[dict[str, Any]]:
+    return [r for r in _lines(path) if r.get("event_type") == "infer.system_sample"]
+
+
+def _series(path: Path) -> dict[tuple[str, int | None], list[int]]:
+    """Each ``(sampler, device_id)`` series' timestamps, in file order."""
+    series: dict[tuple[str, int | None], list[int]] = {}
+    for sample in _samples(path):
+        key = (sample["sampler"], sample["device_id"])
+        series.setdefault(key, []).append(sample["timestamp_ns"])
+    return series
+
+
+def test_the_samples_artifact_has_client_rss_and_two_devices(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    series = _series(path)
+
+    assert set(series) == {("psutil", None), ("nvidia-smi", 0), ("nvidia-smi", 1)}
+    assert len(series[("psutil", None)]) == len(series[("nvidia-smi", 0)]) > 24
+    for sample in _samples(path):
+        assert sample["observation_scope"] == "client_local"
+        if sample["sampler"] == "psutil":
+            assert sample["process_rss_bytes"] > 0
+            assert sample["device_used_bytes"] is None
+        else:
+            assert sample["process_rss_bytes"] is None
+            assert sample["device_used_bytes"] + sample["device_free_bytes"] == (
+                sample["device_total_bytes"]
+            )
+
+
+def test_the_samples_artifact_has_a_gap_and_a_stale_device(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    series = _series(path)
+    steady, stale = series[("nvidia-smi", 0)], series[("nvidia-smi", 1)]
+    plan = SamplePlan()
+    step = plan.interval_ms * 1_000_000
+    gaps = [later - earlier for earlier, later in zip(stale, stale[1:])]
+
+    # More than observers.SCRAPE_GAP_FACTOR (2.0) times the median interval.
+    assert max(gaps) == (plan.gap_ticks[1] - plan.gap_ticks[0] + 1) * step
+    assert max(gaps) > 2 * sorted(gaps)[len(gaps) // 2]
+    # The device goes quiet well before the run ends: its last value is stale.
+    assert steady[-1] - stale[-1] >= 4 * step
+    assert len(stale) == plan.stop_tick - (plan.gap_ticks[1] - plan.gap_ticks[0])
+
+
+def test_samples_lie_inside_the_measured_phase_in_time_order(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    (window,) = [r for r in _lines(path) if r["event_type"] == "infer.phase_window"]
+    times = [sample["timestamp_ns"] for sample in _samples(path)]
+
+    assert times == sorted(times)
+    assert window["started_at_ns"] <= times[0]
+    assert times[-1] <= window["drained_at_ns"]
+
+
+def test_synthetic_samples_equal_what_the_dataclass_writes_and_repeat(
+    tmp_path: Path,
+) -> None:
+    def samples(directory: str) -> list[dict[str, Any]]:
+        (tmp_path / directory).mkdir()
+        return _samples(
+            synthetic_artifact(
+                tmp_path / directory, requests=30, gaps_per_request=2, samples=True
+            )
+        )
+
+    first = samples("a")
+    names = {field.name for field in fields(InferenceSystemSample)}
+
+    assert first == samples("b")
+    for record in first:
+        event = InferenceSystemSample(**{k: v for k, v in record.items() if k in names})
+        assert event.to_record() == record
+
+
+def test_the_real_psutil_samples_have_the_synthetic_shape(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    real = _samples(studio_artifacts["samples_psutil"])
+    synthetic = [
+        s for s in _samples(studio_artifacts["samples"]) if s["sampler"] == "psutil"
+    ]
+
+    assert len(real) >= 2
+    shape = {(k, type(v)) for k, v in synthetic[0].items()}
+    for sample in real:
+        assert {(k, type(v)) for k, v in sample.items()} == shape
+        assert sample["process_rss_bytes"] > 0
+
+
+def test_artifacts_without_samples_have_none(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    for name in ("mixed", "synthetic", "empty"):
+        assert _samples(studio_artifacts[name]) == []
 
 
 @pytest.mark.studio_large
