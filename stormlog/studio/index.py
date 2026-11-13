@@ -1709,6 +1709,7 @@ class ArtifactIndexes:
         self._cond = threading.Condition()
         self._entries: OrderedDict[str, _Index] = OrderedDict()
         self._futures: set[Future[None]] = set()
+        self._listeners: list[Callable[[IndexSnapshot], None]] = []
         self._closed = False
 
     # --- IndexRegistry ------------------------------------------------
@@ -1756,6 +1757,19 @@ class ArtifactIndexes:
         with handle:
             for ref in refs:
                 yield _read_ref(handle, ref) + b"\n"
+
+    def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:
+        """Call ``fn(snapshot)`` on the builder pool after each publish.
+
+        The contract's ``PublishingRegistry`` hook (Fable's F-7): after
+        every new generation and every ``replace`` republish of an open
+        index, once the snapshot is current. Not while a first build is
+        still ``building``, so a listener that warms a cache does not redo
+        it for every batch of a large file; its first call is the first
+        complete snapshot. A listener that raises is logged and skipped.
+        """
+        with self._cond:
+            self._listeners.append(fn)
 
     def close(self) -> None:
         """Cancel builds and drop every index."""
@@ -1827,11 +1841,21 @@ class ArtifactIndexes:
 
     def _published(self, entry: _Index) -> None:
         with self._cond:
-            if self._entries.get(entry.path) is entry:
+            current = self._entries.get(entry.path) is entry
+            if current:
                 # The count too: _open let building indexes exceed it, and
                 # only a publish can bring it back within the limit.
                 self._evict(keep=entry, count=self._limits.open_indexes)
             self._cond.notify_all()
+            listeners = tuple(self._listeners)
+        snapshot = entry.snapshot
+        if not current or snapshot.status == "building":
+            return
+        for listener in listeners:
+            try:
+                listener(snapshot)
+            except Exception:
+                _LOG.exception("a publish listener failed for %s", entry.path)
 
     def _evict(self, *, keep: _Index, count: int | None) -> None:
         """Evict least recently used indexes, never ``keep`` and never one

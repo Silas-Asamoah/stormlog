@@ -39,6 +39,7 @@ from stormlog.studio.contracts import (
     artifact_block,
     columnar,
     encode_json,
+    publish_hook,
 )
 from stormlog.studio.index import (
     CLIENT_METRICS,
@@ -501,6 +502,37 @@ def test_a_growing_file_refreshes_under_the_same_index_id(
     still = harness.refresh("g.jsonl", seconds=6)
     assert not still.growing and still.generation == done.generation
     assert still.requests is done.requests  # republished, same rows and caches
+
+
+def test_publish_listeners_see_each_complete_snapshot_once_current(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    source = studio_artifacts["mixed"]
+    growing = GrowingCopy(source, tmp_path / "g.jsonl", lines=40)
+    harness = harness_for(growing.target, batch_bytes=2_000)
+    indexes = harness.indexes
+    assert publish_hook(indexes) is indexes
+    seen: list[IndexSnapshot] = []
+
+    def listen(snapshot: IndexSnapshot) -> None:
+        assert indexes.snapshot("g.jsonl") is snapshot  # current when called
+        seen.append(snapshot)
+
+    def broken(snapshot: IndexSnapshot) -> None:
+        raise RuntimeError("a listener bug")
+
+    indexes.add_publish_listener(broken)
+    indexes.add_publish_listener(listen)
+    first = harness.build("g.jsonl")
+    assert seen == [first] and first.status == "ready"  # no per-batch calls
+    growing.append(30)
+    grown = harness.refresh("g.jsonl")
+    assert seen[-1] is grown and grown.generation > first.generation
+    assert all(s.status != "building" for s in seen)
+    count = len(seen)
+    still = harness.refresh("g.jsonl", seconds=6)  # growing flips: a replace
+    assert len(seen) == count + 1 and seen[-1] is still
+    assert not still.growing and still.table is grown.table  # id(table) survives
 
 
 def test_the_growing_fixture_is_ready_and_growing_after_an_append(
