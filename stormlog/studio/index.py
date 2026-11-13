@@ -39,6 +39,7 @@ import json
 import logging
 import math
 import secrets
+import sys
 import threading
 import time
 from array import array
@@ -55,6 +56,7 @@ from stormlog.infer.artifact_reader import (
     ReadItem,
 )
 from stormlog.infer.diagnosis_inputs import line_digest, record_id
+from stormlog.infer.report_stats import is_number
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio.contracts import (
     CLIENT_COLUMN_PREFIX,
@@ -558,6 +560,17 @@ def _gap_value(gap: Any) -> float:
     return math.nan
 
 
+def _non_numeric(gaps: list[Any]) -> int:
+    """How many of ``gaps`` are not finite numbers (``is_number``).
+
+    Floats whose sum is finite are all finite, so the usual list takes one
+    pass in C; a sum that overflows only sends it to the exact count.
+    """
+    if all(type(gap) is float for gap in gaps) and math.isfinite(sum(gaps)):
+        return 0
+    return sum(1 for gap in gaps if not is_number(gap))
+
+
 def _as_gaps(gaps: list[Any]) -> list[float]:
     if all(type(gap) is float for gap in gaps):
         return gaps
@@ -580,6 +593,9 @@ class _Requests:
         self.reason_table: list[tuple[str | None, bool]] = [(None, False)]
         self._reason_codes: dict[tuple[str | None, bool], int] = {(None, False): 0}
         self.gap_count: array[int] = array("i")
+        # row -> its gaps that are not finite numbers, for the few rows
+        # with any: the analyzer counts chunks from the numbers only
+        self.non_numeric_gaps: dict[int, int] = {}
         self.gaps: array[float] | None = array("d")
         self.gap_start: array[int] | None = array("q")
         self.errors: bytearray | None = bytearray()
@@ -627,6 +643,9 @@ class _Requests:
                 self.gap_start.append(len(self.gaps))
             return
         self.gap_count.append(len(gaps))
+        missing = _non_numeric(gaps)
+        if missing:
+            self.non_numeric_gaps[row] = missing
         if self.gaps is None or self.gap_start is None:
             return
         if 8 * (len(self.gaps) + len(gaps)) + 8 * (row + 1) > self.gap_budget:
@@ -660,6 +679,7 @@ class _Requests:
         client = sum(9 * len(values) for values in self.client.values())
         size = self.store.nbytes() + self.refs.nbytes() + client
         size += 4 * len(self.gap_count) + self.ids.nbytes()
+        size += sys.getsizeof(self.non_numeric_gaps)
         return size + 4 * (len(self.dispatch.data) + len(self.first_content.data))
 
     def gap_bytes(self) -> int:
@@ -835,6 +855,12 @@ class ColumnRow(RequestRow):
     @property
     def gap_count(self) -> int:
         return max(0, self._view.requests.gap_count[self._row])
+
+    @property
+    def numeric_gap_count(self) -> int:
+        requests = self._view.requests
+        missing = requests.non_numeric_gaps.get(self._row, 0)
+        return max(0, requests.gap_count[self._row]) - missing
 
     def __getitem__(self, key: str) -> Any:
         view = self._view

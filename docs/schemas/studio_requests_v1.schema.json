@@ -259,7 +259,7 @@
           "$ref": "#/$defs/count"
         },
         "chunk_count": {
-          "description": "gap_count + 1 when streamed with a TTFT, else null.",
+          "description": "The gaps that are finite numbers, plus 1, when streamed with a TTFT, else null: the analyzer's content-chunk count, which keeps no gap that is not a number.",
           "type": [
             "integer",
             "null"

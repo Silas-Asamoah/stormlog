@@ -96,6 +96,10 @@ class ColumnRow(RequestRow):
     def gap_count(self) -> int:
         return self._store.gap_count[self._i]
 
+    @property
+    def numeric_gap_count(self) -> int:
+        return self._store.gap_count[self._i]  # this store's gaps are numbers
+
     def __getitem__(self, key: str) -> Any:
         if key == "chunk_interarrival_ms":
             raise NotResident(key)
@@ -156,6 +160,7 @@ def test_every_row_attribute_is_an_abstract_property() -> None:
         "phase",
         "client",
         "gap_count",
+        "numeric_gap_count",
     }
     for name in names:
         assert isinstance(vars(RequestRow)[name], property), name
