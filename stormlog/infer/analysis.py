@@ -26,7 +26,6 @@ from .populations import (
     SegmentPopulation,
     case_populations,
     goodput,
-    rate,
 )
 from .report_stats import int_value as _int_value
 from .report_stats import is_number as _is_number
@@ -46,6 +45,7 @@ from .server_group import members as group_members
 from .server_group import membership_issue
 from .slo import SloSpec, require_measured_window, slo_from_artifact
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
+from .token_report import throughput
 from .vllm_analysis import (
     JoinedSpans,
     joined_span_attributes,
@@ -429,7 +429,7 @@ def _segment_report(
             "membership": segment.membership,
             "rate_reason": None if rate_interval else "overlapping_cohort",
         },
-        "throughput": _throughput(
+        "throughput": throughput(
             len(ok),
             sum(_int_value(r.get("output_tokens")) for r in ok),
             sum(_int_value(r.get("total_tokens")) for r in ok),
@@ -794,7 +794,7 @@ def _summarize_requests(
             "first_chunk_p50": _percentile(first_chunk, 50),
             "first_chunk_p95": _percentile(first_chunk, 95),
         },
-        "throughput": _throughput(request_count, output_tokens, total_tokens, interval),
+        "throughput": throughput(request_count, output_tokens, total_tokens, interval),
         "tokens": {
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
@@ -810,28 +810,6 @@ def _summarize_requests(
             "peak_device_used_bytes": peak_device_used,
             "peak_process_rss_bytes": peak_process_rss,
         },
-    }
-
-
-def _throughput(
-    requests: int,
-    output_tokens: int,
-    total_tokens: int,
-    interval: MeasuredInterval | None,
-) -> dict[str, Any]:
-    """Successful requests and their tokens per second of the rate interval.
-
-    The rates are null when the interval has no length, instead of zero.
-    """
-    return {
-        "interval_seconds": interval.seconds if interval is not None else None,
-        "interval_kind": interval.kind if interval is not None else None,
-        "numerator_cohort": (
-            interval.numerator_cohort if interval is not None else None
-        ),
-        "requests_per_second": rate(requests, interval),
-        "output_tokens_per_second": rate(output_tokens, interval),
-        "total_tokens_per_second": rate(total_tokens, interval),
     }
 
 
