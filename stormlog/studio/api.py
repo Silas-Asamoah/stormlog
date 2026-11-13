@@ -41,6 +41,7 @@ Rules every handler follows:
 from __future__ import annotations
 
 import json
+import re
 from bisect import bisect_left
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -102,6 +103,7 @@ DEFAULT_BINS = 20
 _REQUEST_PARAMS = ("sort", "order", "cursor", "limit")
 _DISTRIBUTION_PARAMS = ("metric", "bins", "edges")
 _POINT_PARAMS = ("x", "y", "max_points", "keep")
+_INTEGER = re.compile(r"-?[0-9]{1,18}")
 _DETAIL_PARAMS = ("request_id", "line")
 _WINDOW_PARAMS = ("window", "window_ms", "window_membership")
 _UNSUPPORTED = {
@@ -221,12 +223,15 @@ def _required(query: Query, name: str) -> str:
 
 
 def _integer(query: Query, name: str, default: int | None) -> int | None:
-    """An integer parameter; range checks are the callee's (C2, C4)."""
+    """An integer parameter; range checks are the callee's (C2, C4).
+
+    At most one ``-`` and 18 ASCII digits, so ``--5`` or ``+5`` is a 400
+    and never reaches ``int`` (Fable's P3-1: ``--5`` was a 500).
+    """
     text = _one(query, name)
     if text is None:
         return default
-    stripped = text.lstrip("-")
-    if not stripped.isdigit() or not stripped.isascii() or len(text) > 19:
+    if _INTEGER.fullmatch(text) is None:
         raise UsageError("bad_parameter", f"{name}: an integer", field=name)
     return int(text)
 
