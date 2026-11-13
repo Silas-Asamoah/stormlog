@@ -33,6 +33,7 @@ from stormlog.studio.contracts import (
     ForbiddenError,
     IndexRegistry,
     IndexSnapshot,
+    InvalidInputError,
     Limits,
     NotFoundError,
     NotResident,
@@ -1293,6 +1294,34 @@ def test_a_stale_line_says_why(fresh_artifact: Callable[[str], Path]) -> None:
     with pytest.raises(ConflictError) as raised:
         next(stream)
     assert raised.value.details == {"line": ref.line, "reason": "sha256"}
+
+
+def test_an_oversized_line_is_never_read(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """read_line and read_lines refuse a reference over ``line_bytes``
+    before reading it, whoever asks (Fable's P2-1 guard)."""
+    data = studio_artifacts["mixed"].read_bytes()
+    path = tmp_path / "big.jsonl"
+    path.write_bytes(data + b'{"pad": "' + b"x" * 5_000 + b'"}\n')
+    harness = harness_for(path, Limits(line_bytes=4_096))
+    snapshot = harness.build(path.name)
+    problem = snapshot.problems[-1]
+    assert problem.code == "oversized" and problem.ref.line == data.count(b"\n")
+    first = snapshot.requests[0].ref
+    with pytest.raises(InvalidInputError) as raised:
+        harness.indexes.read_line(path.name, problem.ref)
+    assert raised.value.http_status == 422 and raised.value.code == "unreadable"
+    assert raised.value.details == {
+        "line": problem.ref.line,
+        "reason": "oversized",
+        "length": problem.ref.length,
+        "limit": 4_096,
+    }
+    stream = harness.indexes.read_lines(path.name, [first, problem.ref])
+    assert next(stream) == harness.indexes.read_line(path.name, first) + b"\n"
+    with pytest.raises(InvalidInputError):
+        next(stream)
 
 
 def test_snapshot_never_waits_and_never_raises_not_ready(

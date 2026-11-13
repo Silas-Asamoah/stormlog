@@ -851,6 +851,31 @@ def test_evidence_resolves_and_names_each_mismatch(served: Served) -> None:
     )
 
 
+def test_an_oversized_line_is_refused_unread(
+    private: Callable[..., Served], studio_artifacts: StandardArtifacts
+) -> None:
+    """A line over ``line_bytes`` is a problem line with a reference, never
+    served or parsed whole (Fable's P2-1, probe_api_local)."""
+    studio = private(dataclasses.replace(Limits(), line_bytes=65536))
+    data = studio_artifacts["mixed"].read_bytes()
+    pad = b"x" * 300_000
+    huge = b'{"schema_version": 1, "event_type": "infer.note", "pad": "' + pad + b'"}'
+    (studio.root / "big.jsonl").write_bytes(data + huge + b"\n")
+    line = data.count(b"\n")
+    snapshot = studio.ready("big.jsonl")
+    assert [(p.ref.line, p.code) for p in snapshot.problems] == [(line, "oversized")]
+    for route in ("/api/v1/artifact/line", "/api/v1/artifact/evidence"):
+        reply = studio.get(route, artifact="big.jsonl", line=line)
+        details = assert_error(reply, 422, "unreadable")["details"]
+        assert details == {
+            "line": line,
+            "reason": "oversized",
+            "length": len(huge),
+            "limit": 65536,
+        }
+        assert len(reply.body) < 1000
+
+
 # --- Growth, refresh and the cut --------------------------------------------------------
 
 
