@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import numbers
 import re
 from abc import abstractmethod
 from array import array
@@ -740,8 +741,13 @@ def to_wire(value: Any) -> Any:
     become dicts (an int key becomes its decimal string, as ``json`` would
     write it); lists, tuples and arrays become lists. Floats, NaN included,
     pass unchanged: :func:`encode_json` refuses non-finite numbers, and
-    record fields go through :func:`finite_copy` first. Any other type raises
-    TypeError.
+    record fields go through :func:`finite_copy` first.
+
+    Numbers of other types, such as numpy's, are converted after the bool
+    check: a ``numbers.Integral`` becomes an ``int`` (and then follows the
+    integer rules), a ``numbers.Real`` a ``float``. Any other object with a
+    callable ``tolist`` (a numpy array or scalar, ``numpy.bool_`` included)
+    becomes ``tolist()``, wired in turn. Any other type raises TypeError.
     """
     return _wire(value, ns=False)
 
@@ -755,6 +761,20 @@ def _wire(value: Any, *, ns: bool) -> Any:
         return _wire_mapping(value)
     if _is_list_like(value):
         return [_wire(item, ns=ns) for item in value]
+    return _wire_foreign(value, ns=ns)
+
+
+def _wire_foreign(value: Any, *, ns: bool) -> Any:
+    """Numbers and arrays of other libraries, by the numbers ABCs or tolist."""
+    if isinstance(value, numbers.Integral):
+        return _wire(int(value), ns=ns)
+    if isinstance(value, numbers.Real):
+        return float(value)
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        plain = tolist()
+        if plain is not value:
+            return _wire(plain, ns=ns)
     raise TypeError(f"no wire form for {type(value).__name__}")
 
 
