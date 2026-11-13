@@ -2,17 +2,53 @@
 
 ``studio_artifacts`` builds each standard artifact once per session, on
 first use; tests that change a file take a copy with ``fresh_artifact``.
+``large_studio_artifact`` is the 500,000-request file: it takes about 12 s
+and 740 MiB to write, so only tests marked ``studio_large`` get it, and
+those run only when selected with ``-m studio_large`` or with
+``STORMLOG_STUDIO_LARGE=1`` in the environment.
 """
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from tests.studio.artifacts import STANDARD_ARTIFACTS
+from tests.studio.artifacts import STANDARD_ARTIFACTS, large_artifact
+
+LARGE_MARKER = "studio_large"
+LARGE_ENV = "STORMLOG_STUDIO_LARGE"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        f"{LARGE_MARKER}: needs the 500,000-request artifact; skipped unless "
+        f"selected with -m {LARGE_MARKER} or {LARGE_ENV}=1",
+    )
+
+
+def large_opted_in(config: pytest.Config) -> bool:
+    """Whether this run asked for the large artifact."""
+    expression = config.getoption("markexpr") or ""
+    named = LARGE_MARKER in expression and f"not {LARGE_MARKER}" not in expression
+    return named or os.environ.get(LARGE_ENV) == "1"
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if large_opted_in(config):
+        return
+    skip = pytest.mark.skip(
+        reason=f"select with -m {LARGE_MARKER} or set {LARGE_ENV}=1"
+    )
+    for item in items:
+        if item.get_closest_marker(LARGE_MARKER):
+            item.add_marker(skip)
 
 
 class StandardArtifacts:
@@ -56,3 +92,13 @@ def fresh_artifact(
         return studio_artifacts.copy(name, tmp_path)
 
     return copy
+
+
+@pytest.fixture(scope="session")
+def large_studio_artifact(
+    request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory
+) -> Path:
+    """The 500,000-request, 15-gap artifact, written once per session."""
+    if not large_opted_in(request.config):
+        pytest.skip(f"select with -m {LARGE_MARKER} or set {LARGE_ENV}=1")
+    return large_artifact(tmp_path_factory.mktemp("studio-large"))
