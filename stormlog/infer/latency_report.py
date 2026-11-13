@@ -107,8 +107,8 @@ def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     return {
         "granularity": "chunk",
         "responses": len(streamed),
-        "content_chunks_per_response": _spread(chunks),
-        "chunk_interarrival_ms": {**_spread(gaps), "n": len(gaps)},
+        "content_chunks_per_response": spread(chunks),
+        "chunk_interarrival_ms": {**spread(gaps), "n": len(gaps)},
         "mean_tokens_per_chunk": _tokens_per_chunk(streamed),
         "note": CHUNK_NOTE,
     }
@@ -193,7 +193,7 @@ def _timeout_elapsed(failures: Sequence[Mapping[str, Any]]) -> list[float] | Non
 
 
 def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    elapsed = [value for value in map(_elapsed_ms, records) if value is not None]
+    elapsed = [value for value in map(elapsed_ms, records) if value is not None]
     return {
         "count": len(records),
         "elapsed_ms": {
@@ -205,7 +205,7 @@ def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _elapsed_ms(record: Mapping[str, Any]) -> float | None:
+def elapsed_ms(record: Mapping[str, Any]) -> float | None:
     """The recorded e2e time, or, for a request sent but abandoned, send to end.
 
     A request cancelled at the drain deadline has no e2e time of its own,
@@ -256,7 +256,12 @@ def _tokens_per_chunk(streamed: Sequence[Mapping[str, Any]]) -> float | None:
     return tokens / chunks if chunks else None
 
 
-def _spread(values: Sequence[float]) -> dict[str, float | None]:
+def spread(values: Sequence[float]) -> dict[str, float | None]:
+    """The median, 95th percentile and maximum of ``values``; None when empty.
+
+    The report's shape for a pool of chunk gaps or chunk counts, and Studio's
+    for one request's gaps.
+    """
     return {
         "p50": quantile(values, 0.5),
         "p95": quantile(values, 0.95),
@@ -273,7 +278,9 @@ __all__ = [
     "CLIENT_METRICS",
     "LEVELS",
     "SERVER_METRICS",
+    "elapsed_ms",
     "latency_summary",
+    "spread",
     "streaming_summary",
     "unsuccessful_summary",
 ]
