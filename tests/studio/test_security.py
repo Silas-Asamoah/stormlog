@@ -486,6 +486,24 @@ def test_repeated_ticket_parameters_are_refused() -> None:
     )
 
 
+def test_repeated_ticket_parameters_spend_every_ticket() -> None:
+    # Fable's nit: ?ticket=a&ticket=b was refused but spent neither.
+    tokens = SessionTokens()
+    first = tokens.issue_ticket(route=LINE, query="")
+    second = tokens.issue_ticket(route=LINE, query="")
+    both = request(LINE, query={"ticket": (first, second)})
+    assert code_of(lambda: check_request(both, ticket_route(), tokens)) == (
+        401,
+        "ticket_invalid",
+    )
+    for ticket in (first, second):
+        alone = ticket_request(ticket)
+        assert code_of(lambda: check_request(alone, ticket_route(), tokens)) == (
+            401,
+            "ticket_invalid",
+        )
+
+
 def test_canonical_query_sorts_encodes_and_drops_the_ticket() -> None:
     pairs = [("b", "2"), ("a", "x/y z"), ("ticket", "t"), ("a", "1")]
     assert canonical_query(pairs) == "a=1&a=x%2Fy%20z&b=2"
