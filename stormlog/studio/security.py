@@ -479,10 +479,15 @@ class RootDirectory:
         ForbiddenError ``path_not_allowed`` for an absolute path, a drive
         letter, a backslash, a NUL, an empty, ``.`` or ``..`` segment, or a
         path whose real path leaves the root (a symlink out);
-        NotFoundError ``artifact_not_found`` when nothing regular is there.
+        NotFoundError ``artifact_not_found`` when nothing regular is there,
+        including a path that changes while ``realpath`` reads it (before
+        Python 3.13 it can raise when a symlink on the way goes).
         """
         _check_relative(rel)
-        real = Path(os.path.realpath(self.path / rel))
+        try:
+            real = Path(os.path.realpath(self.path / rel))
+        except OSError:
+            raise _not_found(rel) from None
         if not _is_under(real, self.path):
             raise _not_allowed(rel)
         try:
