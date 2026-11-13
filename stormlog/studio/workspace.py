@@ -657,7 +657,8 @@ def _decode_cursor(cursor: str, kind: str | None, q: str | None) -> str:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-    except (ValueError, binascii.Error, UnicodeError):
+    except (ValueError, binascii.Error, UnicodeError, RecursionError):
+        # RecursionError: a cursor of nested brackets is a bad cursor too.
         payload = None
     if (
         not isinstance(payload, dict)
