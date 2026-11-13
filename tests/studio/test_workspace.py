@@ -747,6 +747,29 @@ def test_read_report_refuses_what_is_not_a_report(tmp_path: Path, content: str) 
     assert raised.value.details == {"reason": "not_a_report"}
 
 
+@pytest.mark.parametrize("lists", [126, 127, 5000])
+def test_read_report_refuses_a_payload_nested_past_the_limit(
+    tmp_path: Path, lists: int
+) -> None:
+    """With the report and payload objects, 126 lists nest 128 deep, the
+    limit. json.loads takes 5,000 from 3.12, and finite_copy, which
+    recursed once per level, raised RecursionError: a 500 on the route."""
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+
+    path = write_report(tmp_path / "r.json")
+    nested = "[" * lists + "]" * lists
+    path.write_text(path.read_text().replace('"padding": ""', f'"padding": {nested}'))
+    if lists + 2 <= MAX_NESTING:
+        body = read_report(Root(tmp_path), "r.json", max_bytes=2**20)
+        assert body["report"]["payload"] == {"padding": json.loads(nested)}
+        return
+    with pytest.raises(InvalidInputError) as raised:
+        read_report(Root(tmp_path), "r.json", max_bytes=2**20)
+    assert raised.value.code == "unreadable"
+    assert raised.value.details == {"reason": "not_a_report"}
+    assert f"nested deeper than {MAX_NESTING}" in raised.value.message
+
+
 def test_read_report_goes_through_the_root(tmp_path: Path) -> None:
     write_report(tmp_path / "outside.json")
     root = tmp_path / "root"

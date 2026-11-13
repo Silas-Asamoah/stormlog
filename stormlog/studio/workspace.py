@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from stormlog._run_catalog_parser import is_run_envelope
+from stormlog.infer.diagnosis_inputs import MAX_NESTING, nested_too_deep
 from stormlog.report import REPORT_FORMAT, REPORT_SCHEMA_VERSION, validate_report
 from stormlog.scrub import scrub_text
 from stormlog.studio.contracts import (
@@ -711,8 +712,9 @@ def read_report(root: WorkspaceRoot, rel: str, *, max_bytes: int) -> dict[str, A
     a file over ``max_bytes`` before reading it (InvalidInputError
     ``report_too_large``), then parses and checks it with
     ``report.validate_report`` (InvalidInputError ``unreadable``, reason
-    ``not_a_report``). NaN and infinities become null, listed in
-    ``non_finite_fields``.
+    ``not_a_report``). JSON nested deeper than ``MAX_NESTING`` is not a
+    report either, on every Python. NaN and infinities become null, listed
+    in ``non_finite_fields``.
     """
     with root.open(rel) as handle:
         size = os.fstat(handle.fileno()).st_size
@@ -722,6 +724,8 @@ def read_report(root: WorkspaceRoot, rel: str, *, max_bytes: int) -> dict[str, A
     if len(data) > max_bytes:
         raise _too_large(len(data), max_bytes)
     try:
+        if nested_too_deep(data):  # finite_copy recurses once per level
+            raise ValueError(f"nested deeper than {MAX_NESTING}")
         payload = json.loads(data)
         if not isinstance(payload, dict):
             raise ValueError("a report is a JSON object")
