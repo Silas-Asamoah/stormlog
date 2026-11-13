@@ -1744,18 +1744,29 @@ class _Options:
 # --- The registry --------------------------------------------------------
 
 
+def _stale_reason(data: bytes, ref: LineRef) -> str | None:
+    """Why ``data`` (``ref.length + 1`` bytes read at ``ref.offset``) is not
+    ``ref``'s line and newline, in C4a's ``export`` terms; None if it is."""
+    if not data:
+        return "missing"  # the file now ends before the line
+    if len(data) != ref.length + 1:
+        return "length"
+    if data[-1:] != b"\n":
+        return "newline"
+    if line_digest(data[:-1]) != ref.sha256:
+        return "sha256"
+    return None
+
+
 def _read_ref(handle: BinaryIO, ref: LineRef) -> bytes:
     handle.seek(ref.offset)
     data = handle.read(ref.length + 1)
-    if (
-        len(data) != ref.length + 1
-        or data[-1:] != b"\n"
-        or line_digest(data[:-1]) != ref.sha256
-    ):
+    reason = _stale_reason(data, ref)
+    if reason is not None:
         raise ConflictError(
             "stale_line",
-            f"line {ref.line} no longer has the bytes the index read",
-            details={"line": ref.line},
+            f"line {ref.line} no longer has the bytes the index read ({reason})",
+            details={"line": ref.line, "reason": reason},
         )
     return data[:-1]
 
