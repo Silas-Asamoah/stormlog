@@ -29,7 +29,7 @@ from .quantiles import (
     quantile_sorted,
     successful_quantile,
 )
-from .report_stats import is_number
+from .report_stats import int_value, is_number
 from .slo import CriterionValue, client_values, server_values
 
 if TYPE_CHECKING:
@@ -328,7 +328,9 @@ def _interval_record(interval: OrderStatisticInterval | None) -> dict[str, Any] 
 
 def _tokens_per_chunk(streamed: Sequence[Mapping[str, Any]]) -> float | None:
     counted = [r for r in streamed if r.get("output_token_source") == "server_usage"]
-    tokens = sum(int(r.get("output_tokens") or 0) for r in counted)
+    # int_value, as every other token sum: a count that is not a finite
+    # number adds 0 instead of failing the whole analysis.
+    tokens = sum(int_value(r.get("output_tokens")) for r in counted)
     chunks = sum(len(r.get("chunk_interarrival_ms") or []) + 1 for r in counted)
     return tokens / chunks if chunks else None
 
