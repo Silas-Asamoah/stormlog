@@ -30,6 +30,16 @@ from .quantiles import (
     successful_quantile,
 )
 from .report_stats import int_value, is_number
+from .request_columns import (
+    ColumnRows,
+    as_floats,
+    as_ints,
+    int_sum,
+    no_records,
+    numbers_at,
+    pick,
+    sorted_floats,
+)
 from .slo import CriterionValue, client_values, server_values
 
 if TYPE_CHECKING:
@@ -59,6 +69,7 @@ def latency_summary(
     rule: SufficiencyRule = SufficiencyRule(),
     levels: Sequence[float] = LEVELS,
     client_values_of: ValuesOf = client_values,
+    columns: ColumnRows | None = None,
 ) -> dict[str, Any]:
     """Quantiles of each latency metric over a case's measured requests.
 
@@ -66,7 +77,16 @@ def latency_summary(
     ``slo.client_values``; a caller that stored them per row, as Studio's
     index does, passes a lookup instead. It is called once per successful
     request, for all the client metrics together.
+
+    With ``columns`` the requests are those rows, read by column, and
+    ``requests`` must be empty; the summary is the same, float for float.
+    Server metrics need the records, so ``spans`` cannot join them.
     """
+    if columns is not None:
+        no_records(requests)
+        if spans is not None and spans.by_request:
+            raise ValueError("server metrics are joined to records, not columns")
+        return _columnar_latency(columns, rule, levels)
     failures = [r for r in requests if r.get("status") != "ok"]
     metrics = _metrics(
         requests, failures, CLIENT_METRICS, client_values_of, rule, levels
@@ -123,12 +143,21 @@ def failure_share(offered: int, successful: int) -> dict[str, Any]:
     }
 
 
-def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def streaming_summary(
+    requests: Sequence[Mapping[str, Any]], *, columns: ColumnRows | None = None
+) -> dict[str, Any]:
     """Chunk counts and gaps of the successful streamed responses.
 
     Tokens per chunk is a mean over the responses whose output token count
     the server reported; chunk sizes themselves are not recorded.
+
+    With ``columns`` the requests are those rows, read by column with
+    their gaps from the table's gap pool, and ``requests`` must be empty;
+    the summary is the same, float for float.
     """
+    if columns is not None:
+        no_records(requests)
+        return _columnar_streaming(columns)
     streamed = [r for r in requests if _streamed(r)]
     chunks: list[float] = []
     gaps, largest = _pooled_gaps(streamed, chunks)
@@ -228,7 +257,17 @@ def _metric(
     # Sorted once here and passed as presorted, so quantiles reads every
     # level from this list; only _observed_bound, with timeouts appended,
     # sorts again.
-    successful = sorted(values)
+    return _sorted_metric(key, sorted(values), missing, failures, rule, levels)
+
+
+def _sorted_metric(
+    key: str,
+    successful: list[float],
+    missing: int,
+    failures: Sequence[Mapping[str, Any]],
+    rule: SufficiencyRule,
+    levels: Sequence[float],
+) -> dict[str, Any]:
     timeouts = _timeout_elapsed(failures) if key == "client.e2e" else None
     return {
         "boundary": key.split(".", 1)[0],
@@ -365,9 +404,168 @@ def _level_key(p: float) -> str:
     return f"p{p * 100:g}".replace(".", "_")
 
 
+# --- Columnar paths ------------------------------------------------------------
+#
+# Each reads the same values the record path reads, through the same tests,
+# in the same order; see request_columns.
+
+# What the record path reads of a request that did not succeed.
+FAILURE_FIELDS = ("status", "e2e_latency_ms", "started_at_ns", "ended_at_ns")
+
+
+def _columnar_latency(
+    columns: ColumnRows, rule: SufficiencyRule, levels: Sequence[float]
+) -> dict[str, Any]:
+    ok = np.asarray(columns.successful(), dtype=np.int64)
+    failures = _failure_records(columns, ok)
+    metrics = {
+        key: _columnar_metric(key, columns.floats(key)[ok], failures, rule, levels)
+        for key in CLIENT_METRICS
+    }
+    return {
+        "rule": rule.to_record(),
+        "metrics": metrics,
+        "unsuccessful": unsuccessful_summary(failures),
+    }
+
+
+def _failure_records(
+    columns: ColumnRows, ok: npt.NDArray[np.int64]
+) -> list[dict[str, Any]]:
+    """The rows that did not succeed, in order, as records of the fields
+    the record path reads of them (a None cell reads as a missing key)."""
+    failed = np.ones(len(columns), dtype=bool)
+    failed[ok] = False
+    cells = [columns.column(name) for name in FAILURE_FIELDS]
+    return [
+        dict(zip(FAILURE_FIELDS, (cell[k] for cell in cells)))
+        for k in np.flatnonzero(failed).tolist()
+    ]
+
+
+def _columnar_metric(
+    key: str,
+    values: npt.NDArray[np.float64],
+    failures: Sequence[Mapping[str, Any]],
+    rule: SufficiencyRule,
+    levels: Sequence[float],
+) -> dict[str, Any]:
+    """``_metric`` from the successful rows' float64 values, NaN for none."""
+    present = values[~np.isnan(values)]
+    missing = int(values.size - present.size)
+    successful = sorted_floats(present).tolist()
+    return _sorted_metric(key, successful, missing, failures, rule, levels)
+
+
+def _columnar_streaming(columns: ColumnRows) -> dict[str, Any]:
+    streamed = _streamed_positions(columns)
+    pool = columns.table.gap_pool()
+    rows = columns.positions()[streamed]
+    counts = as_ints(pool.counts)[rows]
+    pooled = _gather(
+        as_floats(pool.values), as_ints(pool.starts), as_ints(pool.counts), rows
+    )
+    finite = np.isfinite(pooled)
+    gaps = pooled[finite]
+    largest = float(gaps[int(np.argmax(gaps))]) if gaps.size else None
+    chunks = (_numeric_counts(counts, finite) + 1).astype(np.float64).tolist()
+    return {
+        "granularity": "chunk",
+        "responses": len(streamed),
+        "content_chunks_per_response": spread(chunks),
+        "chunk_interarrival_ms": {
+            **_sorted_spread(sorted_floats(gaps), largest),
+            "n": int(gaps.size),
+        },
+        "mean_tokens_per_chunk": _columnar_tokens_per_chunk(columns, streamed, counts),
+        "note": CHUNK_NOTE,
+    }
+
+
+def _streamed_positions(columns: ColumnRows) -> list[int]:
+    """``_streamed`` of each row, by column: status ok, a truthy
+    ``stream`` and a numeric ``ttft_ms``, in that order."""
+    streams = columns.column("stream")
+    ok = [k for k in columns.successful() if streams[k]]
+    ttfts = pick(columns.column("ttft_ms"), ok)
+    return [ok[j] for j in numbers_at(ttfts)]
+
+
+def _gather(
+    values: npt.NDArray[np.float64],
+    starts: npt.NDArray[np.int64],
+    every: npt.NDArray[np.int64],
+    rows: npt.NDArray[np.int64],
+) -> npt.NDArray[np.float64]:
+    """The gaps of ``rows`` (ascending table rows), concatenated in order.
+
+    ``starts`` and ``every`` are the pool's per-row starts and counts.
+    When the pool holds every row's gaps back to back in row order, as
+    Studio's does, a mask over it picks them (one byte a gap); otherwise
+    each row's slice is indexed.
+    """
+    counts = every[rows]
+    total = int(counts.sum())
+    if not total:
+        return np.zeros(0, dtype=np.float64)
+    if _back_to_back(starts, every, values.size) and _ascending(rows):
+        keep = np.zeros(every.size, dtype=bool)
+        keep[rows] = True
+        picked: npt.NDArray[np.float64] = values[np.repeat(keep, every)]
+        return picked
+    ends = np.cumsum(counts)
+    offsets = np.repeat(starts[rows] - (ends - counts), counts)
+    index = offsets + np.arange(total, dtype=np.int64)
+    gathered: npt.NDArray[np.float64] = values[index]
+    return gathered
+
+
+def _back_to_back(
+    starts: npt.NDArray[np.int64], counts: npt.NDArray[np.int64], size: int
+) -> bool:
+    """Whether row ``i``'s gaps start where row ``i - 1``'s end, from 0,
+    and the last row's end the pool."""
+    if not counts.size:
+        return size == 0
+    return bool(
+        starts[0] == 0
+        and int(starts[-1] + counts[-1]) == size
+        and np.array_equal(starts[1:], np.cumsum(counts[:-1]))
+    )
+
+
+def _ascending(rows: npt.NDArray[np.int64]) -> bool:
+    return bool(np.all(rows[1:] > rows[:-1]))
+
+
+def _numeric_counts(
+    counts: npt.NDArray[np.int64], finite: npt.NDArray[np.bool_]
+) -> npt.NDArray[np.int64]:
+    """Each row's count of gaps that are numbers, from its ``counts`` and
+    the pooled gaps' finite mask (non-numbers are few, so they are found
+    and subtracted)."""
+    bad = np.flatnonzero(~finite)
+    if not bad.size:
+        return counts
+    row_of = np.searchsorted(np.cumsum(counts), bad, side="right")
+    return counts - np.bincount(row_of, minlength=counts.size)
+
+
+def _columnar_tokens_per_chunk(
+    columns: ColumnRows, streamed: Sequence[int], gap_counts: npt.NDArray[np.int64]
+) -> float | None:
+    """``_tokens_per_chunk`` of the streamed rows (their ``gap_counts``)."""
+    sources = columns.column("output_token_source")
+    chosen = [j for j, k in enumerate(streamed) if sources[k] == "server_usage"]
+    tokens = int_sum(pick(columns.column("output_tokens"), pick(streamed, chosen)))
+    chunks = int(gap_counts[np.asarray(chosen, dtype=np.int64)].sum()) + len(chosen)
+    return tokens / chunks if chunks else None
+
+
 __all__ = [
     "CHUNK_NOTE",
     "CLIENT_METRICS",
+    "FAILURE_FIELDS",
     "LEVELS",
     "SERVER_METRICS",
     "elapsed_ms",
