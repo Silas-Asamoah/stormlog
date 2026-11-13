@@ -682,6 +682,29 @@ def test_artifact_block_validates_with_and_without_a_session() -> None:
     assert _errors(name, to_wire(artifact_block(bare))) == []
 
 
+def test_a_file_never_statted_has_no_identity_and_a_null_size() -> None:
+    unreadable = snapshot(
+        status="failed",
+        failure="unreadable",
+        identity=None,
+        bytes_read=0,
+        sha256=None,
+        session=None,
+        origin_ns=None,
+        requests=(),
+        table=DictTable(()),
+    )
+    block = artifact_block(unreadable)
+    assert block["size"] is None and block["bytes_read"] == 0
+    assert _errors("studio_artifact_block_v1.schema.json", to_wire(block)) == []
+    document = _load(EXAMPLE_DIR / "studio_artifact_v1.example.json")
+    document["artifact"] = to_wire(block)
+    document["index"].update(
+        status="failed", failure="unreadable", size=None, progress=None, bytes_read=0
+    )
+    assert _errors("studio_artifact_v1.schema.json", document) == []
+
+
 def _ns_as_int(record: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: int(value) if key.endswith("_ns") and isinstance(value, str) else value
