@@ -125,6 +125,10 @@ These are breaking changes for callers that matched the old numbers:
     consumer that reads it fails instead of mixing old and new figures.
   - A rate whose interval has no length is `null`; it used to be `0.0`.
   - Each case gains `population` and `intervals` blocks.
+  - Each case's `tokens` block gains `coverage`: for `output` and `prompt`
+    counts, `eligible`, `known`, `exact`, `by_source`, `known_sum` and
+    `partial` (see [Inference profiling](inference.md)). The key is added
+    within version 2; no other key changes.
 
 ## The report envelope
 

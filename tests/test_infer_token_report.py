@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.populations import MeasuredInterval
 from stormlog.infer.token_report import throughput, token_coverage
 
@@ -111,3 +114,38 @@ def test_throughput_without_an_interval_length_has_no_rates() -> None:
         assert block["requests_per_second"] is None
         assert block["output_tokens_per_second"] is None
         assert block["total_tokens_per_second"] is None
+
+
+def test_each_case_of_the_analyzer_reports_its_token_coverage(tmp_path: Path) -> None:
+    def request(case: str, index: int, **fields: Any) -> dict[str, Any]:
+        return {
+            "event_type": "infer.request",
+            "phase": "measured",
+            "session_id": "s1",
+            "case_id": case,
+            "request_id": f"{case}-{index}",
+            "status": "ok",
+            "started_at_ns": index * SECOND,
+            "ended_at_ns": index * SECOND + SECOND // 2,
+            "e2e_latency_ms": 500.0,
+            **fields,
+        }
+
+    records = [
+        {"event_type": "infer.session", "session_id": "s1"},
+        request("a", 0, output_tokens=10, output_token_source="server_usage"),
+        request("a", 1, output_tokens=None),
+        request("a", 2, status="error", output_tokens=99),
+        request("b", 0, prompt_tokens=7, prompt_token_exact=True),
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    cases = analyze_inference_events(path)["cases"]
+
+    for case in ("a", "b"):
+        measured = [r for r in records if r.get("case_id") == case]
+        tokens = cases[case]["tokens"]
+        assert tokens["coverage"] == token_coverage(measured)
+        assert tokens["coverage"]["output"]["known_sum"] == tokens["output_tokens"]
+    assert cases["a"]["tokens"]["coverage"]["output"]["partial"] is True
+    assert cases["b"]["tokens"]["coverage"]["prompt"]["exact"] == 1
