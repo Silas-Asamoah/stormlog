@@ -72,4 +72,22 @@ def throughput(
     }
 
 
-__all__ = ["TOKEN_KINDS", "throughput", "token_coverage"]
+def successful_throughput(
+    requests: Iterable[Mapping[str, Any]], interval: MeasuredInterval | None
+) -> dict[str, Any]:
+    """``throughput`` of the successful requests among ``requests``.
+
+    The analyzer's rate block for a case or a segment: successful requests,
+    and the sums of their output and total token counts (a count that is
+    not a number adds 0, as the analyzer sums), per second of ``interval``.
+    """
+    successful = [r for r in requests if r.get("status") == "ok"]
+    return throughput(
+        len(successful),
+        sum(int_value(r.get("output_tokens")) for r in successful),
+        sum(int_value(r.get("total_tokens")) for r in successful),
+        interval,
+    )
+
+
+__all__ = ["TOKEN_KINDS", "successful_throughput", "throughput", "token_coverage"]

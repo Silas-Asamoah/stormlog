@@ -14,6 +14,7 @@ from stormlog.infer import quantiles
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.latency_report import (
     elapsed_ms,
+    failure_share,
     latency_summary,
     spread,
     streaming_summary,
@@ -338,6 +339,22 @@ def test_each_metric_is_sorted_once_and_quantiles_never_sorts_again(
     assert json.dumps(latency_summary(requests)) == expected
     # Only the error's elapsed-time quantile sorts inside quantiles.
     assert calls == [1]
+
+
+def test_failure_share_is_null_for_nothing_offered_never_zero() -> None:
+    assert failure_share(120, 115) == {
+        "share": 5 / 120,
+        "numerator": 5,
+        "denominator": 120,
+        "reason": None,
+    }
+    assert failure_share(4, 0)["share"] == 1.0
+    assert failure_share(0, 0) == {
+        "share": None,
+        "numerator": 0,
+        "denominator": 0,
+        "reason": "empty_selection",
+    }
 
 
 def test_elapsed_ms_is_the_e2e_time_or_send_to_end_for_an_abandoned_request() -> None:

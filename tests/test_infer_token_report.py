@@ -10,7 +10,11 @@ import pytest
 
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.populations import MeasuredInterval
-from stormlog.infer.token_report import throughput, token_coverage
+from stormlog.infer.token_report import (
+    successful_throughput,
+    throughput,
+    token_coverage,
+)
 
 SECOND = 1_000_000_000
 
@@ -114,6 +118,44 @@ def test_throughput_without_an_interval_length_has_no_rates() -> None:
         assert block["requests_per_second"] is None
         assert block["output_tokens_per_second"] is None
         assert block["total_tokens_per_second"] is None
+
+
+def test_successful_throughput_counts_only_successes_and_sums_known_tokens() -> None:
+    interval = MeasuredInterval("measured_span", 0, 2 * SECOND, "all_measured")
+    requests: list[dict[str, Any]] = [
+        {"status": "ok", "output_tokens": 10, "total_tokens": 30},
+        {"status": "ok", "output_tokens": None, "total_tokens": 7.9},
+        {"status": "ok", "output_tokens": "12", "total_tokens": float("nan")},
+        {"status": "error", "output_tokens": 1000, "total_tokens": 1000},
+    ]
+    assert successful_throughput(requests, interval) == throughput(3, 10, 37, interval)
+    assert successful_throughput([], interval)["requests_per_second"] == 0.0
+    assert successful_throughput(requests, None)["requests_per_second"] is None
+
+
+def test_successful_throughput_is_the_analyzers_case_block(tmp_path: Path) -> None:
+    path = tmp_path / "run.jsonl"
+    records = [
+        {
+            "event_type": "infer.request",
+            "phase": "measured",
+            "session_id": "s1",
+            "case_id": "c1",
+            "request_id": f"r{i}",
+            "status": "ok" if i % 3 else "error",
+            "started_at_ns": i * SECOND,
+            "ended_at_ns": i * SECOND + SECOND // 2,
+            "output_tokens": [None, 5, 7.5][i % 3],
+            "total_tokens": 20 + i,
+        }
+        for i in range(12)
+    ]
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    case = analyze_inference_events(path)["cases"]["c1"]
+    interval = MeasuredInterval(
+        **{k: v for k, v in case["intervals"]["rate"].items() if k != "seconds"}
+    )
+    assert successful_throughput(records, interval) == case["throughput"]
 
 
 def test_each_case_of_the_analyzer_reports_its_token_coverage(tmp_path: Path) -> None:
