@@ -1,0 +1,776 @@
+{
+  "format": "stormlog.studio.analysis",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/043-killed.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "status": "ready",
+    "size": 11028,
+    "bytes_read": 10962,
+    "sha256": null,
+    "growing": false,
+    "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+    "session_status": "running",
+    "terminal": false,
+    "origin_ns": "1788609600000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "status": "ready",
+  "reason": "truncated_final_line",
+  "exit_code": 0,
+  "analysed_bytes": 10962,
+  "input": {
+    "kind": "complete_line_prefix",
+    "file_size": 11028,
+    "analysed_bytes": 10962,
+    "omitted_tail_bytes": 66
+  },
+  "detail": null,
+  "elapsed_s": 2.1,
+  "retry_after_s": null,
+  "limits": {
+    "max_bytes": 134217728,
+    "timeout_s": 300.0
+  },
+  "report": {
+    "analysis_version": 2,
+    "cases": {
+      "c8_in4096_out128": {
+        "arrivals": {
+          "completed": 6,
+          "dispatch_lag_ms": {
+            "max": null,
+            "p50": null,
+            "p95": null
+          },
+          "drain_seconds": null,
+          "dropped": 0,
+          "failed": {
+            "error": 2
+          },
+          "held_for_slot": 0,
+          "mode": "closed",
+          "offered": 8,
+          "offered_rate_per_second": null,
+          "peak_in_flight": null,
+          "sent": 8,
+          "window_seconds": null
+        },
+        "cache": {
+          "acknowledged": null,
+          "attempted": null,
+          "reason": "the artifact does not record a cache state",
+          "requested": "unspecified",
+          "reset": null,
+          "run_kind": null,
+          "verified": "unverified"
+        },
+        "intervals": {
+          "configured_rate_per_second": null,
+          "dispatch_window": null,
+          "drain": null,
+          "measured_span": null,
+          "rate": {
+            "ended_at_ns": "1788609604592756789",
+            "kind": "request_span",
+            "numerator_cohort": "all_measured",
+            "seconds": 4.4693,
+            "started_at_ns": "1788609600123456789"
+          },
+          "rate_reason": "no_phase_window",
+          "realized_offered_rate_per_second": null,
+          "scheduled_window": null
+        },
+        "latency": {
+          "metrics": {
+            "client.e2e": {
+              "boundary": "client",
+              "failure_penalized": {
+                "p50": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 899.3
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful": {
+                "p50": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 899.3
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 899.3
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 899.3
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 899.3
+                }
+              },
+              "successful_missing": 0
+            },
+            "client.e2e_from_intended": {
+              "boundary": "client",
+              "failure_penalized": {
+                "p50": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful": {
+                "p50": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful_missing": 6
+            },
+            "client.tpot": {
+              "boundary": "client",
+              "failure_penalized": {
+                "p50": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 2.12992125984252
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful": {
+                "p50": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 2.12992125984252
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 2.12992125984252
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 2.12992125984252
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 2.12992125984252
+                }
+              },
+              "successful_missing": 0
+            },
+            "client.ttft": {
+              "boundary": "client",
+              "failure_penalized": {
+                "p50": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 628.8
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": true,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful": {
+                "p50": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 628.8
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 628.8
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 628.8
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 6,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": 628.8
+                }
+              },
+              "successful_missing": 0
+            },
+            "client.ttft_from_intended": {
+              "boundary": "client",
+              "failure_penalized": {
+                "p50": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 8,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": "successful_values_missing",
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful": {
+                "p50": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p90": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p95": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                },
+                "p99": {
+                  "interval": null,
+                  "n": 0,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "observed_lower_bound_ms": null,
+                  "penalized": false,
+                  "reason": null,
+                  "sufficient": false,
+                  "value_ms": null
+                }
+              },
+              "successful_missing": 6
+            }
+          },
+          "rule": {
+            "assumptions": "requests are independent and identically distributed, with continuous latencies; the dependence queueing creates between requests is not covered, and sufficiency is no precision in milliseconds",
+            "confidence": 0.95,
+            "margin": 5,
+            "tails": "symmetric"
+          },
+          "unsuccessful": {
+            "error": {
+              "count": 2,
+              "elapsed_missing": 0,
+              "elapsed_ms": {
+                "max": 899.3,
+                "min": 899.3,
+                "p50": 899.3
+              }
+            }
+          }
+        },
+        "latency_ms": {
+          "e2e_from_intended_p50": null,
+          "e2e_from_intended_p95": null,
+          "e2e_from_intended_p99": null,
+          "e2e_p50": 899.3,
+          "e2e_p95": 899.3,
+          "e2e_p99": 899.3,
+          "first_chunk_p50": 620.8,
+          "first_chunk_p95": 620.8,
+          "ttft_p50": 628.8,
+          "ttft_p95": 628.8,
+          "ttft_p99": 628.8
+        },
+        "lengths": {
+          "output_tokens": {
+            "max": 128.0,
+            "min": 128.0,
+            "p50": 128.0,
+            "p95": 128.0
+          },
+          "prompt_tokens": {
+            "max": null,
+            "min": null,
+            "p50": null,
+            "p95": null
+          }
+        },
+        "memory": {
+          "observation_scope": "client_local",
+          "peak_device_used_bytes": null,
+          "peak_process_rss_bytes": null,
+          "server_coverage": {
+            "status": "not_joined"
+          },
+          "server_observations": {}
+        },
+        "population": {
+          "accepted": 8,
+          "cancelled": 0,
+          "censored": 0,
+          "cohort_valid": true,
+          "delivery_unknown": 0,
+          "dropped": 0,
+          "failed": 2,
+          "issues": [
+            "request_index_unrecorded"
+          ],
+          "offered": 8,
+          "other": {},
+          "rejected": 0,
+          "scheduled": null,
+          "sent": 8,
+          "server_admitted": null,
+          "server_evidence_coverage": null,
+          "successful": 6,
+          "timed_out": 0,
+          "unreachable": 0
+        },
+        "prompts": {
+          "distinct_prompts": null,
+          "mode": "repeat",
+          "prefix_groups_used": null,
+          "prompts_digest": null,
+          "shared_prefix_tokens": {
+            "max": null,
+            "min": null
+          }
+        },
+        "request_count": 6,
+        "streaming": {
+          "chunk_interarrival_ms": {
+            "max": 18.4,
+            "n": 18,
+            "p50": 18.1,
+            "p95": 18.4
+          },
+          "content_chunks_per_response": {
+            "max": 4.0,
+            "p50": 4.0,
+            "p95": 4.0
+          },
+          "granularity": "chunk",
+          "mean_tokens_per_chunk": 32.0,
+          "note": "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies",
+          "responses": 6
+        },
+        "throughput": {
+          "interval_kind": "request_span",
+          "interval_seconds": 4.4693,
+          "numerator_cohort": "all_measured",
+          "output_tokens_per_second": 171.83899044593116,
+          "requests_per_second": 1.3424921128588372,
+          "total_tokens_per_second": 0.0
+        },
+        "tokens": {
+          "output_token_sources": [
+            "server_usage"
+          ],
+          "output_tokens": 768,
+          "total_tokens": 0
+        }
+      }
+    },
+    "manifest": null,
+    "observers": {
+      "compared_phases": [],
+      "observers": {
+        "execution": {
+          "active": null,
+          "configured": null,
+          "healthy": null,
+          "phases": {},
+          "requested": false,
+          "settings": null,
+          "unjudged": []
+        },
+        "system_sampler": {
+          "active": null,
+          "configured": null,
+          "healthy": null,
+          "phases": {},
+          "requested": false,
+          "settings": {
+            "interval_seconds": null,
+            "sampler": null
+          },
+          "unjudged": []
+        },
+        "trace": {
+          "active": null,
+          "configured": null,
+          "healthy": null,
+          "phases": {},
+          "requested": false,
+          "settings": null,
+          "unjudged": [
+            "trace_settings_unrecorded"
+          ]
+        },
+        "vllm_metrics": {
+          "active": null,
+          "configured": null,
+          "healthy": null,
+          "phases": {},
+          "requested": false,
+          "settings": null,
+          "unjudged": []
+        },
+        "vllm_spans": {
+          "active": null,
+          "configured": null,
+          "healthy": null,
+          "phases": {},
+          "requested": false,
+          "settings": null,
+          "unjudged": []
+        }
+      }
+    },
+    "slo": null,
+    "summary": {
+      "case_count": 1,
+      "failed_requests": 2,
+      "failure_rate": 0.25,
+      "failures_by_status": {
+        "error": 2
+      },
+      "session_status": "running",
+      "successful_requests": 6,
+      "total_requests": 8
+    },
+    "telemetry": {
+      "client_observation_scope": "client_local",
+      "execution": {
+        "available": false
+      },
+      "server_join": {
+        "status": "not_configured"
+      },
+      "server_targets": [],
+      "vllm": {
+        "status": "absent"
+      }
+    },
+    "workload": null,
+    "generated_at_utc": "2026-11-13T09:30:00Z"
+  },
+  "non_finite_fields": []
+}
