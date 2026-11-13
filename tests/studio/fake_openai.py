@@ -25,6 +25,14 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, ClassVar
 
+# A deliberate dependence on private names of another test module: the
+# fake subclasses tests/test_infer_profile.py's _FakeOpenAIHandler and
+# calls its _send_json(body, *, status) and _send_stream(*, include_usage),
+# so both fakes send the same bytes. C2's v3 PR edits that module (design
+# §10.3); test_fixture_artifacts.py's
+# test_the_base_fake_keeps_the_private_names_this_fake_uses fails with a
+# message naming them if they change. Then keep the names, or vendor the
+# base fake here (Fable F-23).
 from tests.test_infer_profile import _FakeOpenAIHandler
 
 # What the profiler puts after the run ID: the case ID, then the phase,
