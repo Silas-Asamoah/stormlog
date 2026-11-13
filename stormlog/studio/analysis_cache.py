@@ -27,10 +27,10 @@ Rules:
   which a writer can grow, rewrite or replace (or a directory on the way
   swap, §7.4) after the identity check. The runner copies the complete
   lines (the whole file when it ends with a newline) from the descriptor
-  it checked to a private temporary file under ``<state>/analysis/``,
-  checks the identity again, and analyses the copy; a file that changed
-  by then is ``unavailable`` with ``changed``, so no report is cached
-  under a key it does not describe.
+  it checked to a private temporary file under
+  ``<state>/analysis/<instance_id>/``, checks the identity again, and
+  analyses the copy; a file that changed by then is ``unavailable`` with
+  ``changed``, so no report is cached under a key it does not describe.
 - **Cache.** Results are keyed by path, index ID, generation and file
   identity, and kept for the last 8 keys. A failure is cached like a result,
   so a key is analysed once; a new generation or a rewrite is a new key.
@@ -44,8 +44,10 @@ Rules:
   to the next queued analysis, and a dead worker is restarted on the
   next enqueue.
 - **Shutdown.** :meth:`AnalyzerRunner.close` kills a running subprocess the
-  same way, drops queued work, removes temporary files, and from then on
-  every state is ``unavailable`` with ``closed``.
+  same way, drops queued work, removes the instance's analysis directory,
+  and from then on every state is ``unavailable`` with ``closed``. A new
+  runner removes the directories of instances that no longer run, so
+  what a SIGKILLed Studio left is swept at the next start.
 
 The subprocess runs ``sys.executable -m stormlog``, in the private analysis
 directory (so a ``stormlog`` package in the workspace cannot shadow the
@@ -59,8 +61,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -117,6 +122,7 @@ _ENV_KEPT = frozenset({"PATH", "HOME", "LANG", "LANGUAGE", "TMPDIR", "VIRTUAL_EN
 _ENV_KEPT_PREFIXES = ("LC_", "PYTHON")
 # Never passed on, even when kept above (PYTHON_API_KEY, LC_TOKEN).
 _ENV_SECRET_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET")
+_INSTANCE_ID = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)
@@ -172,8 +178,14 @@ class AnalyzerRunner:
     """C4's :class:`~stormlog.studio.contracts.AnalysisCache` (decision 12).
 
     ``state_dir`` is Studio's state directory; outputs and prefix copies go
-    in ``<state_dir>/analysis/`` (0700) and are removed after each run.
-    ``command`` replaces :data:`ANALYZE_COMMAND`, for tests.
+    in ``<state_dir>/analysis/<instance_id>/`` (0700), are removed after
+    each run, and the directory goes at :meth:`close`. ``instance_id`` is
+    the context's (32 hex characters); without one the runner makes its
+    own. ``command`` replaces :data:`ANALYZE_COMMAND`, for tests.
+
+    At construction the runner removes every other instance's directory
+    whose ``<state_dir>/<port>.json`` names no live process: what a Studio
+    killed with SIGKILL left behind (up to a 128 MiB prefix copy).
     """
 
     def __init__(
@@ -182,11 +194,16 @@ class AnalyzerRunner:
         state_dir: Path,
         limits: Limits | None = None,
         *,
+        instance_id: str | None = None,
         command: Sequence[str] = ANALYZE_COMMAND,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        instance = secrets.token_hex(16) if instance_id is None else instance_id
+        if not _INSTANCE_ID.fullmatch(instance):
+            raise ValueError("instance_id: 32 hex characters are required")
         self._root = root
-        self._dir = Path(state_dir) / "analysis"
+        self._state_dir = Path(state_dir)
+        self._dir = self._state_dir / "analysis" / instance
         self._limits = limits or Limits()
         self._command = tuple(command)
         self._clock = clock
@@ -196,6 +213,7 @@ class AnalyzerRunner:
         self._process: subprocess.Popen[bytes] | None = None
         self._thread: threading.Thread | None = None
         self._closed = False
+        _sweep_dead_instances(self._state_dir, keep=instance)
 
     # --- the AnalysisCache protocol ---------------------------------------------
 
@@ -204,7 +222,8 @@ class AnalyzerRunner:
         return self._lookup(rel, snapshot).state
 
     def close(self) -> None:
-        """Kill the running subprocess, drop queued work; idempotent."""
+        """Kill the running subprocess, drop queued work and remove this
+        instance's analysis directory; idempotent."""
         with self._lock:
             self._closed = True
             self._queue.clear()
@@ -215,6 +234,7 @@ class AnalyzerRunner:
             _kill(process)
         if thread is not None:
             thread.join(timeout=10)
+        shutil.rmtree(self._dir, ignore_errors=True)
 
     # --- documents ------------------------------------------------------------
 
@@ -352,7 +372,8 @@ class AnalyzerRunner:
 
     def _run_copy(self, entry: _Entry, prefix: Path, token: str) -> _Outcome:
         try:
-            self._dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            for directory in (self._state_dir, self._dir.parent, self._dir):
+                directory.mkdir(mode=0o700, exist_ok=True)
             source, analysed = self._prepare(entry, prefix)
         except _Skip as skip:
             return _Outcome(skip.state)
@@ -479,6 +500,70 @@ def _env_kept(name: str) -> bool:
     if name.endswith(_ENV_SECRET_SUFFIXES) or "PROXY" in name:
         return False
     return name in _ENV_KEPT or name.startswith(_ENV_KEPT_PREFIXES)
+
+
+def _sweep_dead_instances(state_dir: Path, *, keep: str) -> None:
+    """Remove ``<state_dir>/analysis/<id>/`` for every id but ``keep`` that
+    no live instance's state file names.
+
+    The directories are listed before the state files are read: an
+    instance writes its state file before it serves, so before its first
+    run makes its directory, and a directory listed here already has its
+    live state file when the files are read.
+    """
+    analysis = state_dir / "analysis"
+    try:
+        with os.scandir(analysis) as listing:
+            names = [
+                entry.name
+                for entry in listing
+                if _INSTANCE_ID.fullmatch(entry.name)
+                and entry.name != keep
+                and entry.is_dir(follow_symlinks=False)
+            ]
+    except OSError:
+        return
+    if not names:
+        return
+    live = _live_instances(state_dir)
+    for name in names:
+        if name not in live:
+            shutil.rmtree(analysis / name, ignore_errors=True)
+
+
+def _live_instances(state_dir: Path) -> set[str]:
+    """The instance IDs whose ``<port>.json`` names a live process."""
+    live: set[str] = set()
+    for path in state_dir.glob("*.json"):
+        record = _state_record(path)
+        if record is not None and _alive(record.get("pid")):
+            instance = record.get("instance_id")
+            if isinstance(instance, str):
+                live.add(instance)
+    return live
+
+
+def _state_record(path: Path) -> dict[str, Any] | None:
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _alive(pid: Any) -> bool:
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _key(rel: str, snapshot: IndexSnapshot) -> _Key:

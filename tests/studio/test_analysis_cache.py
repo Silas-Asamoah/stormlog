@@ -10,7 +10,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import signal
 import stat
+import subprocess
 import sys
 import time
 from collections.abc import Iterator
@@ -40,6 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = REPO_ROOT / "docs" / "schemas"
 SESSION = "5f0c1d2e3a4b5c6d7e8f901234567890"
 INDEX_ID = "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d"
+INSTANCE = "c0ffee00c0ffee00c0ffee00c0ffee00"
 T0 = 1788609600000000000
 DONE = ("ready", "unavailable", "failed")
 
@@ -270,6 +273,18 @@ def runners() -> Iterator[list[AnalyzerRunner]]:
         runner.close()
 
 
+def leftovers(state_dir: Path) -> list[str]:
+    """Files left under ``<state>/analysis/``, any instance."""
+    analysis = state_dir / "analysis"
+    if not analysis.exists():
+        return []
+    return sorted(
+        path.relative_to(analysis).as_posix()
+        for path in analysis.rglob("*")
+        if not path.is_dir()
+    )
+
+
 def make(
     runners: list[AnalyzerRunner],
     workspace: Path,
@@ -277,6 +292,7 @@ def make(
     limits: Limits | None = None,
     **kwargs: Any,
 ) -> AnalyzerRunner:
+    kwargs.setdefault("instance_id", INSTANCE)
     runner = AnalyzerRunner(Root(workspace), state_dir, limits, **kwargs)
     runners.append(runner)
     return runner
@@ -320,7 +336,7 @@ def test_a_complete_artifact_is_analysed_as_it_is(
     assert document["elapsed_s"] is not None
     wired = to_wire(document)
     assert schema_errors("studio_analysis_v1.schema.json", wired) == []
-    assert list((state_dir / "analysis").iterdir()) == []
+    assert leftovers(state_dir) == []
 
 
 def test_a_truncated_last_line_analyses_the_complete_lines(
@@ -348,7 +364,7 @@ def test_a_truncated_last_line_analyses_the_complete_lines(
     }
     assert schema_errors("studio_analysis_v1.schema.json", to_wire(document)) == []
     assert path.read_bytes() == original
-    assert list((state_dir / "analysis").iterdir()) == []
+    assert leftovers(state_dir) == []
 
 
 def test_without_the_copy_the_analyzer_fails_a_truncated_file(
@@ -461,7 +477,7 @@ def test_a_popen_that_raises_fails_its_entry_and_later_runs_complete(
     second = write_artifact(workspace / "second.jsonl")
     later = settle(runner, "second.jsonl", snapshot_of(second, "second.jsonl"), 30)
     assert (later.status, later.exit_code) == ("ready", 0)
-    assert list((state_dir / "analysis").iterdir()) == []
+    assert leftovers(state_dir) == []
 
 
 def test_a_dead_worker_is_restarted_by_the_next_enqueue(
@@ -522,16 +538,12 @@ def test_the_subprocess_runs_in_the_private_analysis_directory(
     path = write_artifact(workspace / "run.jsonl")
     settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
     [run] = log_lines(log)
-    analysis_dir = state_dir / "analysis"
+    analysis_dir = state_dir / "analysis" / INSTANCE
     assert os.path.realpath(run["cwd"]) == os.path.realpath(analysis_dir)
     assert stat.S_IMODE(analysis_dir.stat().st_mode) == 0o700
     # A private 0600 copy of the verified bytes, never the artifact's path.
     assert Path(run["source"]).parent == Path(run["cwd"])
     assert run["mode"] == 0o600 and run["bytes"] == path.read_text()
-
-
-def _copies(state_dir: Path) -> list[Path]:
-    return list((state_dir / "analysis").glob("*.jsonl"))
 
 
 @pytest.mark.parametrize("how", ["grow", "rewrite", "replace"])
@@ -555,7 +567,7 @@ def test_the_analyzer_reads_the_verified_bytes_not_the_path(
     [run] = log_lines(log)
     assert path.read_text() != verified  # the writer did change it
     assert state.status == "ready" and run["bytes"] == verified
-    assert _copies(state_dir) == []
+    assert leftovers(state_dir) == []
 
 
 def test_an_artifact_changed_during_the_copy_is_not_analysed(
@@ -579,7 +591,7 @@ def test_an_artifact_changed_during_the_copy_is_not_analysed(
     runner = make(runners, workspace, state_dir, command=command)
     state = settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
     assert (state.status, state.reason) == ("unavailable", "changed")
-    assert log_lines(log) == [] and _copies(state_dir) == []
+    assert log_lines(log) == [] and leftovers(state_dir) == []
 
 
 SECRET_NAMES = (
@@ -660,7 +672,7 @@ def test_the_prefix_copy_is_private_and_exact(
     settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
     [run] = log_lines(log)
     assert run["mode"] == 0o600
-    assert Path(run["source"]).parent == state_dir / "analysis"
+    assert Path(run["source"]).parent == state_dir / "analysis" / INSTANCE
     assert run["bytes"].encode() == complete
     assert not Path(run["source"]).exists()
 
@@ -684,7 +696,7 @@ def test_a_timeout_kills_the_subprocess(
     assert (state.status, state.reason, state.exit_code) == ("failed", "timeout", None)
     [run] = log_lines(log)
     wait_for(lambda: not alive(run["pid"]))
-    assert list((state_dir / "analysis").iterdir()) == []
+    assert leftovers(state_dir) == []
     document = runner.document("run.jsonl", snapshot)
     assert document["limits"] == {"max_bytes": 128 * 2**20, "timeout_s": 0.5}
     assert schema_errors("studio_analysis_v1.schema.json", to_wire(document)) == []
@@ -717,6 +729,105 @@ def test_close_before_any_run_is_harmless(workspace: Path, state_dir: Path) -> N
     runner.close()
     path = write_artifact(workspace / "run.jsonl")
     assert runner.get("run.jsonl", snapshot_of(path, "run.jsonl")).reason == "closed"
+
+
+# --- the per-instance directory and its sweep ----------------------------------------
+
+DEAD = "dead0000dead0000dead0000dead0000"
+LIVE = "11ee000011ee000011ee000011ee0000"
+
+
+def test_close_removes_the_instance_directory(
+    workspace: Path, state_dir: Path, tmp_path: Path, runners: list[AnalyzerRunner]
+) -> None:
+    runner = make(runners, workspace, state_dir, command=fake_analyzer(tmp_path))
+    path = write_artifact(workspace / "run.jsonl")
+    settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
+    mine = state_dir / "analysis" / INSTANCE
+    assert stat.S_IMODE(mine.stat().st_mode) == 0o700
+    assert stat.S_IMODE(mine.parent.stat().st_mode) == 0o700
+    runner.close()
+    assert not mine.exists()
+
+
+def write_state(state_dir: Path, port: int, pid: int, instance: str) -> None:
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record = {"pid": pid, "port": port, "instance_id": instance}
+    (state_dir / f"{port}.json").write_text(json.dumps(record))
+
+
+def dead_pid() -> int:
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    child.wait()
+    return child.pid
+
+
+def test_a_new_runner_sweeps_only_dead_instances(
+    workspace: Path, state_dir: Path, tmp_path: Path, runners: list[AnalyzerRunner]
+) -> None:
+    analysis = state_dir / "analysis"
+    orphan = "0" * 32
+    for name in (DEAD, LIVE, orphan, "not-an-instance"):
+        (analysis / name).mkdir(parents=True)
+        (analysis / name / "left.jsonl").write_bytes(b"x\n")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "keep.jsonl").write_bytes(b"x\n")
+    (analysis / ("1" * 32)).symlink_to(elsewhere)
+    write_state(state_dir, 8790, dead_pid(), DEAD)
+    write_state(state_dir, 8791, os.getpid(), LIVE)
+    make(runners, workspace, state_dir)
+    assert sorted(path.name for path in analysis.iterdir()) == sorted(
+        [LIVE, "1" * 32, "not-an-instance"]
+    )
+    assert (elsewhere / "keep.jsonl").exists()
+
+
+SIGKILLED = """\
+import json, os, sys, time
+from pathlib import Path
+sys.path.insert(0, {tests!r})
+from test_analysis_cache import Root, fake_analyzer, snapshot_of, write_state
+from stormlog.studio.analysis_cache import AnalyzerRunner
+workspace, state, tmp = Path({workspace!r}), Path({state!r}), Path({tmp!r})
+write_state(state, 8790, os.getpid(), {instance!r})
+command = fake_analyzer(tmp, log={log!r}, sleep=60)
+runner = AnalyzerRunner(Root(workspace), state, instance_id={instance!r},
+                        command=command)
+runner.get("run.jsonl", snapshot_of(workspace / "run.jsonl", "run.jsonl"))
+time.sleep(120)
+"""
+
+
+def test_a_sigkilled_runners_leftovers_are_swept_by_the_next_start(
+    workspace: Path, state_dir: Path, tmp_path: Path, runners: list[AnalyzerRunner]
+) -> None:
+    path = write_artifact(workspace / "run.jsonl")
+    with path.open("ab") as handle:
+        handle.write(b'{"partial')  # so a prefix copy is made
+    log = tmp_path / "runs.log"
+    script = SIGKILLED.format(
+        tests=str(Path(__file__).parent),
+        workspace=str(workspace),
+        state=str(state_dir),
+        tmp=str(tmp_path),
+        instance=DEAD,
+        log=str(log),
+    )
+    studio = subprocess.Popen([sys.executable, "-c", script])
+    try:
+        wait_for(lambda: len(log_lines(log)) == 1, timeout_s=60)
+    finally:
+        studio.kill()
+        studio.wait()
+    [run] = log_lines(log)
+    os.kill(run["pid"], signal.SIGKILL)  # the analyzer, in its own session
+    left = leftovers(state_dir)
+    assert {name.split("/")[0] for name in left} == {DEAD}
+    assert any(name.endswith(".jsonl") for name in left)  # the prefix copy
+    make(runners, workspace, state_dir)
+    assert leftovers(state_dir) == []
+    assert not (state_dir / "analysis" / DEAD).exists()
 
 
 # --- states without a run ---------------------------------------------------------
