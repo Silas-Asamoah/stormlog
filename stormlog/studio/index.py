@@ -26,7 +26,9 @@ stops reading at the first request it could not keep: the snapshot is
 ``partial`` with ``limits_hit`` naming ``rows``, ``bytes_read`` is where it
 stopped, and every number is about the lines before that cut. Past the
 sample budget it keeps reading but keeps no more samples (``partial``,
-``samples``). An oversized or over-budget kept record leaves its line
+``samples``). Past the context budget the reader refuses new context
+definitions, so the lines that refer to them are problems (``partial``,
+``contexts``); the definitions it holds count in :meth:`memory`. An oversized or over-budget kept record leaves its line
 reference only (``kept_records``).
 
 Only one builder task runs per artifact at a time; request threads read
@@ -1262,6 +1264,7 @@ class _Index:
         self.reader = ArtifactReader(
             opener,
             max_line_bytes=limits.line_bytes,
+            max_context_bytes=limits.context_bytes,
             tail_grace_s=options.tail_grace_s,
             clock=options.clock,
         )
@@ -1320,6 +1323,8 @@ class _Index:
             before = self.reader.offset
             items = self.reader.read_batch(max_bytes=self.options.batch_bytes)
             self._ingest(items)
+            if self.reader.contexts_limited:
+                self.state.limits_hit.add("contexts")
             if self.reader.offset == before:
                 break
             progressed = True
@@ -1525,7 +1530,7 @@ class _Index:
             return "failed", "audio"
         if "infer.session" not in inventory and "infer.request" not in inventory:
             return "failed", "not_an_inference_artifact"
-        if state.limits_hit & {"rows", "samples"}:
+        if state.limits_hit & {"rows", "samples", "contexts"}:
             return "partial", None
         return "ready", None
 
@@ -1548,6 +1553,7 @@ class _Index:
         state = self.state
         requests = state.requests
         size = self._row_bytes() + requests.gap_bytes() + requests.error_bytes()
+        size += self.reader.context_bytes  # the decoder's definitions
         return size + state.samples.nbytes() + state.kept_bytes
 
     def _snapshot(self) -> IndexSnapshot:
