@@ -962,15 +962,21 @@ def test_odd_values_round_trip_exactly(tmp_path: Path) -> None:
     assert snapshot.requests[4].load_error_message() is None
 
 
-@pytest.mark.parametrize("depth", [900, 990, 1500, 5000])
+# With their wrappers, 126 lists nest 128 deep (the limit) on line 0 and 127
+# on the others; 127 lists nest 129 on line 0. 900 and 5000 are past it.
+@pytest.mark.parametrize("depth", [126, 127, 900, 5000])
 def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
     tmp_path: Path, depth: int
 ) -> None:
-    """Made here: json.loads takes it, finite_copy and json.dumps may not (F-4).
-
-    Where this Python's json.loads refuses the depth, the line is the
-    reader's not_json problem instead; either way the index is ready.
+    """A line nested past MAX_NESTING is the reader's not_json problem on
+    every Python (json.loads takes 50,000 levels from 3.14). One within it
+    is kept whole, and its request's detail can be copied and written as a
+    route does (F-4: finite_copy recursed past Python's limit and the
+    request route answered 500). Either way the index is ready.
     """
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+    from stormlog.studio.summaries import request_detail
+
     nested = "[" * depth + "]" * depth
     head = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1,'
     lines = [
@@ -986,30 +992,25 @@ def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
     snapshot = harness_for(path).build(path.name)
     assert (snapshot.status, snapshot.failure) == ("ready", None)
     problems = {p.ref.line: p.code for p in snapshot.problems}
-    assert set(problems.values()) <= {"undecodable", "not_json"}
+    nesting = [depth + 2, depth + 1, depth + 1, depth + 1]
+    deep = {line for line, n in enumerate(nesting) if n > MAX_NESTING}
+    assert problems == dict.fromkeys(deep, "not_json")
     assert snapshot.problem_count == len(problems)
-    parsed = {line for line in range(5) if problems.get(line) != "not_json"}
-    assert {0, 1, 2, 3} <= parsed or depth > 900
     ids = [row.request_id for row in snapshot.requests]
-    assert ids == (["q", "r"] if 2 in parsed else ["r"])
+    assert ids == (["r"] if 2 in deep else ["q", "r"])
     for line, kind in ((0, "infer.session"), (1, "infer.workload")):
-        if line not in parsed:
-            continue
         kept = snapshot.kept.get(kind, ())
-        assert (problems.get(line) == "undecodable") == (not kept), (depth, line)
-        assert snapshot.refs[kind][0].line == line
+        assert len(kept) == (line not in deep), (depth, line)
         encode_json({"kept": kept})
-    if 0 in parsed:
-        assert snapshot.session is not None and snapshot.session.session_id == "s1"
-    if problems.get(0) == "undecodable":
-        assert snapshot.session is not None and snapshot.session.config == {}
-        assert "kept_records" in snapshot.limits_hit
-    if 2 in parsed:
-        weird = snapshot.requests[0]["weird"]
-        assert (weird is None) == (problems.get(2) == "undecodable"), depth
-    if 3 in parsed:
-        weird = snapshot.samples[0]["weird"]
-        assert (weird is None) == (problems.get(3) == "undecodable"), depth
+    session = snapshot.session
+    assert (session is None) == (0 in deep)
+    assert session is None or session.config == json.loads('{"d":' + nested + "}")
+    if 2 not in deep:
+        assert snapshot.requests[0]["weird"] == json.loads(nested)
+    if 3 not in deep:
+        assert snapshot.samples[0]["weird"] == json.loads(nested)
+    for row in range(len(snapshot.requests)):
+        encode_json(request_detail(snapshot, row, None))
     encode_json({"artifact": artifact_block(snapshot)})
 
 
