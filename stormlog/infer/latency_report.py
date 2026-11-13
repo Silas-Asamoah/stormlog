@@ -14,8 +14,11 @@ so chunk gaps are never called inter-token latency.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import numpy.typing as npt
 
 from .quantiles import (
     OrderStatisticInterval,
@@ -23,6 +26,7 @@ from .quantiles import (
     SufficiencyRule,
     penalized_quantile,
     quantile,
+    quantile_sorted,
     successful_quantile,
 )
 from .report_stats import is_number
@@ -110,13 +114,13 @@ def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     the server reported; chunk sizes themselves are not recorded.
     """
     streamed = [r for r in requests if _streamed(r)]
-    gaps = [gap for r in streamed for gap in _gaps(r)]
-    chunks = [float(len(_gaps(r)) + 1) for r in streamed]
+    chunks: list[float] = []
+    gaps, largest = _pooled_gaps(streamed, chunks)
     return {
         "granularity": "chunk",
         "responses": len(streamed),
         "content_chunks_per_response": spread(chunks),
-        "chunk_interarrival_ms": {**spread(gaps), "n": len(gaps)},
+        "chunk_interarrival_ms": {**_sorted_spread(gaps, largest), "n": len(gaps)},
         "mean_tokens_per_chunk": _tokens_per_chunk(streamed),
         "note": CHUNK_NOTE,
     }
@@ -128,6 +132,31 @@ def _streamed(record: Mapping[str, Any]) -> bool:
         and record.get("stream")
         and is_number(record.get("ttft_ms"))
     )
+
+
+def _pooled_gaps(
+    streamed: Sequence[Mapping[str, Any]], chunks: list[float]
+) -> tuple[npt.NDArray[np.float64], float | None]:
+    """Every response's gaps in one sorted float64 array, and the largest gap.
+
+    Appends each response's chunk count to ``chunks``. The array costs 8
+    bytes a gap where a pooled list costs a Python float each. The sort is
+    stable, as ``sorted`` is, and the largest gap is ``max``'s first
+    maximum, so equal values of either sign give the same floats as before.
+    """
+    largest: list[float] = []
+
+    def each() -> Iterator[float]:
+        for record in streamed:
+            gaps = _gaps(record)
+            chunks.append(float(len(gaps) + 1))
+            if gaps:
+                largest.append(max(gaps))
+            yield from gaps
+
+    pooled = np.fromiter(each(), dtype=np.float64)
+    pooled.sort(kind="stable")
+    return pooled, max(largest, default=None)
 
 
 def _gaps(record: Mapping[str, Any]) -> list[float]:
@@ -291,10 +320,16 @@ def spread(values: Sequence[float]) -> dict[str, float | None]:
     The report's shape for a pool of chunk gaps or chunk counts, and Studio's
     for one request's gaps.
     """
+    return _sorted_spread(sorted(values), max(values, default=None))
+
+
+def _sorted_spread(
+    ordered: Sequence[float] | npt.NDArray[np.float64], largest: float | None
+) -> dict[str, float | None]:
     return {
-        "p50": quantile(values, 0.5),
-        "p95": quantile(values, 0.95),
-        "max": max(values, default=None),
+        "p50": quantile_sorted(ordered, 0.5),
+        "p95": quantile_sorted(ordered, 0.95),
+        "max": largest,
     }
 
 
