@@ -568,6 +568,34 @@ def test_a_rewrite_in_place_rebuilds_under_a_new_index_id(
     assert len(first.requests) == 10  # the old snapshot is untouched
 
 
+def test_a_cancelled_first_build_publishes_nothing(
+    studio_artifacts: StandardArtifacts, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = studio_artifacts["mixed"]
+    harness = harness_for(path, batch_bytes=2_000)
+    published: list[IndexSnapshot] = []
+    harness.indexes.add_publish_listener(published.append)
+    building = harness.indexes.snapshot(path.name)
+    entry = harness.indexes._entries[path.name]
+    real = entry.reader.read_batch
+    batches = 0
+
+    def cancel_after_two(**kwargs: Any) -> Any:
+        nonlocal batches
+        batches += 1
+        if batches == 3:
+            entry.cancelled.set()  # as eviction or close() does mid-build
+        return real(**kwargs)
+
+    monkeypatch.setattr(entry.reader, "read_batch", cancel_after_two)
+    harness.pool.run()
+    after = entry.snapshot
+    assert entry.cancelled.is_set() and batches == 3
+    assert after.status == "building" and not entry.state.built
+    assert after.generation == 2 and after is not building  # two batches, no more
+    assert not entry.complete and published == []
+
+
 def test_a_completed_build_trims_the_heap_once(
     fresh_artifact: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:

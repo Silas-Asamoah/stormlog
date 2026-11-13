@@ -1404,6 +1404,8 @@ class _Index:
         if before is not None and after is not None and before.size != after.size:
             self.last_growth = self.last_stat
         progressed = self._read_all()
+        if self.cancelled.is_set():
+            return False  # a cancelled build is not built (F-14)
         self.state.built = True
         self._publish(new_lines=False)
         return change != "same" or progressed
@@ -1723,6 +1725,10 @@ class _Index:
         )
 
     def _publish(self, *, new_lines: bool) -> None:
+        """Make a new snapshot current; nothing once the index is cancelled
+        (evicted or closed), so a cancelled first build never says ready."""
+        if self.cancelled.is_set():
+            return
         if new_lines:
             self.state.generation += 1
         current = self.snapshot
