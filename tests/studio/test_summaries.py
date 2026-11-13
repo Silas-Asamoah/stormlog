@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import time
 from collections.abc import Mapping
 from dataclasses import replace
@@ -33,6 +34,7 @@ from stormlog.studio.contracts import (
     RequestFilter,
     TimeWindow,
     UsageError,
+    columnar,
     envelope,
     to_wire,
 )
@@ -40,6 +42,7 @@ from stormlog.studio.metric_catalog import metric_catalog, panels
 from stormlog.studio.selection import case_facts, page, parse_filter, select
 from tests.studio.artifacts import ANALYZE_FAILS, MULTI_SESSION, STANDARD_ARTIFACTS
 from tests.studio.conftest import StandardArtifacts
+from tests.studio.test_index import Harness
 from tests.studio.test_selection import (
     ORIGIN,
     SECOND,
@@ -727,6 +730,128 @@ def test_the_cases_example_shows_a_planned_case_never_run() -> None:
     assert planned[0]["summary"]["selection"]["size"] == 0
 
 
+# --- Columnar and row paths (Fable's F-2) ----------------------------------------------
+
+
+def _documents(snapshot: Any, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The summary of the default filter, of each case and of the ok rows,
+    by the columnar path and then by rows (``columnar`` giving None), as
+    JSON text: floats by repr, so -0.0, NaN and 1 vs 1.0 all count."""
+    filters = [RequestFilter(), RequestFilter(statuses=("ok",))]
+    filters += [RequestFilter(cases=(c,)) for c in case_facts(snapshot).by_case]
+    texts = []
+    for by_rows in (False, True):
+        with monkeypatch.context() as patch:
+            if by_rows:
+                patch.setattr(summaries, "columnar", lambda table: None)
+            texts.append(
+                json.dumps([_summary(snapshot, f) for f in filters], sort_keys=True)
+            )
+    return texts
+
+
+def _indexed(path: Path, directory: Path) -> Any:
+    """C1's real index of ``path`` (a copy in ``directory``)."""
+    shutil.copyfile(path, directory / path.name)
+    return Harness(directory).build(path.name)
+
+
+@pytest.mark.parametrize("name", STUDIO_ARTIFACTS)
+def test_the_columnar_summary_gives_the_row_summarys_floats(
+    name: str,
+    studio_artifacts: StandardArtifacts,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = studio_artifacts[name]
+    stand_in = snapshot_of(path)
+    assert columnar(stand_in.table) is not None
+    columnar_text, rows_text = _documents(stand_in, monkeypatch)
+    assert columnar_text == rows_text
+    real = _indexed(path, tmp_path)
+    if real.status in ("ready", "partial"):
+        assert columnar(real.table) is not None
+        columnar_text, rows_text = _documents(real, monkeypatch)
+        assert columnar_text == rows_text
+
+
+NAN, INF = float("nan"), float("inf")
+BIG = 2**53 + 1
+# One request per hostile value: latencies, gaps, token counts, flags and
+# times that are NaN, infinite, -0.0, ints past 2**53 or 2**64, null,
+# absent, booleans or text, each where a rule reads it.
+HOSTILE: list[dict[str, Any]] = [
+    {"ttft_ms": NAN, "e2e_latency_ms": INF},
+    {"ttft_ms": -0.0, "first_chunk_latency_ms": -0.0, "e2e_latency_ms": 0.0},
+    {"ttft_ms": 0.0, "e2e_latency_ms": -0.0},
+    {"ttft_ms": BIG, "e2e_latency_ms": 2**64},
+    {"ttft_ms": True, "e2e_latency_ms": "500"},
+    {"chunk_interarrival_ms": [NAN, INF, -INF, -0.0, 0.0, 0, BIG, True, None]},
+    {"chunk_interarrival_ms": [0.0, -0.0, "7", [], {}, 1e308, 5e-324]},
+    {"chunk_interarrival_ms": "abc"},
+    {"chunk_interarrival_ms": 5},
+    {"chunk_interarrival_ms": None},
+    {"chunk_interarrival_ms": []},
+    {"output_tokens": INF, "total_tokens": NAN},
+    {"output_tokens": NAN, "prompt_tokens": -INF},
+    {"output_tokens": True, "prompt_tokens": False, "total_tokens": True},
+    {"output_tokens": BIG, "total_tokens": 2**64 + 3},
+    {"output_tokens": 7.9, "total_tokens": -0.0},
+    {"output_tokens": "12", "total_tokens": None},
+    {"output_tokens": None, "output_token_source": None},
+    {"output_token_source": 5, "prompt_token_source": True},
+    {"output_token_exact": 1, "prompt_token_exact": "true"},
+    {"output_token_exact": None, "prompt_token_source": None},
+    {"stream": 1},
+    {"stream": "yes", "ttft_ms": 3},
+    {"stream": None},
+    {"started_at_ns": float(ORIGIN), "ended_at_ns": ORIGIN + 2**63},
+    {"started_at_ns": True, "ended_at_ns": None},
+    {"started_at_ns": NAN},
+    {"status": "timeout", "e2e_latency_ms": -0.0},
+    {"status": "timeout", "e2e_latency_ms": NAN},
+    {"status": "cancelled", "e2e_latency_ms": None, "ended_at_ns": BIG},
+    {"status": None},
+    {"status": 5},
+    {"status": True},
+    {"status": "dropped", "started_at_ns": None},
+]
+# Keys left out of a request entirely, beside the same keys set to null.
+ABSENT = ("output_token_source", "prompt_token_source", "output_tokens", "stream")
+
+
+def _hostile_records() -> list[dict[str, Any]]:
+    rows = [request(i, **values) for i, values in enumerate(HOSTILE)]
+    for key in ABSENT:
+        record = request(len(rows))
+        del record[key]
+        rows.append(record)
+    rows += [request(len(rows) + i) for i in range(4)]
+    return [session_record(), *rows]
+
+
+def test_the_columnar_summary_gives_the_row_summarys_floats_on_hostile_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    records = _hostile_records()
+    stand_in = snapshot_from_records(records)
+    columnar_text, rows_text = _documents(stand_in, monkeypatch)
+    assert columnar_text == rows_text
+    path = tmp_path / "hostile.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    real = Harness(tmp_path).build(path.name)
+    assert real.status == "ready"
+    assert len(real.table) == len(records) - 1
+    columnar_text, rows_text = _documents(real, monkeypatch)
+    assert columnar_text == rows_text
+    # The values reach the summary: -0.0 stays signed, null and absent
+    # sources stay apart.
+    document = json.loads(columnar_text)[0]
+    assert document["tokens"]["output"]["by_source"]["None"] == 1
+    assert document["tokens"]["output"]["by_source"]["unknown"] == 1
+    assert "-0.0" in columnar_text
+
+
 # --- Parity with infer analyze (§3.4) --------------------------------------------------
 
 PARITY_ARTIFACTS = STUDIO_ARTIFACTS
@@ -832,16 +957,23 @@ def test_requests_page_takes_under_2_s_on_500000_requests(large_snapshot: Any) -
     assert elapsed < 2.0
 
 
+@pytest.fixture(scope="module")
+def large_index_snapshot(large_studio_artifact: Path) -> Any:
+    """C1's real ArtifactIndexes over the large file (Fable's F-2: time the
+    index Studio serves, not a stand-in)."""
+    snapshot = Harness(large_studio_artifact.parent).build(large_studio_artifact.name)
+    case_facts(snapshot)  # warmed once per snapshot, as on the builder pool
+    return snapshot
+
+
 @pytest.mark.studio_large
-@pytest.mark.xfail(
-    strict=True,
-    reason="summary over 500,000 rows takes about 5.5 s: the analyzer functions "
-    "walk every row and every gap in Python; see the C2 report",
-)
-def test_summary_takes_under_2_s_on_500000_requests(large_snapshot: Any) -> None:
-    sel = select(large_snapshot, RequestFilter())
+def test_summary_takes_under_2_s_on_500000_requests(large_index_snapshot: Any) -> None:
+    # The first summary of the snapshot, so building its columns counts.
+    snapshot = large_index_snapshot
+    assert snapshot.status == "ready" and columnar(snapshot.table) is not None
+    sel = select(snapshot, RequestFilter())
     started = time.perf_counter()
-    summaries.summary(large_snapshot, sel)
+    summaries.summary(snapshot, sel)
     elapsed = time.perf_counter() - started
     print(json.dumps({"summary": elapsed}))
     assert elapsed < 2.0
