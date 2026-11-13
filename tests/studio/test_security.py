@@ -695,6 +695,20 @@ def test_a_directory_swapped_for_a_symlink_after_realpath_is_refused(
     assert caught.value.code == "path_not_allowed"
 
 
+def test_a_path_that_changes_under_realpath_is_not_found(
+    workspace: RootDirectory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before 3.13, realpath's lstat then readlink of a symlink that goes
+    # in between raises FileNotFoundError (the flipper below hits it).
+    def vanishing(path: Any, *args: Any, **kwargs: Any) -> str:
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(os.path, "realpath", vanishing)
+    with pytest.raises(NotFoundError) as caught:
+        workspace.resolve("runs/a.jsonl")
+    assert caught.value.code == "artifact_not_found"
+
+
 def test_a_concurrent_directory_flipper_never_escapes_the_root(
     workspace: RootDirectory, tmp_path: Path
 ) -> None:
