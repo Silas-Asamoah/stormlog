@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_points_v1.schema.json",
+  "title": "Stormlog Studio points v1",
+  "description": "GET /api/v1/artifact/points (design §5.4, §5.7): the selection's requests as (x, y) points to draw, never to aggregate. Up to max_points rows are drawn as they are (method all); beyond that max_points // 2 equal x-buckets each keep their lowest and highest y, then every keep ID and up to 500 rows that did not succeed are added (method bucket_extremes). Points are ordered by x, then line.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "x",
+    "y",
+    "points",
+    "drawn",
+    "total",
+    "without_value",
+    "method",
+    "bounds"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.points"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "$ref": "studio_selection_block_v1.schema.json"
+    },
+    "x": {
+      "enum": [
+        "start",
+        "end",
+        "arrival"
+      ]
+    },
+    "y": {
+      "enum": [
+        "client.ttft",
+        "client.ttft_from_intended",
+        "client.e2e",
+        "client.e2e_from_intended",
+        "client.tpot",
+        "first_chunk",
+        "output_tokens",
+        "chunk_count"
+      ]
+    },
+    "points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "line",
+          "request_id",
+          "status",
+          "x_ms",
+          "x_ns",
+          "y"
+        ],
+        "properties": {
+          "line": {
+            "$ref": "#/$defs/count"
+          },
+          "request_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "x_ms": {
+            "description": "ms from origin_ns.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "x_ns": {
+            "description": "The exact x, so a brush can snap to a real value.",
+            "$ref": "#/$defs/ns"
+          },
+          "y": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "drawn": {
+      "$ref": "#/$defs/count"
+    },
+    "total": {
+      "description": "Rows with an x and a y.",
+      "$ref": "#/$defs/count"
+    },
+    "without_value": {
+      "description": "Rows without an x or a y.",
+      "$ref": "#/$defs/count"
+    },
+    "method": {
+      "enum": [
+        "all",
+        "bucket_extremes"
+      ]
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_points",
+        "buckets",
+        "non_ok"
+      ],
+      "properties": {
+        "max_points": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 5000
+        },
+        "buckets": {
+          "$ref": "#/$defs/count"
+        },
+        "non_ok": {
+          "const": 500
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    }
+  }
+}

@@ -21,9 +21,12 @@ import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 from referencing import Registry, Resource
 
+from stormlog.infer.analysis import analyze_inference_events
+from stormlog.infer.events import InferenceSystemSample
 from stormlog.infer.latency_report import CLIENT_METRICS, spread, streaming_summary
 from stormlog.studio import summaries
 from stormlog.studio.contracts import (
+    AnalysisState,
     LatencyRange,
     NotResident,
     RequestFilter,
@@ -32,6 +35,7 @@ from stormlog.studio.contracts import (
     envelope,
     to_wire,
 )
+from stormlog.studio.metric_catalog import metric_catalog, panels
 from stormlog.studio.selection import case_facts, page, parse_filter, select
 from tests.studio.artifacts import MULTI_SESSION, STANDARD_ARTIFACTS
 from tests.studio.conftest import StandardArtifacts
@@ -380,6 +384,7 @@ def test_chunks_page_the_gaps_in_written_order() -> None:
     gaps = [float(i) for i in range(25)] + [float("inf")]
     snapshot = snapshot_from_records([request(0, chunk_interarrival_ms=gaps)])
     first = summaries.chunks(snapshot, 0, offset=0, limit=10)
+    assert schema_errors("chunks", _wire("chunks", first, snapshot)) == []
     assert first["gaps_ms"] == gaps[:10] and first["total"] == 26
     last = summaries.chunks(snapshot, 0, offset=20, limit=10)
     assert last["gaps_ms"] == gaps[20:25] + [None]
@@ -404,6 +409,9 @@ def test_each_bin_carries_the_latency_parameter_that_selects_its_count() -> None
         snapshot, sel, metric="client.e2e", edges=None, bins=7
     )
     assert sum(b["count"] for b in document["bins"]) == 60
+    assert (
+        schema_errors("distribution", _wire("distribution", document, snapshot)) == []
+    )
     assert document["denominator"] == {
         "params": "phase=measured",
         "size": 61,
@@ -493,6 +501,7 @@ def test_points_draw_all_rows_up_to_the_bound_then_bucket_extremes() -> None:
     assert bounded["drawn"] <= 100 + 1 + 500
     xs = [(p["x_ns"], p["line"]) for p in bounded["points"]]
     assert xs == sorted(xs)
+    assert schema_errors("points", _wire("points", bounded, snapshot)) == []
 
 
 @pytest.mark.parametrize(
@@ -583,7 +592,176 @@ def test_samples_give_series_by_device_with_gaps_and_buckets() -> None:
     assert sum(b["count"] for b in rss["buckets"]) == 31
     assert rss["buckets"][-1]["last"] == 1030
     assert psutil["peaks"]["peak_process_rss_bytes"] == 1030
+    assert schema_errors("samples", _wire("samples", document, snapshot)) == []
     windowed = summaries.samples(
         snapshot, window=TimeWindow(ORIGIN, ORIGIN + 2 * SECOND), max_points=9
     )
     assert windowed["total"] == 3
+
+
+# --- The example documents (design §10.2) ---------------------------------------------
+
+EXAMPLE_DIR = SCHEMA_DIR / "examples"
+EXAMPLE_PATH = "runs/tokens_mixed.jsonl"
+PLANNED_CASE = "c8_in64_out16_planned"
+# What differs between two builds of the same artifact on two checkouts: the
+# session record names the Stormlog version, so the file's size and hash move.
+VOLATILE = ("sha256", "size", "bytes_read")
+
+
+def example_artifact(directory: Path) -> Path:
+    """C5's tokens_mixed run with a planned case it never ran and psutil samples.
+
+    The planned case shows choice 16, the samples the client memory and
+    samples documents; the requests are C5's, untouched.
+    """
+    source = STANDARD_ARTIFACTS["tokens_mixed"](directory)
+    lines = source.read_bytes().split(b"\n")
+    starts = []
+    for i, line in enumerate(lines):
+        if b'"infer.workload"' in line:
+            record = json.loads(line)
+            planned = dict(record["cases"][0], case_id=PLANNED_CASE)
+            record["cases"].append(planned)
+            lines[i] = json.dumps(record).encode()
+        if b'"infer.request"' in line:
+            starts.append(int(json.loads(line)["started_at_ns"]))
+    session = json.loads(lines[0])["session_id"]
+    samples = [
+        InferenceSystemSample(
+            session_id=session,
+            timestamp_ns=min(starts) + k * SECOND // 4,
+            sampler="psutil",
+            process_rss_bytes=180_000_000 + 65_536 * k * (k % 7),
+        ).to_record()
+        for k in range(40)
+        if k != 30  # one missed sample: a gap
+    ]
+    body = b"\n".join(line for line in lines if line)
+    extra = b"".join(json.dumps(s).encode() + b"\n" for s in samples)
+    target = directory / "tokens_mixed.example.jsonl"
+    target.write_bytes(body + b"\n" + extra)
+    return target
+
+
+def build_examples(directory: Path) -> dict[str, Any]:
+    """Every C2 example document, from the real code over ``example_artifact``."""
+    path = example_artifact(directory)
+    snapshot = snapshot_of(path, rel=EXAMPLE_PATH, generation=3)
+    case = sorted(case_facts(snapshot).by_case)[0]
+    whole = select(snapshot, RequestFilter(cases=(case,)))
+    statuses = snapshot.column("status")
+    ok_row = next(i for i in whole.rows if statuses[i] == "ok")
+    failed = next(i for i in whole.rows if statuses[i] != "ok")
+    first = page(snapshot, whole, sort="client.e2e", order="desc", cursor=None, limit=4)
+    report = analyze_inference_events(path)
+    analysis = AnalysisState("ready", None, 0, report, snapshot.bytes_read)
+    keep = [snapshot.requests[failed].request_id]
+    bodies: dict[str, tuple[dict[str, Any], bool]] = {
+        "summary": (summaries.summary(snapshot, whole), True),
+        "requests": (summaries.requests_page(snapshot, whole, first), True),
+        "request": (summaries.request_detail(snapshot, ok_row, whole), True),
+        "cases": (summaries.cases(snapshot), True),
+        "chunks": (summaries.chunks(snapshot, ok_row, offset=0, limit=8), True),
+        "distribution": (
+            summaries.distribution(
+                snapshot, whole, metric="client.e2e", edges=None, bins=12
+            ),
+            True,
+        ),
+        "points": (
+            summaries.points(
+                snapshot, whole, x="start", y="client.e2e", max_points=16, keep=keep
+            ),
+            True,
+        ),
+        "samples": (summaries.samples(snapshot, window=None, max_points=12), True),
+        "metric_catalog": (metric_catalog(), False),
+        "artifact_capabilities": (panels(snapshot, analysis), True),
+    }
+    examples = {
+        name: to_wire(envelope(name, body, snapshot if scoped else None))
+        for name, (body, scoped) in bodies.items()
+    }
+    examples["selection_block"] = to_wire(summaries.selection_block(whole, snapshot))
+    return examples
+
+
+def _example_file(name: str) -> Path:
+    return EXAMPLE_DIR / f"studio_{name}_v1.example.json"
+
+
+def write_examples(directory: Path) -> list[Path]:
+    """Regenerate the committed examples: ``python -m tests.studio.test_summaries``."""
+    written = []
+    for name, document in sorted(build_examples(directory).items()):
+        path = _example_file(name)
+        text = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+        path.write_text(text, encoding="utf-8")
+        written.append(path)
+    return written
+
+
+def _same(left: Any, right: Any, where: str = "") -> list[str]:
+    """Where two documents differ; floats within 1e-9 relative (F-8)."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        if set(left) != set(right):
+            return [f"{where}: keys {sorted(set(left) ^ set(right))}"]
+        return [d for k in left for d in _same(left[k], right[k], f"{where}.{k}")]
+    if isinstance(left, list) and isinstance(right, list):
+        if len(left) != len(right):
+            return [f"{where}: {len(left)} items, not {len(right)}"]
+        pairs = enumerate(zip(left, right))
+        return [d for i, (a, b) in pairs for d in _same(a, b, f"{where}[{i}]")]
+    if isinstance(left, float) and isinstance(right, float):
+        close = math.isclose(left, right, rel_tol=1e-9)
+        return [] if close else [f"{where}: {left} != {right}"]
+    return [] if left == right else [f"{where}: {left!r} != {right!r}"]
+
+
+def _stable(document: Any) -> Any:
+    copy = json.loads(json.dumps(document))
+    for key in VOLATILE:
+        copy.get("artifact", {}).pop(key, None)
+    # The analysed prefix is the file's bytes_read, which moves with it.
+    analysis = copy.get("panels", {}).get("analysis", {})
+    (analysis.get("detail") or {}).pop("analysed_bytes", None)
+    return copy
+
+
+C2_EXAMPLES = (
+    "selection_block",
+    "summary",
+    "requests",
+    "request",
+    "cases",
+    "chunks",
+    "distribution",
+    "points",
+    "samples",
+    "metric_catalog",
+    "artifact_capabilities",
+)
+
+
+def test_the_examples_are_what_the_code_writes(tmp_path: Path) -> None:
+    built = build_examples(tmp_path)
+    assert sorted(built) == sorted(C2_EXAMPLES)
+    for name, document in built.items():
+        assert schema_errors(name, document) == [], name
+        committed = json.loads(_example_file(name).read_text(encoding="utf-8"))
+        assert _same(_stable(document), _stable(committed)) == [], name
+
+
+def test_the_cases_example_shows_a_planned_case_never_run() -> None:
+    document = json.loads(_example_file("cases").read_text(encoding="utf-8"))
+    planned = [c for c in document["cases"] if not c["observed"]]
+    assert [c["case_id"] for c in planned] == [PLANNED_CASE]
+    assert planned[0]["summary"]["selection"]["size"] == 0
+
+
+if __name__ == "__main__":
+    import tempfile
+
+    for written in write_examples(Path(tempfile.mkdtemp())):
+        print(written)
