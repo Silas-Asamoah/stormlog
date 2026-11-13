@@ -46,12 +46,12 @@ from stormlog.infer.populations import (
     MeasuredInterval,
     count_population,
 )
-from stormlog.infer.quantiles import quantile
 from stormlog.infer.report_stats import is_number
 from stormlog.infer.request_columns import ColumnRows
 from stormlog.infer.sample_report import (
     group_samples,
     request_window,
+    sample_gaps,
     sample_peaks,
     samples_in_window,
 )
@@ -879,9 +879,10 @@ def samples(
     its ``sample_peaks`` entry. Per field, a series of at most
     ``max_points`` samples is given whole; a longer one is cut into
     ``max_points // 3`` equal time buckets, each with its minimum, maximum
-    and last value and their times. A gap is marked where consecutive
-    samples are more than ``observers.SCRAPE_GAP_FACTOR`` times the series'
-    median interval apart. ``window`` is half-open on the client clock.
+    and last value and their times. Gaps are ``sample_report.sample_gaps``:
+    consecutive samples more than ``observers.SCRAPE_GAP_FACTOR`` times the
+    series' median interval apart. ``window`` is half-open on the client
+    clock.
     """
     _check_count("max_points", max_points, minimum=3, maximum=MAX_POINTS)
     timed = [s for s in snapshot.samples if _is_int(s.get("timestamp_ns"))]
@@ -915,25 +916,16 @@ def _series(
         "device_id": device_id,
         "samples": len(ordered),
         "peaks": sample_peaks(ordered)[0],
-        "gaps": _sample_gaps(times),
+        "gaps": [
+            {"after_ns": after, "before_ns": before}
+            for after, before in sample_gaps(times)
+        ],
         "fields": {
             field: _field_series(snapshot, ordered, field, max_points)
             for field in SAMPLE_FIELDS
             if any(is_number(s.get(field)) for s in ordered)
         },
     }
-
-
-def _sample_gaps(times: Sequence[int]) -> list[dict[str, int]]:
-    intervals = [b - a for a, b in zip(times, times[1:])]
-    median = quantile(intervals, 0.5)
-    if not median:
-        return []
-    return [
-        {"after_ns": a, "before_ns": b}
-        for a, b in zip(times, times[1:])
-        if b - a > SCRAPE_GAP_FACTOR * median
-    ]
 
 
 def _field_series(
