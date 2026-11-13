@@ -40,7 +40,13 @@ from stormlog.studio.contracts import (
 )
 from stormlog.studio.metric_catalog import metric_catalog, panels
 from stormlog.studio.selection import case_facts, page, parse_filter, select, warm
-from tests.studio.artifacts import ANALYZE_FAILS, MULTI_SESSION, STANDARD_ARTIFACTS
+from tests.studio.artifacts import (
+    ANALYZE_FAILS,
+    MULTI_SESSION,
+    PROBLEM_LINES,
+    STANDARD_ARTIFACTS,
+    UNSUPPORTED,
+)
 from tests.studio.conftest import StandardArtifacts
 from tests.studio.test_index import Harness
 from tests.studio.test_selection import (
@@ -854,7 +860,13 @@ def test_the_columnar_summary_gives_the_row_summarys_floats_on_hostile_values(
 
 # --- Parity with infer analyze (§3.4) --------------------------------------------------
 
-PARITY_ARTIFACTS = STUDIO_ARTIFACTS
+# §3.4 compares every case of every single-session fixture Studio reads
+# whole. Not compared: the fixtures Studio refuses (UNSUPPORTED: no text
+# inference run to summarize), and those with lines Studio counts as
+# problems and leaves out where the analyzer pools them or fails
+# (PROBLEM_LINES: unsupported_version's v2 client request is a row to the
+# analyzer only, Fable's F-8; truncated_mid_line's cut line fails it).
+PARITY_ARTIFACTS = sorted(set(STUDIO_ARTIFACTS) - set(UNSUPPORTED) - set(PROBLEM_LINES))
 
 
 def _analyzer_cases(path: Path, tmp_path: Path) -> dict[str, Any]:
@@ -929,9 +941,21 @@ def test_every_case_summary_equals_the_analyzers_case_block(
         assert body["counts"]["server_admitted"] is None
 
 
-def test_the_analyzer_refuses_the_artifacts_parity_reads_by_prefix() -> None:
-    # The cut artifact is compared with the analysis of its complete lines.
-    assert ANALYZE_FAILS == {"truncated_mid_line"}
+def test_parity_covers_every_fixture_studio_reads_whole() -> None:
+    # The fixtures C5 added later are compared (samples, open loop,
+    # stopped, interrupted, timeouts, a NaN gap); none the analyzer refuses.
+    assert {
+        "samples",
+        "samples_psutil",
+        "open_loop",
+        "stopped_early",
+        "interrupted",
+        "timeouts",
+        "nan_gap",
+    } <= set(PARITY_ARTIFACTS)
+    assert ANALYZE_FAILS.isdisjoint(PARITY_ARTIFACTS)
+    left_out = set(STUDIO_ARTIFACTS) - set(PARITY_ARTIFACTS)
+    assert left_out == set(UNSUPPORTED) | set(PROBLEM_LINES)
 
 
 # --- 500,000 requests ------------------------------------------------------------------
