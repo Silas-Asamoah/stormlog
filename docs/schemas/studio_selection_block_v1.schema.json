@@ -137,7 +137,7 @@
       "$ref": "#/$defs/count"
     },
     "whole_case": {
-      "description": "The case, when the rows are exactly its measured requests.",
+      "description": "The case, when the selection is one case's whole cohort: its measured requests with no condition but a window that covers the case's rate interval (design §3.3 with D-2: decided by the interval the window clamps to, not by the rows it keeps).",
       "type": [
         "string",
         "null"
@@ -166,7 +166,7 @@
           }
         },
         "reason": {
-          "description": "not_a_cohort for any selection but a whole case.",
+          "description": "not_a_cohort for any selection but a whole case; kept_record_over_limit when a workload or phase window record the cohort needs was over the index's kept-record limit (D-4).",
           "type": [
             "string",
             "null"
@@ -196,7 +196,7 @@
           ]
         },
         "reason": {
-          "description": "Why there is no rate, or why the interval is not the first choice (design §3.3).",
+          "description": "Why there is no rate, or why the interval is not the first choice (design §3.3): not_measured_phase, outcome_filter, multiple_cases, empty_selection, overlap_membership, window_outside_case, arrival_outside_interval (a selected row arrives outside the clamped interval, D-3), kept_record_over_limit (D-4), or the case's rate_reason (phase_window_missing, phase_window_incomplete, endpoint_undeclared, no_phase_window).",
           "type": [
             "string",
             "null"
