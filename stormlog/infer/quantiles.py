@@ -34,11 +34,15 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-import numpy as np
-import numpy.typing as npt
 from scipy import stats
+
+if TYPE_CHECKING:
+    # Annotations only: numpy.typing needs numpy >= 1.21, above the
+    # declared floor, so it is never imported at run time.
+    import numpy as np
+    import numpy.typing as npt
 
 Tails = Literal["symmetric", "narrowest"]
 Estimand = Literal["successful", "failure_penalized"]
