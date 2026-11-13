@@ -432,6 +432,18 @@ class _Api:
     def cases(self, request: HttpRequest) -> HttpResponse:
         _check_names(request.query, ("artifact",))
         snapshot = self._served(request.query)
+        count = len(summaries.case_ids(snapshot))
+        if count > self.limits.max_cases:
+            # A summary costs ~15 ms a case, so a case-per-request artifact
+            # would outrun the route deadline (Fable's P3-2); the summary
+            # route still answers any one case.
+            raise InvalidInputError(
+                "limit_exceeded",
+                f"{count} cases, over the {self.limits.max_cases} this route "
+                "summarises; ask the summary route for one case at a time",
+                field="artifact",
+                details={"count": count, "limit": self.limits.max_cases},
+            )
         return self._cached("cases", snapshot, "", lambda: summaries.cases(snapshot))
 
     # --- selection routes ---------------------------------------------------
