@@ -640,6 +640,17 @@ def test_not_ready_refuses_anything_but_an_analysis_document(
         NotReady(state)
 
 
+def test_not_ready_needs_the_artifact_block_and_a_header_safe_retry() -> None:
+    bare = envelope("analysis", {"status": "running"})
+    with pytest.raises(ValueError, match="artifact block"):
+        NotReady(bare)
+    state = envelope("analysis", {"status": "running"}, snapshot())
+    assert NotReady(state, retry_after_s=0).retry_after_s == 0
+    for bad in (-1, 1.5, True, "2"):
+        with pytest.raises(ValueError, match="retry_after_s"):
+            NotReady(state, retry_after_s=bad)  # type: ignore[arg-type]
+
+
 def _doc(item: Any) -> str:
     return " ".join((item.__doc__ or "").split())
 
