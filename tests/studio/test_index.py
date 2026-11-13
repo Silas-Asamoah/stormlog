@@ -861,6 +861,35 @@ def test_a_dropped_gap_pool_is_not_resident_in_the_columnar_view(
     assert list(counts) == [row.gap_count for row in snapshot.requests]
 
 
+def test_context_definitions_are_bounded_and_counted_in_memory(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: many distinct context definitions (Fable's F-3)."""
+    from tests.studio.test_artifact_reader import context_lines
+
+    session = complete_lines(studio_artifacts["mixed"])[0]
+    lines = [session, *context_lines(studio_artifacts["execution_import"], 300)]
+    path = tmp_path / "contexts.jsonl"
+    path.write_bytes(b"\n".join(lines) + b"\n")
+    whole = harness_for(path)
+    ready = whole.build(path.name)
+    assert ready.status == "ready" and ready.limits_hit == frozenset()
+    entry = whole.indexes._entries[path.name]
+    assert entry.reader.context_bytes > 300 * len(lines[1])
+    assert whole.indexes.stats()[path.name]["memory_bytes"] >= (
+        entry.reader.context_bytes
+    )
+    harness = harness_for(path, Limits(context_bytes=50_000))
+    cut = harness.build(path.name)
+    assert (cut.status, cut.failure) == ("partial", None)
+    assert cut.limits_hit == {"contexts"}
+    assert cut.problem_count > 0
+    assert {p.code for p in cut.problems} == {"undecodable"}
+    assert artifact_block(cut)["limits_hit"] == ["contexts"]
+    limited = harness.indexes._entries[path.name].reader
+    assert limited.context_bytes <= 50_000
+
+
 def test_past_the_gap_budget_gaps_are_read_from_the_file(
     studio_artifacts: StandardArtifacts,
 ) -> None:
