@@ -27,8 +27,9 @@ copying the bytes read so far) or ``changed`` (a rerun truncated and
 rewrote it, or another file took its place), after which the caller calls
 :meth:`ArtifactReader.reset` and reads from byte 0 again.
 
-The line, problem and identity types are Studio's step-0 contract types,
-so the reader's output needs no conversion in Studio's index.
+The line, problem and identity types are :mod:`stormlog.infer.artifact_lines`'
+(Studio's contract re-exports them), so the reader's output needs no
+conversion in Studio's index and this core module never imports Studio.
 """
 
 from __future__ import annotations
@@ -41,10 +42,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Literal
 
+from stormlog.infer.artifact_lines import (
+    FileIdentity,
+    LineProblem,
+    LineRef,
+    ProblemCode,
+)
 from stormlog.infer.correlation_codec import CorrelationRecordDecoder
 from stormlog.infer.diagnosis_inputs import line_digest
 from stormlog.scrub import scrub_text
-from stormlog.studio.contracts import FileIdentity, LineProblem, LineRef, ProblemCode
 
 __all__ = [
     "BATCH_BYTES",
