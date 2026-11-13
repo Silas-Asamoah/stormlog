@@ -522,7 +522,9 @@ reading any rate:
 
 `infer analyze` exits `5` when the artifact, a `--server-telemetry` file, a
 `--vllm-spans` file or the `--slo-file` policy is missing, unparsable, or invalid, which includes an
-artifact with no `infer.session` or `infer.request` records. Otherwise it exits `0`, even when
+artifact with no `infer.session` or `infer.request` records. An artifact line
+nested more than 128 arrays and objects deep is unparsable on every Python
+version. Otherwise it exits `0`, even when
 every request in the artifact failed: analysis reports findings without
 failing.
 
