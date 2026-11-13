@@ -396,6 +396,12 @@ def _freshness(snapshot: IndexSnapshot) -> dict[str, Any]:
 # --- Cases ------------------------------------------------------------------------
 
 
+def case_ids(snapshot: IndexSnapshot) -> list[str]:
+    """The cases :func:`cases` lists, sorted: planned or measured."""
+    facts = case_facts(snapshot)
+    return sorted(set(facts.planned) | set(facts.by_case))
+
+
 def cases(snapshot: IndexSnapshot) -> dict[str, Any]:
     """One summary per measured case, planned cases included, no deltas.
 
@@ -407,7 +413,7 @@ def cases(snapshot: IndexSnapshot) -> dict[str, Any]:
     facts = case_facts(snapshot)
     planned = set(facts.planned)
     entries = []
-    for case_id in sorted(planned | set(facts.by_case)):
+    for case_id in case_ids(snapshot):
         sel = select(snapshot, RequestFilter(cases=(case_id,)))
         entries.append(
             {
