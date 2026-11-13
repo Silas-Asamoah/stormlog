@@ -28,6 +28,7 @@ report's values are shown, labelled, in Sources (C4).
 from __future__ import annotations
 
 import math
+from array import array
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
@@ -75,6 +76,7 @@ from stormlog.studio.selection import (
     case_facts,
     in_selection,
     select,
+    selection_of,
     without_latency,
 )
 
@@ -409,12 +411,17 @@ def cases(snapshot: IndexSnapshot) -> dict[str, Any]:
     request names it. A planned case with no observations gets the
     empty-selection summary (choice 16); an all-failed case keeps its
     failures and its 0.0 rate (choice 21).
+
+    Each case's rows are its measured rows as :func:`case_facts` grouped
+    them once, which are the rows ``select`` finds for ``case=<id>``, so
+    no case scans the whole table again (Fable's P3-2).
     """
     facts = case_facts(snapshot)
     planned = set(facts.planned)
     entries = []
     for case_id in case_ids(snapshot):
-        sel = select(snapshot, RequestFilter(cases=(case_id,)))
+        rows = array("q", facts.by_case.get(case_id, ()))
+        sel = selection_of(snapshot, RequestFilter(cases=(case_id,)), rows)
         entries.append(
             {
                 "case_id": case_id,
