@@ -1,0 +1,7 @@
+{
+  "format": "stormlog.studio.ticket",
+  "schema_version": 1,
+  "ticket": "EXAMPLEticket000000000000000000000000000000",
+  "url": "/api/v1/artifact/export?artifact=runs%2F042.jsonl&case=c8_in4096_out128&phase=measured&ticket=EXAMPLEticket000000000000000000000000000000",
+  "expires_in_s": 30.0
+}
