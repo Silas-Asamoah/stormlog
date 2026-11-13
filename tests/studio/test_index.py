@@ -15,7 +15,7 @@ import math
 import threading
 import time
 import tracemalloc
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, BinaryIO, ParamSpec, TypeVar
@@ -28,6 +28,7 @@ from stormlog.studio import index as index_module
 from stormlog.studio.contracts import (
     ConflictError,
     DictRow,
+    DictTable,
     ForbiddenError,
     IndexRegistry,
     IndexSnapshot,
@@ -36,6 +37,7 @@ from stormlog.studio.contracts import (
     NotResident,
     RequestRow,
     artifact_block,
+    columnar,
     encode_json,
 )
 from stormlog.studio.index import (
@@ -745,6 +747,86 @@ def test_past_the_row_budget_the_index_stops_at_a_named_cut(
     later = harness.refresh(path.name)
     assert len(later.requests) == kept and later.bytes_read == cut.bytes_read
     assert later.growing and later.cut == first_missing
+
+
+COLUMNAR = ("mixed", "synthetic", "warmup_measured", "non_streaming", "tokens_mixed")
+
+
+def _same_floats(a: Sequence[float], b: Sequence[float]) -> bool:
+    return len(a) == len(b) and all(
+        x == y or (math.isnan(x) and math.isnan(y)) for x, y in zip(a, b)
+    )
+
+
+@pytest.mark.parametrize("name", COLUMNAR)
+def test_the_columnar_arrays_equal_the_rows(
+    studio_artifacts: StandardArtifacts, name: str
+) -> None:
+    path = studio_artifacts[name]
+    snapshot = harness_for(path).build(path.name)
+    table = columnar(snapshot.table)
+    assert table is not None
+    twin = DictTable(
+        [DictRow(dict(row), index=row.index, ref=row.ref) for row in snapshot.requests]
+    )
+    for metric in CLIENT_METRICS:
+        assert _same_floats(table.client_values(metric), twin.client_values(metric))
+        codes, reasons = table.client_reasons(metric)
+        twin_codes, twin_reasons = twin.client_reasons(metric)
+        assert [reasons[c] for c in codes] == [twin_reasons[c] for c in twin_codes]
+        assert reasons[0] == (None, False)
+    assert list(table.line_refs()) == list(twin.line_refs())
+    assert table.line_refs()[-1] == snapshot.requests[-1].ref
+    assert list(table.line_lengths()) == list(twin.line_lengths())
+    assert list(table.gap_counts()) == list(twin.gap_counts())
+    pool, twin_pool = table.gap_pool(), twin.gap_pool()
+    assert list(pool.counts) == list(twin_pool.counts)
+    for i in range(len(snapshot.requests)):
+        mine = pool.values[pool.starts[i] : pool.starts[i] + pool.counts[i]]
+        theirs = twin_pool.values[
+            twin_pool.starts[i] : twin_pool.starts[i] + twin_pool.counts[i]
+        ]
+        assert _same_floats(mine, theirs), i
+    assert table.gap_pool() is pool  # cached per table
+    with pytest.raises(KeyError):
+        table.client_values("client.no_such_metric")
+
+
+def test_columnar_arrays_are_copies_the_builder_never_changes(
+    fresh_artifact: Callable[[str], Path],
+) -> None:
+    np = pytest.importorskip("numpy")
+    path = fresh_artifact("mixed")
+    lines = complete_lines(path)
+    harness = harness_for(path)
+    first = harness.build(path.name)
+    table = columnar(first.table)
+    assert table is not None
+    pool = table.gap_pool()
+    values = np.frombuffer(pool.values, dtype=np.float64)
+    ttft = np.frombuffer(table.client_values(CLIENT_METRICS[0]), dtype=np.float64)
+    before = (values.copy(), ttft.copy(), list(table.gap_counts()))
+    with path.open("ab") as handle:  # the builder appends to its arrays
+        handle.write(b"\n".join(lines) + b"\n")
+    later = harness.refresh(path.name)
+    assert len(later.requests) == 2 * len(first.requests)
+    assert np.array_equal(values, before[0], equal_nan=True)
+    assert np.array_equal(ttft, before[1], equal_nan=True)
+    assert list(table.gap_counts()) == before[2]
+    assert len(table.line_refs()) == len(first.requests)
+
+
+def test_a_dropped_gap_pool_is_not_resident_in_the_columnar_view(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["synthetic"]
+    snapshot = harness_for(path, Limits(gap_bytes=60_000)).build(path.name)
+    table = columnar(snapshot.table)
+    assert table is not None and not snapshot.gaps_resident
+    with pytest.raises(NotResident):
+        table.gap_pool()
+    counts = table.gap_counts()
+    assert list(counts) == [row.gap_count for row in snapshot.requests]
 
 
 def test_past_the_gap_budget_gaps_are_read_from_the_file(
