@@ -1057,6 +1057,29 @@ def test_case_facts_are_computed_once_per_snapshot() -> None:
     assert case_facts(other) is not case_facts(snapshot)
 
 
+def test_a_case_name_is_the_rows_case_id_by_the_contracts_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's F-5: a null case_id read "unknown" here, "None" in DictRow.
+    # Selection now reads a case cell by the contract's identity_text, the
+    # rule every row uses, so the two cannot drift apart again.
+    records = [request(i) for i in range(6)]
+    records[0]["case_id"] = None
+    del records[1]["case_id"]
+    records[2]["case_id"] = 5
+    records[3]["case_id"] = True
+    snapshot = snapshot_from_records(records)
+    sel = select(snapshot, RequestFilter())
+    named = sorted({row.case_id for row in snapshot.requests})
+    assert list(sel.cases) == named == ["5", "True", "c1", "unknown"]
+    assert sorted(case_facts(snapshot).by_case) == named
+    unknown = select(snapshot, RequestFilter(cases=("unknown",)))
+    assert list(unknown.rows) == [0, 1]
+
+    monkeypatch.setattr(selection, "identity_text", lambda value: "one rule")
+    assert select(snapshot, RequestFilter()).cases == ("one rule",)
+
+
 def test_case_facts_survive_a_republish_that_shares_the_table() -> None:
     # Fable's F-7: C1 republishes a touch or a growing flip with replace(),
     # a new snapshot over the same table; keyed on the snapshot, the facts
