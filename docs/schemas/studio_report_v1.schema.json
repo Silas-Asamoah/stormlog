@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_report_v1.schema.json",
+  "title": "Stormlog Studio report v1",
+  "description": "GET /api/v1/report?path= (design §5.4), written by workspace.read_report: one stormlog.report v1 envelope under the workspace root, at most 16 MiB, checked by report.validate_report. report is that envelope after contracts.to_wire, so it differs from stormlog_report_v1.schema.json on exactly one point: integers under *_ns keys, and integers beyond 2^53 - 1, are decimal strings (§5.1). NaN and infinities are null, listed in non_finite_fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "path",
+    "size",
+    "sha256",
+    "report",
+    "non_finite_fields"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.report"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "path": {
+      "description": "Root-relative POSIX path of the report file.",
+      "type": "string",
+      "minLength": 1
+    },
+    "size": {
+      "description": "Bytes read: the whole file.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16777216
+    },
+    "sha256": {
+      "description": "Of the bytes read.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "report": {
+      "description": "The stormlog.report v1 envelope in wire form.",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "format",
+        "report_kind",
+        "generated_at_utc",
+        "tool",
+        "verdict",
+        "findings"
+      ],
+      "properties": {
+        "format": {
+          "const": "stormlog.report"
+        },
+        "schema_version": {
+          "const": 1
+        }
+      }
+    },
+    "non_finite_fields": {
+      "description": "Paths that held NaN or an infinity, now null (contracts.finite_copy).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
