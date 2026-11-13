@@ -431,6 +431,38 @@ def test_the_registrys_own_stale_line_passes_through(artifact: Path) -> None:
     assert raised.value.details == {"x": 1}
 
 
+class ReasonIndexes(FileIndexes):
+    """An index whose stale_line names the line and, maybe, a reason."""
+
+    details: dict[str, Any] = {}
+
+    def read_lines(self, rel: str, refs: Iterable[LineRef]) -> Iterator[bytes]:
+        for number, line in enumerate(super().read_lines(rel, refs)):
+            if number == 1:
+                raise ConflictError(
+                    "stale_line", "the index found it", details=dict(self.details)
+                )
+            yield line
+
+
+@pytest.mark.parametrize(
+    "details", [{"line": 2, "reason": "sha256"}, {"line": 2}], ids=["reason", "C1"]
+)
+def test_the_indexs_reason_passes_through_when_it_sends_one(
+    artifact: Path, monkeypatch: pytest.MonkeyPatch, details: dict[str, Any]
+) -> None:
+    # Fable's P3-7: C1's _read_ref raises stale_line with {"line": n} only.
+    # The export passes the index's details on as they are and adds no
+    # reason of its own; once the index sends one, the caller sees it.
+    snapshot = index_file(artifact)
+    monkeypatch.setattr(ReasonIndexes, "details", details)
+    with pytest.raises(ConflictError) as raised:
+        list(
+            export.stream(ReasonIndexes(artifact, snapshot), snapshot, select(snapshot))
+        )
+    assert (raised.value.code, raised.value.details) == ("stale_line", details)
+
+
 @pytest.mark.parametrize(
     "overrides",
     [{"index_id": "f" * 32}, {"path": "other.jsonl"}, {"generation": 4}],
