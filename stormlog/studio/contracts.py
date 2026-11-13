@@ -84,6 +84,7 @@ __all__ = [
     "NotReady",
     "to_wire",
     "finite_copy",
+    "criterion_record",
     "encode_json",
     "artifact_block",
     "envelope",
@@ -236,7 +237,10 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def client(self) -> Mapping[str, CriterionValue]:
-        """``slo.client_values(record)``, computed at index time."""
+        """``slo.client_values(record)``, computed at index time.
+
+        On the wire each value is :func:`criterion_record` of it.
+        """
         raise NotImplementedError
 
     @property
@@ -832,6 +836,20 @@ def _finite(value: Any, path: str, changed: list[str]) -> Any:
     if _is_list_like(value):
         return [_finite(item, f"{path}[{i}]", changed) for i, item in enumerate(value)]
     return value
+
+
+def criterion_record(value: CriterionValue) -> dict[str, Any]:
+    """The wire form of one client value: ``{value_ms, reason, not_applicable}``.
+
+    The ``requests`` and ``request`` documents give each row's ``client``
+    as ``{metric: criterion_record(row.client[metric])}``; :func:`to_wire`
+    alone refuses a CriterionValue, on purpose.
+    """
+    return {
+        "value_ms": value.value_ms,
+        "reason": value.reason,
+        "not_applicable": value.not_applicable,
+    }
 
 
 def encode_json(document: Mapping[str, Any]) -> bytes:
