@@ -197,7 +197,8 @@ if log:
     with open(log, "a") as handle:
         handle.write(json.dumps({{"pid": os.getpid(), "cwd": os.getcwd(),
             "source": source, "mode": os.stat(source).st_mode & 0o777,
-            "bytes": open(source, "rb").read().decode("utf-8")}}) + "\\n")
+            "bytes": open(source, "rb").read().decode("utf-8"),
+            "env": dict(os.environ)}}) + "\\n")
 lock = behaviour.get("lock")
 if lock:
     try:
@@ -510,6 +511,67 @@ def test_the_subprocess_runs_in_the_private_analysis_directory(
     assert os.path.realpath(run["cwd"]) == os.path.realpath(analysis_dir)
     assert stat.S_IMODE(analysis_dir.stat().st_mode) == 0o700
     assert run["source"] == str(Root(workspace).resolve("run.jsonl"))
+
+
+SECRET_NAMES = (
+    "OPENAI_API_KEY",
+    "openai_api_key",
+    "PYTHON_API_KEY",
+    "GITHUB_TOKEN",
+    "LC_TOKEN",
+    "AWS_SECRET",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "NO_PROXY",
+    "PYTHON_PROXY_URL",
+)
+
+
+def test_the_subprocess_gets_no_credentials_or_proxies(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's probe: the stand-in saw OPENAI_API_KEY, HTTPS_PROXY and more.
+    for name in SECRET_NAMES:
+        monkeypatch.setenv(name, "s3cr3t")
+    kept = {
+        "HOME": str(tmp_path),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONPATH": str(tmp_path / "lib"),
+        "VIRTUAL_ENV": str(tmp_path / "venv"),
+    }
+    for name, value in kept.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("UNRELATED_SETTING", "x")
+    log = tmp_path / "runs.log"
+    runner = make(
+        runners, workspace, state_dir, command=fake_analyzer(tmp_path, log=str(log))
+    )
+    path = write_artifact(workspace / "run.jsonl")
+    assert settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl")).status == (
+        "ready"
+    )
+    [run] = log_lines(log)
+    env = run["env"]
+    assert [name for name in SECRET_NAMES if name in env] == []
+    assert "UNRELATED_SETTING" not in env
+    assert {name: env.get(name) for name in kept} == kept
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_analyzer_environment_filters_by_name_in_any_case() -> None:
+    environ = {name: "v" for name in SECRET_NAMES}
+    environ.update({"Path": "p", "PATH": "/bin", "lc_ctype": "C", "PYTHONHOME": "h"})
+    assert analysis_cache.analyzer_environment(environ) == {
+        "Path": "p",
+        "PATH": "/bin",
+        "lc_ctype": "C",
+        "PYTHONHOME": "h",
+    }
 
 
 def test_the_prefix_copy_is_private_and_exact(
