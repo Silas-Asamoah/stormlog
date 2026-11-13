@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any
 
@@ -163,3 +164,23 @@ def test_a_series_without_a_median_interval_has_no_gaps() -> None:
     assert sample_gaps([]) == []
     assert sample_gaps([5]) == []
     assert sample_gaps([5, 5, 5, 9]) == []
+
+
+def test_a_malformed_device_id_keeps_its_own_value() -> None:
+    # Fable's c2-core P3-2: an id that is not hashable or not equal to
+    # itself was grouped by its repr and written as that repr, so a NaN id
+    # and the text "nan" both read "nan".
+    nan = float("nan")
+    samples = [
+        _sample(1, sampler="nvml", device_id=nan, device_used_bytes=5),
+        _sample(2, sampler="nvml", device_id="nan", device_used_bytes=7),
+        _sample(3, sampler="nvml", device_id=[0], device_used_bytes=9),
+        _sample(4, sampler="nvml", device_id=nan, device_used_bytes=6),
+        _sample(5, sampler="nvml", device_id=[0], device_used_bytes=1),
+    ]
+    peaks = sample_peaks(samples)
+    ids = [entry["device_id"] for entry in peaks]
+    assert [type(i).__name__ for i in ids] == ["list", "float", "str"]
+    assert ids[0] == [0] and math.isnan(ids[1]) and ids[2] == "nan"
+    assert [entry["samples"] for entry in peaks] == [2, 2, 1]
+    assert [entry["peak_device_used_bytes"] for entry in peaks] == [9, 6, 7]
