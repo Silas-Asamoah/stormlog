@@ -12,12 +12,15 @@ import hashlib
 import json
 import math
 import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import pytest
 
+from stormlog.infer import artifact_lines
 from stormlog.infer.artifact_reader import ArtifactReader, ReadItem
 from stormlog.infer.correlation_codec import expand_inference_records
 from stormlog.infer.diagnosis_inputs import read_input
@@ -527,6 +530,23 @@ def test_the_reader_closes_every_handle_it_opens(tmp_path: Path) -> None:
     reader.rewind(items[-1].ref)
     read_all(reader)
     assert handles and all(handle.closed for handle in handles)
+
+
+def test_the_core_reader_imports_no_studio_module() -> None:
+    probe = (
+        "import sys, stormlog.infer.artifact_reader; "
+        "print(sorted(m for m in sys.modules if m.startswith('stormlog.studio')))"
+    )
+    output = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[2],
+        timeout=120,
+    ).stdout
+    assert output.strip() == "[]"
+    assert LineProblem is artifact_lines.LineProblem
 
 
 def iter_lines(path: Path) -> Iterator[bytes]:
