@@ -755,6 +755,33 @@ def test_error_schema_pairs_http_and_verdict_status() -> None:
     assert _errors("studio_error_v1.schema.json", document)
 
 
+def test_error_schema_names_the_route_and_media_type_codes() -> None:
+    schema = _load(SCHEMA_DIR / "studio_error_v1.schema.json")
+    codes = schema["properties"]["error"]["properties"]["code"]["description"]
+    assert "route_not_found (404)" in codes
+    assert "unsupported_media_type (415)" in codes
+    examples = {doc["error"]["code"]: doc for doc in schema["examples"]}
+    assert examples["route_not_found"]["error"]["http_status"] == 404
+    assert examples["unsupported_media_type"]["error"]["http_status"] == 415
+    for document in schema["examples"]:
+        assert _errors("studio_error_v1.schema.json", document) == []
+
+
+class UnsupportedMediaTypeError(StudioError):
+    """415, as C3's httpd will define it."""
+
+    http_status = 415
+    verdict_status = None
+
+
+def test_a_415_error_validates_only_with_a_null_verdict() -> None:
+    error = UnsupportedMediaTypeError("unsupported_media_type", "use JSON")
+    document = to_wire(error.document())
+    assert _errors("studio_error_v1.schema.json", document) == []
+    document["error"]["verdict_status"] = "usage"
+    assert _errors("studio_error_v1.schema.json", document)
+
+
 def test_artifact_block_validates_with_and_without_a_session() -> None:
     name = "studio_artifact_block_v1.schema.json"
     assert _errors(name, to_wire(artifact_block(snapshot()))) == []
