@@ -45,8 +45,15 @@
       ]
     },
     "size": {
-      "description": "File size in bytes at the last read.",
-      "$ref": "#/$defs/count"
+      "description": "File size in bytes at the last read; null when the file was never statted (failed: unreadable).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/count"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "bytes_read": {
       "description": "Bytes of complete lines consumed.",

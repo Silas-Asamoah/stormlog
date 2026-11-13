@@ -104,10 +104,18 @@
           "$ref": "#/$defs/count"
         },
         "size": {
-          "$ref": "#/$defs/count"
+          "description": "File size in bytes at the last read; null when the file was never statted (failed: unreadable).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/count"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "progress": {
-          "description": "bytes_read / size, computed by the server; null for an empty file.",
+          "description": "bytes_read / size, computed by the server; null for an empty file or a null size.",
           "type": [
             "number",
             "null"

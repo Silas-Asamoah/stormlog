@@ -472,11 +472,13 @@ class IndexSnapshot:
     generation: int  # 0 for the first snapshot of an index_id
     status: IndexStatus
     failure: IndexFailure | None
-    identity: FileIdentity  # at the last read
+    # at the last read; None when the file was never statted, as for
+    # failed: "unreadable" (the open or the first fstat failed)
+    identity: FileIdentity | None
     bytes_read: int  # complete lines consumed
     pending_tail_bytes: int
     prefix_sha256: str  # of bytes [0, bytes_read)
-    sha256: str | None  # whole file; None unless bytes_read == identity.size
+    sha256: str | None  # whole file; None unless identity and bytes_read == size
     growing: bool  # size changed within the last 5 s
     origin_ns: int | None
     session: SessionInfo | None
@@ -867,7 +869,8 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
     """The ``artifact`` block every artifact-scoped document carries (§5.1).
 
     ``terminal`` is False for a file with no session record: no terminal
-    record exists. ``limits_hit`` is sorted.
+    record exists. ``size`` is None when the file was never statted
+    (``identity`` is None). ``limits_hit`` is sorted.
     """
     session = snapshot.session
     return {
@@ -875,7 +878,7 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
         "index_id": snapshot.index_id,
         "generation": snapshot.generation,
         "status": snapshot.status,
-        "size": snapshot.identity.size,
+        "size": None if snapshot.identity is None else snapshot.identity.size,
         "bytes_read": snapshot.bytes_read,
         "sha256": snapshot.sha256,
         "growing": snapshot.growing,
