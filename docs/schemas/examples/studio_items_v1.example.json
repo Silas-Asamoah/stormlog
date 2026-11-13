@@ -1,0 +1,59 @@
+{
+  "format": "stormlog.studio.items",
+  "schema_version": 1,
+  "filter": {
+    "kind": null,
+    "q": null
+  },
+  "items": [
+    {
+      "path": "runs/042-diagnosis.json",
+      "kind": "report",
+      "size": 502,
+      "mtime_ns": "1788609662000000000",
+      "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+      "status": null,
+      "report_kind": "inference_diagnosis",
+      "verdict": "findings"
+    },
+    {
+      "path": "runs/042.jsonl",
+      "kind": "inference_artifact",
+      "size": 11194,
+      "mtime_ns": "1788609662000000000",
+      "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+      "status": "completed",
+      "report_kind": null,
+      "verdict": null
+    },
+    {
+      "path": "runs/043-killed.jsonl",
+      "kind": "inference_artifact",
+      "size": 10962,
+      "mtime_ns": "1788609662000000000",
+      "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+      "status": "running",
+      "report_kind": null,
+      "verdict": null
+    }
+  ],
+  "total": 4,
+  "next_cursor": "eyJhZnRlciI6InJ1bnMvMDQzLWtpbGxlZC5qc29ubCIsImtpbmQiOm51bGwsInEiOm51bGwsInYiOjF9",
+  "scan": {
+    "status": "complete",
+    "running": false,
+    "scans": 1,
+    "started_at_utc": "2026-11-13T09:30:00Z",
+    "finished_at_utc": "2026-11-13T09:30:00Z",
+    "duration_s": 0.004,
+    "entries": 5,
+    "files_read": 4,
+    "skipped": {
+      "symlinks": 0,
+      "excluded_dirs": 0,
+      "unreadable": 0
+    },
+    "limits_hit": [],
+    "reason": null
+  }
+}
