@@ -165,12 +165,17 @@ def record_id(raw: dict[str, Any]) -> str | None:
     return "/".join([event_type, *(str(value) for value in values)])
 
 
+_TOO_DEEP = f"not JSON (nested deeper than {MAX_NESTING})"
+
+
 def _line(
     number: int, chunk: bytes, decoder: CorrelationRecordDecoder
 ) -> tuple[Line, str | None]:
     digest = line_digest(chunk)
     if not chunk.strip():
         return Line(number, digest, None, None, None), None
+    if nested_too_deep(chunk):  # json.loads's own limit moves with the Python
+        return Line(number, digest, None, None, None), _TOO_DEEP
     try:
         raw = json.loads(chunk)
     except (ValueError, RecursionError) as exc:  # a line nested too deep too
