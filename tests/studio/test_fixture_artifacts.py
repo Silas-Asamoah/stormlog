@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import time
 import urllib.error
 import urllib.request
 from collections import Counter
@@ -21,6 +22,8 @@ from stormlog.infer.cli import main as infer_main
 from stormlog.infer.events import InferenceRequestEvent
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
+    LARGE_GAPS,
+    LARGE_REQUESTS,
     MULTI_SESSION,
     NO_TERMINAL_RECORD,
     STANDARD_ARTIFACTS,
@@ -403,3 +406,31 @@ def test_fresh_artifact_gives_a_private_copy(
 
     assert copy.read_bytes() == studio_artifacts["empty"].read_bytes()
     assert copy != studio_artifacts["empty"]
+
+
+@pytest.mark.studio_large
+def test_the_large_artifact_holds_500000_requests_of_15_gaps(
+    large_studio_artifact: Path,
+) -> None:
+    started = time.perf_counter()
+    statuses: Counter[str] = Counter()
+    gaps = Counter[int]()
+    sessions = set()
+    with large_studio_artifact.open("rb") as handle:
+        for line in handle:
+            if b'"infer.request"' not in line:
+                continue
+            record = json.loads(line)
+            statuses[record["status"]] += 1
+            gaps[len(record["chunk_interarrival_ms"])] += 1
+            sessions.add(record["session_id"])
+    print(
+        f"read {sum(statuses.values())} requests in {time.perf_counter() - started:.1f} s"
+    )
+
+    assert statuses == {
+        "ok": LARGE_REQUESTS - LARGE_REQUESTS // 100,
+        "error": LARGE_REQUESTS // 100,
+    }
+    assert gaps == {LARGE_GAPS: statuses["ok"], 0: statuses["error"]}
+    assert len(sessions) == 1
