@@ -176,19 +176,73 @@ class RequestRow(Mapping[str, Any]):
     record whatever the pools hold (request detail) builds it from the other
     keys plus :meth:`load_gaps` and :meth:`load_error_message`.
 
-    The identity attributes follow one rule for a record that lacks the
+    The identity properties follow one rule for a record that lacks the
     field: ``str(record.get(key, "unknown"))``, as the analyzer groups
     ``case_id``. C1's ``index.ColumnRow`` and :class:`DictRow` implement it.
+
+    Every attribute is an abstract read-only property, so a subclass may
+    read it from a column store on access (C1) or keep it in a field
+    (:class:`DictRow`), and mypy accepts both.
     """
 
-    ref: LineRef
-    session_id: str  # str(record.get("session_id", "unknown"))
-    request_id: str  # str(record.get("request_id", "unknown"))
-    record_id: str | None  # diagnosis_inputs.record_id
-    case_id: str  # str(record.get("case_id", "unknown"))
-    phase: str  # str(record.get("phase", "unknown"))
-    client: Mapping[str, CriterionValue]  # slo.client_values(record), at index time
-    gap_count: int  # len(chunk_interarrival_ms) as written; 0 without a list
+    @property
+    @abstractmethod
+    def index(self) -> int:
+        """The row's position in ``IndexSnapshot.requests``.
+
+        Stable for the life of the index (``index_id``): columns are
+        append-only, so ``snapshot.column(name)[row.index]`` is this row's
+        value in this snapshot and in every later one.
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def ref(self) -> LineRef:
+        """Where the record's line is."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def session_id(self) -> str:
+        """``str(record.get("session_id", "unknown"))``."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def request_id(self) -> str:
+        """``str(record.get("request_id", "unknown"))``."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def record_id(self) -> str | None:
+        """``diagnosis_inputs.record_id`` of the record."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def case_id(self) -> str:
+        """``str(record.get("case_id", "unknown"))``."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def phase(self) -> str:
+        """``str(record.get("phase", "unknown"))``."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def client(self) -> Mapping[str, CriterionValue]:
+        """``slo.client_values(record)``, computed at index time."""
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def gap_count(self) -> int:
+        """``len(chunk_interarrival_ms)`` as written; 0 without a list."""
+        raise NotImplementedError
 
     @abstractmethod
     def load_gaps(self) -> Sequence[float]:
@@ -209,28 +263,68 @@ class DictRow(RequestRow):
     """A resident row over a plain dict, for C2's tests and for fixtures.
 
     ``ref`` is synthetic: offset 0, and the length and SHA-256 of the
-    record's compact JSON (sorted keys), with ``line`` as given.
+    record's compact JSON (sorted keys), with ``line`` as given. ``index``
+    is the row's position in the snapshot it is put in; the caller gives it.
     """
 
-    def __init__(self, record: Mapping[str, Any], *, line: int = 0) -> None:
+    def __init__(
+        self, record: Mapping[str, Any], *, line: int = 0, index: int = 0
+    ) -> None:
         self._record: dict[str, Any] = dict(record)
         encoded = json.dumps(
             self._record, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
-        self.ref = LineRef(
+        self._index = index
+        self._ref = LineRef(
             line=line,
             offset=0,
             length=len(encoded),
             sha256=hashlib.sha256(encoded).hexdigest(),
         )
-        self.session_id = str(record.get("session_id", "unknown"))
-        self.request_id = str(record.get("request_id", "unknown"))
-        self.record_id = _request_record_id(record)
-        self.case_id = str(record.get("case_id", "unknown"))
-        self.phase = str(record.get("phase", "unknown"))
-        self.client = MappingProxyType(client_values(record))
+        self._session_id = str(record.get("session_id", "unknown"))
+        self._request_id = str(record.get("request_id", "unknown"))
+        self._record_id = _request_record_id(record)
+        self._case_id = str(record.get("case_id", "unknown"))
+        self._phase = str(record.get("phase", "unknown"))
+        self._client = MappingProxyType(client_values(record))
         gaps = record.get("chunk_interarrival_ms")
-        self.gap_count = len(gaps) if isinstance(gaps, list) else 0
+        self._gap_count = len(gaps) if isinstance(gaps, list) else 0
+
+    @property
+    def index(self) -> int:
+        return self._index
+
+    @property
+    def ref(self) -> LineRef:
+        return self._ref
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def request_id(self) -> str:
+        return self._request_id
+
+    @property
+    def record_id(self) -> str | None:
+        return self._record_id
+
+    @property
+    def case_id(self) -> str:
+        return self._case_id
+
+    @property
+    def phase(self) -> str:
+        return self._phase
+
+    @property
+    def client(self) -> Mapping[str, CriterionValue]:
+        return self._client
+
+    @property
+    def gap_count(self) -> int:
+        return self._gap_count
 
     def __getitem__(self, key: str) -> Any:
         return self._record[key]
