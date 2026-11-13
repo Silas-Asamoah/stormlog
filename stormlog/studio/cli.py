@@ -266,6 +266,9 @@ def _serve(
     state = _ensure_private_dir(options.state_dir)
     ctx, routes = (compose or _default_compose)(options)
     stop = stop or threading.Event()
+    # Before the state file and the "Open" line: a caller may signal as
+    # soon as it reads that line, and must get a clean stop, not a kill.
+    restore = _install_signals(stop)
     server: StudioServer | None = None
     files: list[Path] = []
     try:
@@ -280,6 +283,7 @@ def _serve(
             files.append(launch)
         _wait(stop, ctx, bootstrap, launch)
     finally:
+        restore()
         if server is not None:
             server.stop()
         _close_context(ctx, compose is None)
@@ -400,16 +404,12 @@ def _wait(
     bootstrap: str,
     launch: Path | None,
 ) -> None:
-    """Serve until ``stop`` is set or SIGINT/SIGTERM arrives."""
-    restore = _install_signals(stop)
+    """Serve until ``stop`` is set (``_serve``'s SIGINT/SIGTERM handlers)."""
     deadline = time.monotonic() + BOOTSTRAP_TTL_S
-    try:
-        while not stop.wait(0.5):
-            if launch is not None and _launch_spent(ctx, bootstrap, deadline):
-                _remove(launch)
-                launch = None
-    finally:
-        restore()
+    while not stop.wait(0.5):
+        if launch is not None and _launch_spent(ctx, bootstrap, deadline):
+            _remove(launch)
+            launch = None
 
 
 def _launch_spent(ctx: StudioContext, bootstrap: str, deadline: float) -> bool:
