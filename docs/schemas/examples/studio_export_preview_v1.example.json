@@ -1,0 +1,120 @@
+{
+  "format": "stormlog.studio.export_preview",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/042.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "status": "ready",
+    "size": 11194,
+    "bytes_read": 11194,
+    "sha256": "fbdb4f6ab5a006b24e12245fa63451d97e8b1832f5bf80efad705cc5e0682b56",
+    "growing": false,
+    "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1788609600000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "selection": {
+    "filter": {
+      "phase": "measured",
+      "cases": [
+        "c8_in4096_out128"
+      ],
+      "statuses": [],
+      "stream": null,
+      "token_sources": [],
+      "text": null,
+      "window": null,
+      "completed_by_ns": null,
+      "latency": null
+    },
+    "params": "case=c8_in4096_out128&phase=measured",
+    "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
+    "size": 8,
+    "pooled_cases": 1,
+    "whole_case": "c8_in4096_out128",
+    "cohort": {
+      "valid": true,
+      "issues": [],
+      "reason": null
+    },
+    "rate": {
+      "eligible": true,
+      "rule": "case",
+      "reason": null,
+      "interval": {
+        "kind": "measured_span",
+        "started_at_ns": "1788609600123456789",
+        "ended_at_ns": "1788609661323456789",
+        "seconds": 61.2,
+        "numerator_cohort": "all_measured"
+      }
+    },
+    "searched_fields": []
+  },
+  "profile": "original_bytes",
+  "count": 8,
+  "bytes": 9928,
+  "source": {
+    "path": "runs/042.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "size": 11194,
+    "bytes_read": 11194,
+    "sha256": "fbdb4f6ab5a006b24e12245fa63451d97e8b1832f5bf80efad705cc5e0682b56",
+    "prefix_sha256": "fbdb4f6ab5a006b24e12245fa63451d97e8b1832f5bf80efad705cc5e0682b56",
+    "records": 10,
+    "client_requests": 8,
+    "status": "ready",
+    "growing": false
+  },
+  "stormlog_version": "0.6.0",
+  "content": {
+    "event_types": [
+      "infer.request"
+    ],
+    "order": "file",
+    "line_ending": "\n"
+  },
+  "sensitive_fields": [
+    {
+      "field": "error_message",
+      "description": "Error messages, scrubbed by the writer; a server error body can still echo a prompt.",
+      "count": 2,
+      "distinct": 2,
+      "reason": null
+    },
+    {
+      "field": "endpoint",
+      "description": "Endpoint URLs, as the writer recorded them through redact_url.",
+      "count": 8,
+      "distinct": 1,
+      "reason": null
+    },
+    {
+      "field": "model",
+      "description": "Model names that look like a local path.",
+      "count": 1,
+      "distinct": 1,
+      "reason": null
+    }
+  ],
+  "limitations": [
+    {
+      "code": "not_a_redaction",
+      "message": "The export copies the selected lines' original bytes. It is not a redaction: error messages, endpoints and model names are exported as written. A redacting profile waits for #111."
+    },
+    {
+      "code": "no_phase_windows",
+      "message": "Only the selection's infer.request lines are exported, without the run's phase windows and workload records. infer analyze of the export counts and summarizes them, but divides its rates by the requests' own span (rate_reason no_phase_window), not by the case's rate interval, so they can differ from the run's."
+    }
+  ],
+  "download": {
+    "filename": "042.selection.jsonl",
+    "content_type": "application/x-ndjson"
+  }
+}
