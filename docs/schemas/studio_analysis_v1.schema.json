@@ -44,7 +44,7 @@
       ]
     },
     "reason": {
-      "description": "pending: queued, index_building. ready: null, or truncated_final_line when only the complete lines were analysed. unavailable: over_size_cap, growing, empty, no_complete_lines, changed (the file changed since the index read it; a newer snapshot runs again), closed, or the index's failure (unreadable, not_an_inference_artifact, audio, multiple_sessions). failed: timeout, nonzero_exit, unreadable, bad_output, output_too_large.",
+      "description": "pending: queued, index_building. ready: null, or truncated_final_line when only the complete lines were analysed. unavailable: over_size_cap, growing, empty, no_complete_lines, changed (the file changed since the index read it; a newer snapshot runs again), closed, or the index's failure (unreadable, not_an_inference_artifact, audio, multiple_sessions). failed: timeout, nonzero_exit, unreadable, bad_output, output_too_large, or internal (the runner itself raised, such as a subprocess that could not start; detail says why, and the runner stays alive for the next artifact).",
       "type": [
         "string",
         "null"
