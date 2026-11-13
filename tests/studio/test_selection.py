@@ -1182,6 +1182,65 @@ def test_a_cursor_nesting_bomb_is_a_400(bomb: bytes) -> None:
     assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
 
 
+def _forged(cursor: str, **changes: Any) -> str:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded))
+    payload.update(changes)
+    text = json.dumps(payload, separators=(",", ":"))
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+# Fable's F-6 probe: keys that typed only by shape reached a comparison
+# and raised TypeError (a 500). Each is (sort, key).
+FORGED_KEYS: list[tuple[str, list[Any]]] = [
+    ("client.e2e", [0, {"a": 1}, 3]),
+    ("client.e2e", [0, [1, 2], 3]),
+    ("client.e2e", [0, "abc", 3]),
+    ("client.e2e", [0, None, 3]),
+    ("client.e2e", [0, True, 3]),
+    ("client.e2e", [0, float("inf"), 3]),
+    ("client.e2e", [1, 12.5, 3]),
+    ("client.e2e", [0, 12.5, -7]),
+    ("client.e2e", [0, 12.5, 10**30]),
+    ("client.e2e", [0, 12.5, 137]),
+    ("client.e2e", [True, 12.5, 3]),
+    ("status", [0, 12.5, 3]),
+    ("status", [0, ["ok"], 3]),
+    ("artifact", [0, "3", 3]),
+    ("artifact", [0, 4, 3]),
+    ("artifact", [1, None, 3]),
+]
+
+
+@pytest.mark.parametrize(("sort", "key"), FORGED_KEYS)
+def test_a_forged_cursor_key_is_a_400_never_a_crash(sort: str, key: list[Any]) -> None:
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    issued = page(snapshot, sel, sort=sort, order="asc", cursor=None, limit=5)  # type: ignore[arg-type]
+    assert issued.next_cursor is not None
+    with pytest.raises(UsageError) as raised:
+        page(
+            snapshot,
+            sel,
+            sort=sort,  # type: ignore[arg-type]
+            order="asc",
+            cursor=_forged(issued.next_cursor, key=key),
+            limit=5,
+        )
+    assert raised.value.code == "bad_parameter"
+    assert raised.value.field == "cursor"
+
+
+@pytest.mark.parametrize("sort", sorted(selection.SORT_KEYS))
+def test_every_issued_cursor_key_still_fits_its_sort(sort: str) -> None:
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    for order in ("asc", "desc"):
+        assert _all_pages(snapshot, sel, sort, order, 3) == _expected_order(
+            snapshot, sel.rows, sort, order
+        )
+
+
 @pytest.mark.parametrize("limit", [0, -1, 1001])
 def test_a_page_limit_outside_1_to_1000_is_a_400(limit: int) -> None:
     snapshot = _paging_snapshot()
