@@ -20,6 +20,7 @@ import tracemalloc
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, ParamSpec, TypeVar
 
 import pytest
@@ -1012,6 +1013,76 @@ def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
     for row in range(len(snapshot.requests)):
         encode_json(request_detail(snapshot, row, None))
     encode_json({"artifact": artifact_block(snapshot)})
+
+
+_SESSION = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1'
+_ROWS = [
+    '{"event_type":"infer.request","session_id":"s1","request_id":"q"}',
+    '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+]
+
+
+def _refuse(*args: Any, **kwargs: Any) -> Any:
+    raise RecursionError("maximum recursion depth exceeded")
+
+
+@pytest.mark.parametrize("what", ["the record", "the session's config"])
+def test_a_record_finite_copy_refuses_keeps_its_line_and_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, what: str
+) -> None:
+    """The reader refuses lines nested past MAX_NESTING, so no record through
+    it can make finite_copy raise; the guard stays, and this pins it."""
+    finite_copy = index_module.finite_copy
+
+    def copy(value: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(value, dict) and value.get("refuse"):
+            _refuse()
+        return finite_copy(value, *args, **kwargs)
+
+    monkeypatch.setattr(index_module, "finite_copy", copy)
+    if what == "the record":
+        workload = '{"event_type":"infer.workload","refuse":true}'
+        lines = [_SESSION + "}", workload, *_ROWS]
+    else:
+        lines = [_SESSION + ',"config":{"refuse":true}}', *_ROWS]
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    line = 1 if what == "the record" else 0
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (line, "undecodable", f"{what} is nested too deeply to keep; its line is kept")
+    ]
+    assert [row.request_id for row in snapshot.requests] == ["q", "r"]
+    assert "infer.workload" not in snapshot.kept
+    if what == "the record":
+        assert "kept_records" in snapshot.limits_hit
+    else:
+        assert snapshot.session is not None and snapshot.session.config == {}
+
+
+def test_a_value_json_dumps_refuses_reads_as_none_in_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The side table's own guard: a value json.dumps refuses is dropped, and
+    its line is one undecodable problem naming the field."""
+
+    def dumps(value: Any, *args: Any, **kwargs: Any) -> str:
+        if value == ["refused"]:
+            _refuse()
+        return json.dumps(value, *args, **kwargs)
+
+    stub = SimpleNamespace(dumps=dumps, loads=json.loads)
+    monkeypatch.setattr(index_module, "json", stub)
+    sample = '{"event_type":"infer.system_sample","timestamp_ns":2,"w":["refused"]}'
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join([_SESSION + "}", *_ROWS, sample]) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (3, "undecodable", "field w is nested too deeply to keep; its line is kept")
+    ]
+    assert snapshot.samples[0].get("w") is None
 
 
 def test_many_distinct_strings_move_to_a_byte_pool(tmp_path: Path) -> None:
