@@ -4,25 +4,31 @@ It extends the fake that ``tests/test_infer_profile.py`` already serves:
 the same ``/v1/models`` answer, the same streamed chunks and the same
 non-streamed body. What it adds is a behaviour per workload case, keyed by
 the ``X-Request-Id`` the profiler sends (``stormlog-<run>-<case>_<phase>_
-<worker>_<index>``): fail every Nth measured request, fail every request,
-or leave usage out so the profiler has to estimate the token counts.
+<worker>_<index>`` in a closed loop, ``..._<phase>_<index>`` in an open
+one): fail every Nth measured request, fail every request, leave usage out
+so the profiler has to estimate the token counts, end the measured window
+through the run's stop file, or press Ctrl+C in the middle of a case.
 """
 
 from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
+import signal
 import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, ClassVar
 
 from tests.test_infer_profile import _FakeOpenAIHandler
 
-# What the profiler puts after the run ID: the case ID, then the phase.
-_REQUEST_ID = re.compile(r"-(?P<case>[^-]+)_(?P<phase>warmup|measured)_\d+_\d+$")
+# What the profiler puts after the run ID: the case ID, then the phase,
+# then the worker (closed loop only) and the request index.
+_REQUEST_ID = re.compile(r"-(?P<case>[^-]+)_(?P<phase>warmup|measured)(?:_\d+)?_\d+$")
 
 # The body a non-streamed request gets when its case reports no usage; the
 # other bodies are the base fake's own.
@@ -43,46 +49,90 @@ class CasePolicy:
     ``fail_every`` fails the Nth, 2Nth, ... measured request to arrive;
     ``all_fail`` fails every request of the case, warmup included;
     ``usage`` False leaves the token counts out of every answer.
+    ``stop_after`` creates the server's ``stop_file`` when the Nth measured
+    request of the case arrives, so the profiler ends the measured window
+    early (``--stop-file``); ``interrupt_after`` sends this process a
+    SIGINT then, as a Ctrl+C would. Both answer that request as usual.
     """
 
     fail_every: int | None = None
     all_fail: bool = False
     usage: bool = True
+    stop_after: int | None = None
+    interrupt_after: int | None = None
 
     def __post_init__(self) -> None:
-        if self.fail_every is not None and self.fail_every < 1:
-            raise ValueError("fail_every must be at least 1")
+        for name in ("fail_every", "stop_after", "interrupt_after"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be at least 1")
+
+
+@dataclass(frozen=True)
+class Answer:
+    """What the server does with one request."""
+
+    fail: bool = False
+    usage: bool = True
+    stop: bool = False
+    interrupt: bool = False
 
 
 @dataclass
 class ServerState:
-    """What one server instance was told and what it has answered."""
+    """What one server instance was told and what it has answered.
+
+    ``stop_file`` is the run's ``--stop-file`` for policies with
+    ``stop_after``; ``stopped`` and ``interrupted`` say whether the server
+    ended the window or pressed Ctrl+C.
+    """
 
     policies: Mapping[str, CasePolicy] = field(default_factory=dict)
     measured: dict[str, int] = field(default_factory=dict)
     answered: int = 0
     failed: int = 0
     lock: threading.Lock = field(default_factory=threading.Lock)
+    stop_file: Path | None = None
+    stopped: bool = False
+    interrupted: bool = False
 
     def decide(self, request_id: str | None) -> tuple[bool, bool]:
         """Whether to fail this request, and whether to report usage."""
+        answer = self.answer(request_id)
+        return answer.fail, answer.usage
+
+    def answer(self, request_id: str | None) -> Answer:
+        """Count the request and say what to do with it."""
         match = _REQUEST_ID.search(request_id or "")
         policy = (
             self.policies.get(match.group("case"), CasePolicy())
             if match is not None
             else CasePolicy()
         )
+        count = 0
         with self.lock:
             self.answered += 1
-            fail = policy.all_fail
             if match is not None and match.group("phase") == "measured":
                 count = self.measured.get(match.group("case"), 0) + 1
                 self.measured[match.group("case")] = count
-                every = policy.fail_every
-                fail = fail or (every is not None and count % every == 0)
-            if fail:
-                self.failed += 1
-        return fail, policy.usage
+            answer = _answer(policy, count)
+            self.failed += answer.fail
+            self.stopped = self.stopped or answer.stop
+            self.interrupted = self.interrupted or answer.interrupt
+        return answer
+
+
+def _answer(policy: CasePolicy, measured: int) -> Answer:
+    """``policy``'s answer to its case's ``measured``th measured request
+    (0 for a warmup request)."""
+    every = policy.fail_every
+    nth = every is not None and measured > 0 and measured % every == 0
+    return Answer(
+        fail=policy.all_fail or nth,
+        usage=policy.usage,
+        stop=measured > 0 and measured == policy.stop_after,
+        interrupt=measured > 0 and measured == policy.interrupt_after,
+    )
 
 
 class _PolicyHandler(_FakeOpenAIHandler):
@@ -94,7 +144,9 @@ class _PolicyHandler(_FakeOpenAIHandler):
         if self.path != "/v1/chat/completions":
             self.send_error(404)
             return
-        fail, usage = self.state.decide(self.headers.get("X-Request-Id"))
+        answer = self.state.answer(self.headers.get("X-Request-Id"))
+        self._act(answer)
+        fail, usage = answer.fail, answer.usage
         if not fail and usage:
             super().do_POST()  # the base fake reads and answers the request
             return
@@ -108,6 +160,17 @@ class _PolicyHandler(_FakeOpenAIHandler):
         else:
             self._send_json(json.dumps(_NO_USAGE_BODY).encode("utf-8"))
 
+    def _act(self, answer: Answer) -> None:
+        """End the window or press Ctrl+C, before answering."""
+        if answer.stop:
+            if self.state.stop_file is None:
+                raise RuntimeError("a stop_after policy needs the server's stop_file")
+            self.state.stop_file.touch()
+        if answer.interrupt:
+            # Delivered to the main thread, where the profiler's handler
+            # turns it into the run's KeyboardInterrupt.
+            os.kill(os.getpid(), signal.SIGINT)
+
 
 @dataclass(frozen=True)
 class FakeOpenAI:
@@ -120,9 +183,13 @@ class FakeOpenAI:
 @contextlib.contextmanager
 def fake_openai(
     policies: Mapping[str, CasePolicy] | None = None,
+    *,
+    stop_file: Path | None = None,
 ) -> Iterator[FakeOpenAI]:
-    """Serve on 127.0.0.1 at a free port until the block ends."""
-    state = ServerState(policies=dict(policies or {}))
+    """Serve on 127.0.0.1 at a free port until the block ends.
+
+    ``stop_file`` is the path a ``stop_after`` policy creates."""
+    state = ServerState(policies=dict(policies or {}), stop_file=stop_file)
     handler = type("PolicyHandler", (_PolicyHandler,), {"state": state})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
