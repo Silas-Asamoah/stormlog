@@ -18,7 +18,8 @@ Units:
 - SHA-256 digests are 64 lower-case hex characters.
 - None means "no value", never zero.
 
-Imports: the standard library, :mod:`stormlog.infer.populations` and
+Imports: the standard library, :mod:`stormlog.infer.artifact_lines` (the
+line types, re-exported), :mod:`stormlog.infer.populations` and
 :mod:`stormlog.infer.slo` only, so every component can import this module
 and this module imports no component.
 """
@@ -39,6 +40,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, BinaryIO, ClassVar, Literal, Protocol
 
+from stormlog.infer.artifact_lines import (
+    FileIdentity,
+    LineProblem,
+    LineRef,
+    ProblemCode,
+)
 from stormlog.infer.populations import MeasuredInterval, Membership
 from stormlog.infer.slo import CriterionValue, client_values
 
@@ -116,45 +123,10 @@ _ENVELOPE_KEYS = frozenset({"format", "schema_version", "artifact"})
 
 
 # --- Lines and files -------------------------------------------------- (C1 produces)
-
-
-@dataclass(frozen=True)
-class LineRef:
-    """Where one line of an artifact is, and what its bytes hash to."""
-
-    line: int  # 0-based
-    offset: int  # byte offset of the line's first byte
-    length: int  # bytes, without the b"\n"
-    sha256: str  # hex, of those bytes (diagnosis_inputs.line_digest)
-
-
-ProblemCode = Literal[
-    "not_json",
-    "not_object",
-    "undecodable",
-    "oversized",
-    "unsupported_version",
-    "truncated_final_line",
-]
-
-
-@dataclass(frozen=True)
-class LineProblem:
-    """A line the reader or the index could not use, and why."""
-
-    ref: LineRef
-    code: ProblemCode
-    detail: str  # scrubbed, at most 200 characters
-
-
-@dataclass(frozen=True)
-class FileIdentity:
-    """What ``os.fstat`` said about the artifact at the last read."""
-
-    device: int
-    inode: int
-    size: int
-    mtime_ns: int
+#
+# LineRef, ProblemCode, LineProblem and FileIdentity live in
+# stormlog.infer.artifact_lines, so the core reader that produces them never
+# imports Studio; they are re-exported here under the same names.
 
 
 # --- Rows ------------------------------------------------------ (C1 implements, C2 reads)
