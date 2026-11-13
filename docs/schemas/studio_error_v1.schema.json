@@ -32,7 +32,7 @@
       ],
       "properties": {
         "code": {
-          "description": "Machine-readable code. Known codes (design §5.2): bad_parameter, unknown_parameter, limit_exceeded, malformed_request (400); cursor_mismatch, request_ambiguous, stale_line (409); artifact_not_found, request_not_found, line_out_of_range, route_not_found (404); not_an_inference_artifact, unsupported_artifact, unsupported_version, unreadable, report_too_large (422); unauthorized, bootstrap_invalid, ticket_invalid (401); host_not_allowed, origin_not_allowed, fetch_site_not_allowed, path_not_allowed (403); method_not_allowed (405); body_too_large (413); unsupported_media_type (415); head_too_large (431); busy (503); internal_error (500).",
+          "description": "Machine-readable code. Known codes (design §5.2): bad_parameter, unknown_parameter, limit_exceeded, malformed_request (400); cursor_mismatch, request_ambiguous, stale_line (409); artifact_not_found, request_not_found, line_out_of_range, route_not_found (404); not_an_inference_artifact, unsupported_artifact, unsupported_version, unreadable, report_too_large, limit_exceeded (the cases route only) (422); unauthorized, bootstrap_invalid, ticket_invalid (401); host_not_allowed, origin_not_allowed, fetch_site_not_allowed, path_not_allowed (403); method_not_allowed (405); body_too_large (413); unsupported_media_type (415); head_too_large (431); busy (503); internal_error (500).",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
