@@ -263,12 +263,18 @@ def expand_inference_records(
 def _decoded_lines(
     path: str | Path, decode: Callable[[Mapping[str, Any]], _T | None]
 ) -> Iterator[tuple[int, _T]]:
-    """Each line's decoded value with its physical line number."""
+    """Each line's decoded value with its physical line number. A line nested
+    past ``MAX_NESTING`` is not JSON, as ``diagnose`` and Studio read it:
+    json.loads's own limit moves with the Python and the thread's stack."""
+    from .diagnosis_inputs import MAX_NESTING, nested_too_deep  # imports us
+
     with Path(path).open(encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, 1):
             if not line.strip():
                 continue
             try:
+                if nested_too_deep(line.encode()):
+                    raise ValueError(f"not JSON (nested deeper than {MAX_NESTING})")
                 value = decode(json.loads(line))
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"line {line_number}: {exc}") from exc
