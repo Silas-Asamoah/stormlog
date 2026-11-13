@@ -12,6 +12,7 @@ import pytest
 
 from stormlog.exit_codes import ExitCode
 from stormlog.infer.cli import main as infer_main
+from stormlog.infer.diagnosis_inputs import MAX_NESTING
 from stormlog.infer.tokens import build_token_counter
 
 
@@ -104,6 +105,25 @@ def test_analyze_exits_invalid_input_for_an_artifact_it_cannot_read(
     code, stderr = _infer("analyze", str(artifact))
     assert code == ExitCode.INVALID_INPUT
     assert message in stderr
+
+
+@pytest.mark.parametrize("depth", [MAX_NESTING, MAX_NESTING + 1, 50_000])
+def test_analyze_refuses_a_line_nested_past_the_limit_on_every_python(
+    tmp_path: Path, depth: int
+) -> None:
+    """json.loads's own limit is about 1,000 on 3.10, where analyze exited 1
+    with RecursionError, and the thread's stack from 3.14, where it analysed
+    the line. Past MAX_NESTING the line is not JSON, as diagnose reads it."""
+    inner = "[" * (depth - 1) + "]" * (depth - 1)
+    line = json.dumps(_FAILED_REQUEST)[:-1] + ', "deep": ' + inner + "}\n"
+    artifact = tmp_path / "infer.jsonl"
+    artifact.write_text(line)
+    code, stderr = _infer("analyze", str(artifact))
+    if depth <= MAX_NESTING:
+        assert (code, stderr) == (ExitCode.OK, "")
+        return
+    assert code == ExitCode.INVALID_INPUT
+    assert f"line 1: not JSON (nested deeper than {MAX_NESTING})" in stderr
 
 
 @pytest.mark.parametrize(
