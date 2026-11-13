@@ -47,6 +47,21 @@ def test_every_entry_states_unit_scope_source_window_and_status() -> None:
         assert entry["computed_by"], entry["key"]
 
 
+def test_every_entry_names_a_stormlog_function_that_exists() -> None:
+    # Fable's F-10: a rule Studio applies is an analyzer function, named
+    # here, never one written inline in a route.
+    import importlib
+    import re
+
+    for entry in _entries().values():
+        for module, name in re.findall(
+            r"\b([a-z_]+)\.([a-z_]+)\b", entry["computed_by"]
+        ):
+            found = importlib.import_module(f"stormlog.infer.{module}")
+            assert callable(getattr(found, name)), entry["key"]
+    assert _entries()["samples.gaps"]["computed_by"] == "sample_report.sample_gaps"
+
+
 def test_latency_entries_come_from_the_slo_criteria() -> None:
     entries = _entries()
     for key in CLIENT_METRICS:
