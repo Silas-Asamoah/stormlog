@@ -188,3 +188,9 @@ Studio bounds what any client can hold:
 Errors come back as `stormlog.studio.error` documents
 (`docs/schemas/studio_error_v1.schema.json`). Their messages are scrubbed
 of credentials and cut to 512 bytes.
+
+## API reference
+
+Every route Studio serves, with its auth, parameters, response document,
+errors and an example, is listed in the
+[Stormlog Studio API reference](studio_api.md).
