@@ -562,6 +562,30 @@ def test_the_artifact_document_counts_cases_and_problems(served: Served) -> None
     assert document["artifact"]["cut"] is None
 
 
+def test_the_cases_route_refuses_past_max_cases(
+    served: Served,
+    private: Callable[..., Served],
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    """Fable's P3-2: a case per request made /artifact/cases outrun its
+    deadline; past ``max_cases`` it answers 422 with the count at once."""
+    studio = private(dataclasses.replace(Limits(), max_cases=3))
+    shutil.copy2(studio_artifacts["mixed"], studio.root / MIXED)
+    studio.ready(MIXED)
+    count = len(_artifact(studio, MIXED)["cases"])
+    assert count == 4
+    error = assert_error(
+        studio.get("/api/v1/artifact/cases", artifact=MIXED), 422, "limit_exceeded"
+    )
+    assert error["details"] == {"count": 4, "limit": 3}
+    assert error["field"] == "artifact"
+    server = assert_document(studio.get("/api/v1/server"), "server")
+    assert server["limits"]["max_cases"] == 3
+    served.ready(MIXED)
+    reply = served.get("/api/v1/artifact/cases", artifact=MIXED)  # 200 by default
+    assert len(assert_document(reply, "cases")["cases"]) == 4
+
+
 def test_unsupported_version_lines_are_counted_for_the_banner(served: Served) -> None:
     """F-8: the line kept out of every number is named, by code and in words."""
     served.ready("unsupported_version.jsonl")
