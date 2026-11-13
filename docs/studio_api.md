@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 [← Stormlog Studio](studio.md)
 
 # Stormlog Studio API (slice 1)
