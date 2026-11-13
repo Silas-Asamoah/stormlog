@@ -20,7 +20,7 @@ import pytest
 from referencing import Registry, Resource
 
 from stormlog.infer.diagnosis_inputs import record_id
-from stormlog.infer.slo import client_values
+from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import contracts
 from stormlog.studio.contracts import (
     BusyError,
@@ -40,6 +40,7 @@ from stormlog.studio.contracts import (
     UnauthorizedError,
     UsageError,
     artifact_block,
+    criterion_record,
     encode_json,
     envelope,
     finite_copy,
@@ -679,6 +680,38 @@ def test_artifact_block_validates_with_and_without_a_session() -> None:
     assert _errors(name, to_wire(artifact_block(snapshot()))) == []
     bare = snapshot(session=None, origin_ns=None, sha256=None, status="building")
     assert _errors(name, to_wire(artifact_block(bare))) == []
+
+
+def _ns_as_int(record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        key: int(value) if key.endswith("_ns") and isinstance(value, str) else value
+        for key, value in record.items()
+    }
+
+
+def test_criterion_record_is_the_wire_form_of_a_client_value() -> None:
+    value = CriterionValue(value_ms=None, reason="not_streamed", not_applicable=True)
+    assert criterion_record(value) == {
+        "value_ms": None,
+        "reason": "not_streamed",
+        "not_applicable": True,
+    }
+    with pytest.raises(TypeError):
+        to_wire(value)
+
+
+def test_criterion_record_matches_every_example_row() -> None:
+    rows = list(_load(EXAMPLE_DIR / "studio_requests_v1.example.json")["rows"])
+    detail = _load(EXAMPLE_DIR / "studio_request_v1.example.json")
+    rows.append(detail["row"])
+    assert len(rows) > 1
+    for row in rows:
+        for entry in row["client"].values():
+            assert criterion_record(CriterionValue(**entry)) == entry
+    built = DictRow(_ns_as_int(detail["record"])).client
+    assert {key: criterion_record(value) for key, value in built.items()} == (
+        detail["row"]["client"]
+    )
 
 
 def test_artifact_block_refuses_an_integer_ns_field() -> None:
