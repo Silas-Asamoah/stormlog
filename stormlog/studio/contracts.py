@@ -788,7 +788,10 @@ def finite_copy(record: Mapping[str, Any]) -> tuple[dict[str, Any], list[str]]:
     Returns the copy and the paths it changed, in record order, for the
     document's ``non_finite_fields``. A path is the key, then ``.key`` for a
     nested mapping and ``[i]`` for a list element:
-    ``"chunk_interarrival_ms[3]"``, ``"usage.ttft_ms"``.
+    ``"chunk_interarrival_ms[3]"``, ``"usage.ttft_ms"``. It walks every
+    list-like value :func:`to_wire` walks (lists, tuples, ``array``,
+    ``memoryview`` and other sequences that are not text or bytes) and
+    returns each as a list, so an ``array('d')`` of gaps loses its NaN too.
     """
     changed: list[str] = []
     copy = {
@@ -806,7 +809,7 @@ def _finite(value: Any, path: str, changed: list[str]) -> Any:
             str(key): _finite(item, f"{path}.{key}", changed)
             for key, item in value.items()
         }
-    if isinstance(value, (list, tuple)):
+    if _is_list_like(value):
         return [_finite(item, f"{path}[{i}]", changed) for i, item in enumerate(value)]
     return value
 

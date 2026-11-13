@@ -204,6 +204,29 @@ def test_finite_copy_nulls_nan_and_both_infinities_and_names_them() -> None:
     assert math.isnan(record["ttft_ms"])
 
 
+def test_finite_copy_walks_arrays_and_memoryviews() -> None:
+    gaps = array("d", [1.0, math.nan, 2.0])
+    record: dict[str, Any] = {
+        "chunk_interarrival_ms": gaps,
+        "view_ms": memoryview(array("d", [math.inf, 3.0])),
+        "nested": {"a": (array("f", [math.nan]),)},
+        "text": "nan",
+        "raw": b"\x00",
+    }
+    copy, changed = finite_copy(record)
+    assert copy["chunk_interarrival_ms"] == [1.0, None, 2.0]
+    assert copy["view_ms"] == [None, 3.0]
+    assert copy["nested"] == {"a": [[None]]}
+    assert copy["text"] == "nan" and copy["raw"] == b"\x00"
+    assert changed == [
+        "chunk_interarrival_ms[1]",
+        "view_ms[0]",
+        "nested.a[0][0]",
+    ]
+    assert math.isnan(gaps[1])
+    encode_json({key: copy[key] for key in ("chunk_interarrival_ms", "view_ms")})
+
+
 def test_finite_copy_of_a_finite_record_changes_nothing() -> None:
     record = request_record()
     copy, changed = finite_copy(record)
