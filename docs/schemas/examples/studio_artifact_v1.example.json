@@ -16,7 +16,8 @@
     "origin_ns": "1788609595000000000",
     "gaps_resident": true,
     "error_messages_resident": true,
-    "limits_hit": []
+    "limits_hit": [],
+    "cut": null
   },
   "session": {
     "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
