@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ from stormlog.infer.latency_report import (
     streaming_summary,
 )
 from stormlog.infer.quantiles import quantile
+from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.infer.vllm_analysis import JoinedSpans
 
 SECOND = 1_000_000_000
@@ -289,6 +290,35 @@ def test_the_rule_states_what_the_intervals_assume() -> None:
 
 def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
     assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}
+
+
+def test_client_values_are_read_once_per_successful_request() -> None:
+    requests = [_streamed(i, ttft_ms=100.0 + i) for i in range(30)]
+    requests += [_streamed(30, status="timeout"), _streamed(31, status="error")]
+    calls: list[str] = []
+
+    def counted(record: Mapping[str, Any]) -> Mapping[str, CriterionValue]:
+        calls.append(str(record["request_id"]))
+        return client_values(record)
+
+    summary = latency_summary(requests, client_values_of=counted)
+    assert sorted(calls) == sorted(f"r{i}" for i in range(30))
+    assert json.dumps(summary) == json.dumps(latency_summary(requests))
+
+
+def test_stored_client_values_give_the_same_summary() -> None:
+    requests = [
+        _streamed(
+            i, ttft_ms=float(97 * i % 41), e2e_latency_ms=float(31 * i % 53 + 200)
+        )
+        for i in range(40)
+    ]
+    requests += [_streamed(40, ttft_ms=None), _streamed(41, status="timeout")]
+    stored = {str(r["request_id"]): client_values(r) for r in requests}
+    summary = latency_summary(
+        requests, client_values_of=lambda r: stored[str(r["request_id"])]
+    )
+    assert json.dumps(summary) == json.dumps(latency_summary(requests))
 
 
 def test_elapsed_ms_is_the_e2e_time_or_send_to_end_for_an_abandoned_request() -> None:
