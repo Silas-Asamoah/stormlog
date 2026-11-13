@@ -18,6 +18,7 @@ import os
 import re
 import signal
 import threading
+import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from http.server import ThreadingHTTPServer
@@ -53,6 +54,9 @@ class CasePolicy:
     request of the case arrives, so the profiler ends the measured window
     early (``--stop-file``); ``interrupt_after`` sends this process a
     SIGINT then, as a Ctrl+C would. Both answer that request as usual.
+    ``slow_every`` holds the Nth, 2Nth, ... measured request for
+    ``delay_seconds`` before answering, so a run whose request timeout is
+    shorter records those requests as timed out.
     """
 
     fail_every: int | None = None
@@ -60,12 +64,16 @@ class CasePolicy:
     usage: bool = True
     stop_after: int | None = None
     interrupt_after: int | None = None
+    slow_every: int | None = None
+    delay_seconds: float = 0.0
 
     def __post_init__(self) -> None:
-        for name in ("fail_every", "stop_after", "interrupt_after"):
+        for name in ("fail_every", "stop_after", "interrupt_after", "slow_every"):
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"{name} must be at least 1")
+        if self.delay_seconds < 0:
+            raise ValueError("delay_seconds must not be negative")
 
 
 @dataclass(frozen=True)
@@ -76,6 +84,7 @@ class Answer:
     usage: bool = True
     stop: bool = False
     interrupt: bool = False
+    delay_seconds: float = 0.0
 
 
 @dataclass
@@ -125,14 +134,19 @@ class ServerState:
 def _answer(policy: CasePolicy, measured: int) -> Answer:
     """``policy``'s answer to its case's ``measured``th measured request
     (0 for a warmup request)."""
-    every = policy.fail_every
-    nth = every is not None and measured > 0 and measured % every == 0
     return Answer(
-        fail=policy.all_fail or nth,
+        fail=policy.all_fail or _nth(measured, policy.fail_every),
         usage=policy.usage,
         stop=measured > 0 and measured == policy.stop_after,
         interrupt=measured > 0 and measured == policy.interrupt_after,
+        delay_seconds=(
+            policy.delay_seconds if _nth(measured, policy.slow_every) else 0.0
+        ),
     )
+
+
+def _nth(measured: int, every: int | None) -> bool:
+    return every is not None and measured > 0 and measured % every == 0
 
 
 class _PolicyHandler(_FakeOpenAIHandler):
@@ -146,6 +160,16 @@ class _PolicyHandler(_FakeOpenAIHandler):
             return
         answer = self.state.answer(self.headers.get("X-Request-Id"))
         self._act(answer)
+        if answer.delay_seconds:
+            time.sleep(answer.delay_seconds)
+            # The client has given up and closed the connection.
+            with contextlib.suppress(OSError):
+                self._answer(answer)
+            self.close_connection = True
+            return
+        self._answer(answer)
+
+    def _answer(self, answer: Answer) -> None:
         fail, usage = answer.fail, answer.usage
         if not fail and usage:
             super().do_POST()  # the base fake reads and answers the request
