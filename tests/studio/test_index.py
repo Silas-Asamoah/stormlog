@@ -277,6 +277,21 @@ def test_each_standard_artifact_keeps_its_records_and_counts(
     encode_json({"artifact": artifact_block(snapshot), "kept": snapshot.kept})
 
 
+def test_the_line_count_is_every_complete_line_consumed(tmp_path: Path) -> None:
+    lines = [
+        json.dumps({"event_type": "infer.session", "session_id": "s"}),
+        "",
+        "not json",
+        json.dumps({"event_type": "infer.request", "request_id": "a"}),
+    ]
+    path = tmp_path / "count.jsonl"
+    path.write_text("\n".join(lines) + "\n" + '{"tail": ')
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    assert snapshot.line_count == 4 and snapshot.cut is None
+    assert harness.indexes.wait(path.name, 0).line_count == 4
+
+
 @pytest.mark.parametrize("name", SINGLE_SESSION)
 def test_each_complete_artifact_hashes_as_the_file_does(
     studio_artifacts: StandardArtifacts, name: str
@@ -708,6 +723,15 @@ def test_past_the_row_budget_the_index_stops_at_a_named_cut(
     assert 0 < kept < len(whole.requests)
     first_missing = whole.requests[kept].ref
     assert cut.bytes_read == first_missing.offset
+    assert cut.cut == first_missing and whole.cut is None
+    assert cut.line_count == first_missing.line
+    assert whole.line_count == len(complete_lines(path))
+    assert artifact_block(cut)["cut"] == {
+        "line": first_missing.line,
+        "offset": first_missing.offset,
+        "length": first_missing.length,
+        "sha256": first_missing.sha256,
+    }
     data = path.read_bytes()
     assert cut.prefix_sha256 == hashlib.sha256(data[: cut.bytes_read]).hexdigest()
     assert cut.sha256 is None
@@ -720,7 +744,7 @@ def test_past_the_row_budget_the_index_stops_at_a_named_cut(
         handle.write(complete_lines(path)[-1] + b"\n")
     later = harness.refresh(path.name)
     assert len(later.requests) == kept and later.bytes_read == cut.bytes_read
-    assert later.growing
+    assert later.growing and later.cut == first_missing
 
 
 def test_past_the_gap_budget_gaps_are_read_from_the_file(
@@ -824,8 +848,11 @@ def test_an_unexpected_error_fails_the_index_instead_of_building_forever(
 
     monkeypatch.setattr(index_module._Requests, "add", broken)
     path = studio_artifacts["mixed"]
-    snapshot = harness_for(path).build(path.name)
-    assert (snapshot.status, snapshot.failure) == ("failed", "unreadable")
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("failed", "internal")
+    assert len(snapshot.requests) == 0 and snapshot.identity is not None
+    assert harness.refresh(path.name).failure == "internal"  # not retried
 
 
 def test_past_the_kept_budget_later_records_leave_references(
