@@ -45,6 +45,7 @@ inference_diagnosis
 incident_capture
 inference_export
 studio
+studio_api
 qualification
 tui
 cookbook/index
