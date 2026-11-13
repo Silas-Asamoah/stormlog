@@ -575,6 +575,18 @@ def test_the_artifact_document_leaves_sample_sufficiency_to_the_summary() -> Non
     assert _errors(name, document) == []
 
 
+def test_a_planned_unobserved_case_still_has_a_summary_body() -> None:
+    schema = _load(SCHEMA_DIR / "studio_cases_v1.schema.json")
+    description = " ".join(schema["description"].split())
+    assert "A planned case with no observations" in description
+    assert "the empty-selection summary body" in description
+    entry = schema["properties"]["cases"]["items"]
+    assert "summary" in entry["required"]
+    document = _load(EXAMPLE_DIR / "studio_cases_v1.example.json")
+    document["cases"][0].update(observed=False, summary=None)
+    assert _errors("studio_cases_v1.schema.json", document)
+
+
 def test_the_artifact_document_is_never_a_202_body() -> None:
     description = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")["description"]
     assert "also the 202 body" not in description.lower()
