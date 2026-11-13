@@ -70,6 +70,7 @@ from stormlog.studio.contracts import (
     IndexFailure,
     IndexSnapshot,
     IndexStatus,
+    InvalidInputError,
     LimitHit,
     Limits,
     LineProblem,
@@ -95,6 +96,7 @@ __all__ = [
     "ArtifactIndexes",
     "ColumnRow",
     "ColumnTable",
+    "refuse_oversized",
 ]
 
 _LOG = logging.getLogger(__name__)
@@ -1783,6 +1785,25 @@ def _stale_reason(data: bytes, ref: LineRef) -> str | None:
     return None
 
 
+def refuse_oversized(ref: LineRef, line_bytes: int) -> None:
+    """422 ``unreadable`` (``details.reason`` ``oversized``) for a line
+    longer than ``line_bytes``: the reader never parsed it, and nothing
+    reads it into memory whole (Fable's P2-1)."""
+    if ref.length > line_bytes:
+        raise InvalidInputError(
+            "unreadable",
+            f"line {ref.line} is {ref.length} bytes, over the {line_bytes}-byte "
+            "line limit",
+            field="line",
+            details={
+                "line": ref.line,
+                "reason": "oversized",
+                "length": ref.length,
+                "limit": line_bytes,
+            },
+        )
+
+
 def _read_ref(handle: BinaryIO, ref: LineRef) -> bytes:
     handle.seek(ref.offset)
     data = handle.read(ref.length + 1)
@@ -1861,7 +1882,9 @@ class ArtifactIndexes:
 
     def read_line(self, rel: str, ref: LineRef) -> bytes:
         """One line's bytes without its newline; ``stale_line`` (409) when
-        its bytes no longer hash to ``ref.sha256``."""
+        its bytes no longer hash to ``ref.sha256``; 422 ``unreadable``
+        (``oversized``) for a line over ``limits.line_bytes``, unread."""
+        refuse_oversized(ref, self._limits.line_bytes)
         with self._root.open(rel) as handle:
             return _read_ref(handle, ref)
 
@@ -1869,16 +1892,20 @@ class ArtifactIndexes:
         """Each line with its newline, read as the caller iterates.
 
         The file is opened now, so a missing or forbidden path raises here;
-        a line whose bytes changed raises ``stale_line`` when reached, which
-        ends the stream.
+        a line whose bytes changed raises ``stale_line`` when reached, and
+        one over ``limits.line_bytes`` ``unreadable``, either of which ends
+        the stream.
         """
         handle = self._root.open(rel)
-        return self._lines(handle, refs)
+        return self._lines(handle, refs, self._limits.line_bytes)
 
     @staticmethod
-    def _lines(handle: BinaryIO, refs: Iterable[LineRef]) -> Iterator[bytes]:
+    def _lines(
+        handle: BinaryIO, refs: Iterable[LineRef], line_bytes: int
+    ) -> Iterator[bytes]:
         with handle:
             for ref in refs:
+                refuse_oversized(ref, line_bytes)
                 yield _read_ref(handle, ref) + b"\n"
 
     def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:
