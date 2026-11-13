@@ -202,16 +202,18 @@ def _metric(
     rule: SufficiencyRule,
     levels: Sequence[float],
 ) -> dict[str, Any]:
-    # Sorted once here, so the sorts inside quantiles each find one run and
-    # take a linear pass; only _observed_bound's, with timeouts appended,
-    # sorts more.
+    # Sorted once here and passed as presorted, so quantiles reads every
+    # level from this list; only _observed_bound, with timeouts appended,
+    # sorts again.
     successful = sorted(values)
     timeouts = _timeout_elapsed(failures) if key == "client.e2e" else None
     return {
         "boundary": key.split(".", 1)[0],
         "successful_missing": missing,
         "successful": {
-            _level_key(p): _estimate_record(successful_quantile(successful, p, rule))
+            _level_key(p): _estimate_record(
+                successful_quantile(successful, p, rule, presorted=True)
+            )
             for p in levels
         },
         "failure_penalized": {
@@ -223,6 +225,7 @@ def _metric(
                     rule,
                     timeout_elapsed_ms=timeouts,
                     successful_missing=missing,
+                    presorted=True,
                 )
             )
             for p in levels
