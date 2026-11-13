@@ -1131,6 +1131,7 @@ class _State:
     session: _Session | None = None
     origin_ns: int | None = None
     failure: IndexFailure | None = None
+    cut: LineRef | None = None  # the first request a budget left out
     stopped: bool = False  # no more lines are read (a cut, or a failure)
     built: bool = False  # the first build reached the end of the file
     row_bytes: int = 0
@@ -1192,7 +1193,7 @@ class _Index:
             self._unreadable(exc)
         except Exception:
             _LOG.exception("indexing %s failed", self.path)
-            self._unreadable(None)
+            self._internal()
         self.complete = self.complete or self.state.built or bool(self.state.failure)
 
     def _round(self) -> bool:
@@ -1232,19 +1233,27 @@ class _Index:
             self._publish(new_lines=True)
         return progressed
 
-    def _unreadable(self, exc: BaseException | None) -> None:
-        """The file could not be read, or indexing it failed unexpectedly.
+    def _unreadable(self, exc: BaseException) -> None:
+        """The file could not be read.
 
         A file never read (no identity) fails as ``unreadable``; one read
-        before keeps its snapshot, retried at the next refresh. An
-        unexpected error (``exc`` None) also fails as ``unreadable``, the
-        nearest contract code, so the index never stays ``building``.
+        before keeps its snapshot, retried at the next refresh.
         """
-        if exc is not None:
-            _LOG.info("cannot read %s: %s", self.path, type(exc).__name__)
-        if exc is None or self.reader.identity is None:
+        _LOG.info("cannot read %s: %s", self.path, type(exc).__name__)
+        if self.reader.identity is None:
             self.state.failure = "unreadable"
             self.state.built = True
+        self._publish(new_lines=False)
+
+    def _internal(self) -> None:
+        """Indexing raised an unexpected error (logged by the caller).
+
+        The index fails for good as ``internal``, so it never stays
+        ``building``; only a ``changed`` file rebuilds it, under a new
+        index ID.
+        """
+        self._fail("internal")
+        self.state.built = True
         self._publish(new_lines=False)
 
     # --- Taking in lines ----------------------------------------------
@@ -1301,6 +1310,7 @@ class _Index:
         if self._rows_full():
             self.reader.rewind(ref)
             self.state.limits_hit.add("rows")
+            self.state.cut = ref
             self.state.stopped = True
             return False
         self._note_session(identity_text(record.get("session_id")))
@@ -1483,6 +1493,8 @@ class _Index:
             limits_hit=frozenset(state.limits_hit),
             gaps_resident=view.gaps_resident,
             error_messages_resident=view.errors_resident,
+            cut=state.cut,
+            line_count=reader.next_line,
         )
 
     def _publish(self, *, new_lines: bool) -> None:
