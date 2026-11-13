@@ -38,7 +38,7 @@ from bisect import bisect_left
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 from urllib.parse import quote
 
 from stormlog.infer.events import REQUEST_STATUSES
@@ -130,6 +130,10 @@ _ANY_DECIMAL_MS = re.compile(r"[+-]?[0-9]+(\.[0-9]+)?")
 _FLOAT = re.compile(r"[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)([eE][+-]?[0-9]+)?")
 _NS_PER_MS = Decimal(1_000_000)
 _CURSOR_VERSION = 1
+# What _cursor writes; a cursor with any other key is not one Studio issued.
+_CURSOR_KEYS = frozenset(
+    {"v", "index_id", "generation", "params", "sort", "order", "key"}
+)
 _UNKNOWN = "unknown"
 
 
@@ -985,10 +989,14 @@ def _read_cursor(
     The key is checked against the sort, as :func:`_ordered` makes keys,
     and its row against the snapshot's ``size`` rows, so a forged key is
     a 400 and never reaches a comparison it would break (Fable's F-6).
+    A cursor with keys :func:`_cursor` does not write, or from a
+    generation this index has not reached, is a 400 too (Fable's P3-6).
     """
     payload = _decode_cursor(cursor)
     if payload["index_id"] != sel.index_id:
         raise _mismatch("index_rebuilt", "the index was rebuilt; restart paging")
+    if payload["generation"] > sel.generation:
+        raise _bad("cursor", "not a cursor this server issued")
     if payload["params"] != sel.params:
         raise _mismatch("other_filter", "the cursor belongs to another filter")
     if payload["sort"] != sort or payload["order"] != order:
@@ -1030,10 +1038,13 @@ def _decode_cursor(cursor: str) -> dict[str, Any]:
 def _check_cursor(payload: Any) -> None:
     if not isinstance(payload, dict) or payload.get("v") != _CURSOR_VERSION:
         raise ValueError("cursor version")
+    if set(payload) != _CURSOR_KEYS:
+        raise ValueError("cursor keys")  # Fable's P3-6
     for name in ("index_id", "params", "sort", "order"):
         if not isinstance(payload.get(name), str):
             raise ValueError(name)
-    if not _is_int(payload.get("generation")):
+    generation = payload.get("generation")
+    if not _is_int(generation) or generation < 0:
         raise ValueError("generation")
     _check_key_shape(payload.get("key"))
 
@@ -1048,7 +1059,7 @@ def _check_key_shape(key: Any) -> None:
         raise ValueError("key row")
 
 
-def _is_int(value: Any) -> bool:
+def _is_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
