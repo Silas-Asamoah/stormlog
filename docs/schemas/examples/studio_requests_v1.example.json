@@ -1,0 +1,280 @@
+{
+  "format": "stormlog.studio.requests",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/042.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "status": "ready",
+    "size": 2457600,
+    "bytes_read": 2457600,
+    "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "growing": false,
+    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1788609595000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "selection": {
+    "filter": {
+      "phase": "measured",
+      "cases": [
+        "c8_in4096_out128"
+      ],
+      "statuses": [],
+      "stream": null,
+      "token_sources": [],
+      "text": null,
+      "window": null,
+      "completed_by_ns": null,
+      "latency": null
+    },
+    "params": "case=c8_in4096_out128&phase=measured",
+    "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
+    "size": 120,
+    "pooled_cases": 1,
+    "whole_case": "c8_in4096_out128",
+    "cohort": {
+      "valid": true,
+      "issues": [],
+      "reason": null
+    },
+    "rate": {
+      "eligible": true,
+      "rule": "case",
+      "reason": null,
+      "interval": {
+        "kind": "measured_span",
+        "started_at_ns": "1788609600123456789",
+        "ended_at_ns": "1788609661323456789",
+        "seconds": 61.2,
+        "numerator_cohort": "all_measured"
+      }
+    },
+    "searched_fields": []
+  },
+  "rows": [
+    {
+      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+      "request_id": "measured_000",
+      "line": 14,
+      "record_id": "infer.request/measured_000",
+      "line_sha256": "585ad236ad3e95d245aa36dcfb7dc3f2dbdca5a47d2ab7185d752c55a6d96163",
+      "case_id": "c8_in4096_out128",
+      "phase": "measured",
+      "status": "ok",
+      "http_status": 200,
+      "error_type": null,
+      "started_at_ns": "1788609600157226987",
+      "ended_at_ns": "1788609600869426987",
+      "start_ms": 5157.226987,
+      "end_ms": 5869.426987,
+      "client": {
+        "client.ttft": {
+          "value_ms": 575.1,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": null,
+          "reason": "no_dispatch_lag",
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": 712.2,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": null,
+          "reason": "no_intended_or_end_time",
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": 1.0795275590551183,
+          "reason": null,
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": 567.1,
+      "prompt_tokens": 4096,
+      "prompt_token_source": "server_usage",
+      "prompt_token_exact": true,
+      "output_tokens": 128,
+      "output_token_source": "server_usage",
+      "output_token_exact": true,
+      "stream": true,
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
+    },
+    {
+      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+      "request_id": "measured_001",
+      "line": 17,
+      "record_id": "infer.request/measured_001",
+      "line_sha256": "72c5c3c8110b7a54b99a1c86bd239c2f7bca83142cc1f97807913fee4a9a329f",
+      "case_id": "c8_in4096_out128",
+      "phase": "measured",
+      "status": "ok",
+      "http_status": 200,
+      "error_type": null,
+      "started_at_ns": "1788609600644224319",
+      "ended_at_ns": "1788609601382824319",
+      "start_ms": 5644.224319,
+      "end_ms": 6382.824319,
+      "client": {
+        "client.ttft": {
+          "value_ms": 449.2,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": null,
+          "reason": "no_dispatch_lag",
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": 738.6,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": null,
+          "reason": "no_intended_or_end_time",
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": 2.2787401574803154,
+          "reason": null,
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": 441.2,
+      "prompt_tokens": 4096,
+      "prompt_token_source": "server_usage",
+      "prompt_token_exact": true,
+      "output_tokens": 128,
+      "output_token_source": "server_usage",
+      "output_token_exact": true,
+      "stream": true,
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
+    },
+    {
+      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+      "request_id": "measured_002",
+      "line": 20,
+      "record_id": "infer.request/measured_002",
+      "line_sha256": "82d308351e2afbdd7e89231694ccb50f122814dc45fd0bf9c55af5b94562c67b",
+      "case_id": "c8_in4096_out128",
+      "phase": "measured",
+      "status": "timeout",
+      "http_status": null,
+      "error_type": "timeout",
+      "started_at_ns": "1788609601131516432",
+      "ended_at_ns": "1788609631131516432",
+      "start_ms": 6131.516432,
+      "end_ms": 36131.516432,
+      "client": {
+        "client.ttft": {
+          "value_ms": null,
+          "reason": "no_client_ttft",
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": null,
+          "reason": "no_client_ttft",
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": null,
+          "reason": "no_client_e2e",
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": null,
+          "reason": "no_intended_or_end_time",
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": null,
+          "reason": "output_tokens_not_server_reported",
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": null,
+      "prompt_tokens": 4096,
+      "prompt_token_source": "server_usage",
+      "prompt_token_exact": true,
+      "output_tokens": null,
+      "output_token_source": "unknown",
+      "output_token_exact": false,
+      "stream": true,
+      "gap_count": 0,
+      "chunk_count": null,
+      "finish_reason": null
+    },
+    {
+      "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+      "request_id": "measured_003",
+      "line": 23,
+      "record_id": "infer.request/measured_003",
+      "line_sha256": "afb63dcec8d3a17f8c97eeb5f43cfbdcde94efe7e6f60da7ac70a42f959c4fa4",
+      "case_id": "c8_in4096_out128",
+      "phase": "measured",
+      "status": "ok",
+      "http_status": 200,
+      "error_type": null,
+      "started_at_ns": "1788609601654140237",
+      "ended_at_ns": "1788609602368740237",
+      "start_ms": 6654.140237,
+      "end_ms": 7368.740237,
+      "client": {
+        "client.ttft": {
+          "value_ms": 573.7,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.ttft_from_intended": {
+          "value_ms": null,
+          "reason": "no_dispatch_lag",
+          "not_applicable": false
+        },
+        "client.e2e": {
+          "value_ms": 714.6,
+          "reason": null,
+          "not_applicable": false
+        },
+        "client.e2e_from_intended": {
+          "value_ms": null,
+          "reason": "no_intended_or_end_time",
+          "not_applicable": false
+        },
+        "client.tpot": {
+          "value_ms": 1.1094488188976377,
+          "reason": null,
+          "not_applicable": false
+        }
+      },
+      "first_chunk_latency_ms": 565.7,
+      "prompt_tokens": 4096,
+      "prompt_token_source": "server_usage",
+      "prompt_token_exact": true,
+      "output_tokens": 128,
+      "output_token_source": "server_usage",
+      "output_token_exact": true,
+      "stream": true,
+      "gap_count": 15,
+      "chunk_count": 16,
+      "finish_reason": "length"
+    }
+  ],
+  "next_cursor": "eyJpIjogIjlhM2U1YjdjMWQyZjRhNmI4YzBlMmQ0ZjZhOGIwYzFkIiwgInAiOiAiY2FzZT1jOF9pbjQwOTZfb3V0MTI4JnBoYXNlPW1lYXN1cmVkIiwgInMiOiAiYXJ0aWZhY3QiLCAibyI6ICJhc2MiLCAidiI6IG51bGwsICJsIjogMjN9",
+  "total": 120,
+  "generation_moved": false
+}
