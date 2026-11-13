@@ -548,6 +548,23 @@ def test_the_contract_states_who_raises_not_ready() -> None:
     assert "raise :class:`NotReady`" in _doc(AnalysisCache)
 
 
+def test_the_contract_states_kept_records_are_finite_at_index_time() -> None:
+    doc = _doc(IndexSnapshot)
+    assert "through :func:`finite_copy` once, at index time" in doc
+    nan_config = finite_copy({"config": {"temperature": math.nan}})[0]["config"]
+    session = SessionInfo(SESSION, "completed", None, None, True, nan_config)
+    assert json.loads(encode_json({"config": session.config})) == {
+        "config": {"temperature": None}
+    }
+
+
+def test_the_contract_states_unknown_is_never_a_second_session() -> None:
+    assert 'A ``session_id`` of ``"unknown"``' in _doc(IndexSnapshot)
+    assert "never counts as a second session" in _doc(IndexSnapshot)
+    session_id = vars(contracts.RequestRow)["session_id"]
+    assert "never counts as a second session" in _doc(session_id)
+
+
 def test_the_artifact_document_is_never_a_202_body() -> None:
     description = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")["description"]
     assert "also the 202 body" not in description.lower()
