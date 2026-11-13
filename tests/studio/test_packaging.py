@@ -63,6 +63,19 @@ def wheel(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return _build(source, tmp_path_factory.mktemp("dist"))
 
 
+def _isolation() -> list[str]:
+    """Build offline when the build backend is already installed.
+
+    An isolated build downloads setuptools and setuptools_scm, which needs
+    the network; an environment that has them builds without it.
+    """
+    present = all(
+        importlib.util.find_spec(name) is not None
+        for name in ("setuptools", "setuptools_scm")
+    )
+    return ["--no-build-isolation"] if present else []
+
+
 def _build(source: Path, dist: Path) -> Path:
     env = {**os.environ, "SETUPTOOLS_SCM_PRETEND_VERSION": "0.0.0"}
     done = subprocess.run(
@@ -73,6 +86,7 @@ def _build(source: Path, dist: Path) -> Path:
             "wheel",
             "--no-deps",
             "--quiet",
+            *_isolation(),
             "--wheel-dir",
             str(dist),
             str(source),
