@@ -57,13 +57,27 @@ def sample_peaks(samples: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
     it, or None when no sample of the group has one. Entries are ordered by
     sampler, then device, as text.
     """
+    return [
+        _entry(sampler, device_id, members)
+        for sampler, device_id, members in group_samples(samples)
+    ]
+
+
+def group_samples(
+    samples: Iterable[Mapping[str, Any]],
+) -> list[tuple[Any, Any, list[Mapping[str, Any]]]]:
+    """The samples by ``(sampler, device_id)``, as ``sample_peaks`` groups them.
+
+    Each group is ``(sampler, device_id, members)``, members in the order
+    given; groups are ordered by sampler, then device, as text.
+    """
     groups: dict[tuple[tuple[str, Any], tuple[str, Any]], list[Mapping[str, Any]]]
     groups = {}
     for sample in samples:
         key = (_part(sample.get("sampler")), _part(sample.get("device_id")))
         groups.setdefault(key, []).append(sample)
-    entries = [_entry(key, members) for key, members in groups.items()]
-    return sorted(entries, key=lambda e: (str(e["sampler"]), str(e["device_id"])))
+    ordered = [(key[0][1], key[1][1], members) for key, members in groups.items()]
+    return sorted(ordered, key=lambda group: (str(group[0]), str(group[1])))
 
 
 def _part(value: Any) -> tuple[str, Any]:
@@ -76,10 +90,8 @@ def _part(value: Any) -> tuple[str, Any]:
 
 
 def _entry(
-    key: tuple[tuple[str, Any], tuple[str, Any]],
-    members: Sequence[Mapping[str, Any]],
+    sampler: Any, device_id: Any, members: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    (_, sampler), (_, device_id) = key
     entry: dict[str, Any] = {
         "sampler": sampler,
         "device_id": device_id,
@@ -93,4 +105,10 @@ def _entry(
     return entry
 
 
-__all__ = ["PEAK_FIELDS", "request_window", "sample_peaks", "samples_in_window"]
+__all__ = [
+    "PEAK_FIELDS",
+    "group_samples",
+    "request_window",
+    "sample_peaks",
+    "samples_in_window",
+]
