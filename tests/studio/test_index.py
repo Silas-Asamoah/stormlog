@@ -372,6 +372,30 @@ def test_an_unknown_session_never_counts_as_a_second_one(
     check_rows(snapshot, path)
 
 
+def test_a_null_identity_is_unknown_never_none(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: a null session_id, request_id, case_id and phase (F-5)."""
+
+    def null_identity(records: list[dict[str, Any]]) -> None:
+        requests = [r for r in records if r.get("event_type") == "infer.request"]
+        requests[0].update(session_id=None, request_id=None, case_id=None)
+        requests[1]["phase"] = None
+        records[:] = [r for r in records if r.get("event_type") != "infer.session"]
+
+    for source in ("mixed", "warmup_measured"):
+        target = tmp_path / f"{source}.null.jsonl"
+        path = edited_copy(studio_artifacts[source], target, null_identity)
+        snapshot = harness_for(path).build(path.name)
+        assert (snapshot.status, snapshot.failure) == ("ready", None), source
+        first, second = snapshot.requests[0], snapshot.requests[1]
+        assert (first.session_id, first.request_id) == ("unknown", "unknown")
+        assert (first.case_id, second.phase) == ("unknown", "unknown")
+        assert "None" not in snapshot.by_request_id
+        assert snapshot.by_request_id["unknown"] == (0,)
+        check_rows(snapshot, path)
+
+
 def test_a_second_session_record_alone_fails_the_index(tmp_path: Path) -> None:
     path = write_records(
         tmp_path / "s.jsonl",
@@ -649,7 +673,7 @@ def test_odd_values_round_trip_exactly(tmp_path: Path) -> None:
     rows[3].pop("ttft_ms")
     rows[5][GAPS] = [1.0, math.nan, math.nan, math.nan, 2.5]
     assert repr(got) == repr(json.loads(json.dumps(rows)))
-    assert snapshot.requests[6].request_id == "None"
+    assert snapshot.requests[6].request_id == "unknown"  # F-5
     assert snapshot.requests[4].gap_count == 0 and snapshot.requests[5].gap_count == 5
     assert snapshot.column("big") == [2**70, 3, -1, None, None, None, None]
     assert snapshot.column("x")[:3] == [True, "yes", [1, {"y": None}]]

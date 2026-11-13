@@ -61,6 +61,7 @@ __all__ = [
     "NotResident",
     "RequestRow",
     "DictRow",
+    "identity_text",
     "RequestTable",
     "DictTable",
     "IndexStatus",
@@ -151,9 +152,13 @@ class RequestRow(Mapping[str, Any]):
     record whatever the pools hold (request detail) builds it from the other
     keys plus :meth:`load_gaps` and :meth:`load_error_message`.
 
-    The identity properties follow one rule for a record that lacks the
-    field: ``str(record.get(key, "unknown"))``, as the analyzer groups
-    ``case_id``. C1's ``index.ColumnRow`` and :class:`DictRow` implement it.
+    The identity properties follow one rule, :func:`identity_text`: a
+    record that lacks the field, or holds null in it, gives ``"unknown"``;
+    any other value gives ``str(value)``. A null means "unknown", never
+    ``"None"`` (Fable's F-5). C1's ``index.ColumnRow`` and :class:`DictRow`
+    implement it. The analyzer groups a null ``case_id`` as ``"None"``
+    today, so a null ``case_id`` is outside §3.4's parity until the v3
+    analyzer adopts the same rule.
 
     Every attribute is an abstract read-only property, so a subclass may
     read it from a column store on access (C1) or keep it in a field
@@ -180,17 +185,17 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def session_id(self) -> str:
-        """``str(record.get("session_id", "unknown"))``.
+        """``identity_text(record.get("session_id"))``.
 
-        ``"unknown"`` never counts as a second session in C1's
-        ``multiple_sessions`` check.
+        ``"unknown"`` (absent or null) never counts as a second session
+        in C1's ``multiple_sessions`` check.
         """
         raise NotImplementedError
 
     @property
     @abstractmethod
     def request_id(self) -> str:
-        """``str(record.get("request_id", "unknown"))``."""
+        """``identity_text(record.get("request_id"))``."""
         raise NotImplementedError
 
     @property
@@ -202,13 +207,13 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def case_id(self) -> str:
-        """``str(record.get("case_id", "unknown"))``."""
+        """``identity_text(record.get("case_id"))``."""
         raise NotImplementedError
 
     @property
     @abstractmethod
     def phase(self) -> str:
-        """``str(record.get("phase", "unknown"))``."""
+        """``identity_text(record.get("phase"))``."""
         raise NotImplementedError
 
     @property
@@ -273,11 +278,11 @@ class DictRow(RequestRow):
         self._record: dict[str, Any] = dict(record)
         self._index = index
         self._ref = _synthetic_ref(self._record, line) if ref is None else ref
-        self._session_id = str(record.get("session_id", "unknown"))
-        self._request_id = str(record.get("request_id", "unknown"))
+        self._session_id = identity_text(record.get("session_id"))
+        self._request_id = identity_text(record.get("request_id"))
         self._record_id = _request_record_id(record)
-        self._case_id = str(record.get("case_id", "unknown"))
-        self._phase = str(record.get("phase", "unknown"))
+        self._case_id = identity_text(record.get("case_id"))
+        self._phase = identity_text(record.get("phase"))
         self._client = MappingProxyType(client_values(record))
         gaps = record.get("chunk_interarrival_ms")
         self._gap_count = len(gaps) if isinstance(gaps, list) else 0
@@ -343,6 +348,13 @@ class DictRow(RequestRow):
     def load_error_message(self) -> str | None:
         message = self._record.get("error_message")
         return message if isinstance(message, str) else None
+
+
+def identity_text(value: Any) -> str:
+    """A row's identity value (``session_id``, ``request_id``, ``case_id``,
+    ``phase``) from the record's value: ``"unknown"`` for None (the field
+    is absent or null), else ``str(value)``."""
+    return "unknown" if value is None else str(value)
 
 
 def _synthetic_ref(record: Mapping[str, Any], line: int) -> LineRef:
@@ -469,8 +481,8 @@ class IndexSnapshot:
     ``failure == "multiple_sessions"`` means the file's client requests or
     session records name two or more distinct ``session_id`` values other
     than ``"unknown"``. A ``session_id`` of ``"unknown"`` (a record that
-    lacks the field, :class:`RequestRow`'s identity rule) never counts as a
-    second session.
+    lacks the field or holds null in it, :class:`RequestRow`'s identity
+    rule) never counts as a second session.
     """
 
     path: str  # root-relative POSIX path
