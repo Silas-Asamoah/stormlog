@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_error_v1.schema.json",
   "title": "Stormlog Studio error v1",
-  "description": "The body of every Studio API error (design §5.2), written by contracts.StudioError.document. The HTTP status and the verdict status always pair as the §5.2 table says. httpd (C3) answers two cases before any route runs: route_not_found (404, verdict invalid_input) for a method and path no Route matches, and unsupported_media_type (415, verdict null) for a POST whose Content-Type is not application/json (§7.3 step 5). The examples keyword holds one document for each.",
+  "description": "The body of every Studio API error (design §5.2), written by contracts.StudioError.document. The HTTP status and the verdict status always pair as the §5.2 table says. httpd (C3) answers three cases before any route runs: malformed_request (400, verdict usage) for a request line, header, query string or body framing it cannot parse (a repeated Host, an absolute-form target, chunked bodies), route_not_found (404, verdict invalid_input) for a method and path no Route matches, and unsupported_media_type (415, verdict null) for a POST whose Content-Type is not application/json (§7.3 step 5). The examples keyword holds one document for each.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -32,7 +32,7 @@
       ],
       "properties": {
         "code": {
-          "description": "Machine-readable code. Known codes (design §5.2): bad_parameter, unknown_parameter, limit_exceeded (400); cursor_mismatch, request_ambiguous, stale_line (409); artifact_not_found, request_not_found, line_out_of_range, route_not_found (404); not_an_inference_artifact, unsupported_artifact, unsupported_version, unreadable, report_too_large (422); unauthorized, bootstrap_invalid, ticket_invalid (401); host_not_allowed, origin_not_allowed, fetch_site_not_allowed, path_not_allowed (403); method_not_allowed (405); body_too_large (413); unsupported_media_type (415); head_too_large (431); busy (503); internal_error (500).",
+          "description": "Machine-readable code. Known codes (design §5.2): bad_parameter, unknown_parameter, limit_exceeded, malformed_request (400); cursor_mismatch, request_ambiguous, stale_line (409); artifact_not_found, request_not_found, line_out_of_range, route_not_found (404); not_an_inference_artifact, unsupported_artifact, unsupported_version, unreadable, report_too_large (422); unauthorized, bootstrap_invalid, ticket_invalid (401); host_not_allowed, origin_not_allowed, fetch_site_not_allowed, path_not_allowed (403); method_not_allowed (405); body_too_large (413); unsupported_media_type (415); head_too_large (431); busy (503); internal_error (500).",
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*$"
         },
@@ -176,6 +176,18 @@
     }
   },
   "examples": [
+    {
+      "format": "stormlog.studio.error",
+      "schema_version": 1,
+      "error": {
+        "code": "malformed_request",
+        "message": "the Host header is repeated",
+        "http_status": 400,
+        "verdict_status": "usage",
+        "field": null,
+        "details": {}
+      }
+    },
     {
       "format": "stormlog.studio.error",
       "schema_version": 1,
