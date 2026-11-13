@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_cases_v1.schema.json",
   "title": "Stormlog Studio cases v1",
-  "description": "GET /api/v1/artifact/cases (design §5.4): one summary per measured case of the run, planned and all-failed cases included, with no deltas and no significance claims.",
+  "description": "GET /api/v1/artifact/cases (design §5.4): one summary per measured case of the run, planned and all-failed cases included, with no deltas and no significance claims. A planned case with no observations (observed false) still has a summary: the empty-selection summary body, whose selection has size 0, so summary is never null.",
   "type": "object",
   "additionalProperties": false,
   "required": [
