@@ -495,6 +495,62 @@ def test_the_reader_closes_every_handle_it_opens(tmp_path: Path) -> None:
     assert handles and all(handle.closed for handle in handles)
 
 
+def context_lines(source: Path, count: int) -> list[bytes]:
+    """``count`` distinct valid context definitions, each with one compact
+    record that refers to it, made from ``source``'s first definition."""
+    template = next(
+        json.loads(line)
+        for line in source.read_bytes().split(b"\n")
+        if b'"infer.context"' in line
+    )
+    lines = []
+    for i in range(count):
+        identity = f"ctx-{i:012x}"
+        context = dict(template["context"], pid=i + 1)
+        definition = {**template, "context_id": identity, "context": context}
+        reference = {
+            "schema_version": 4,
+            "event_type": "infer.artifact",
+            "event_id": f"artifact-{i}",
+            "artifact_kind": "inference_jsonl",
+            "created_at_ns": 1,
+            "metadata": {},
+            "context_id": identity,
+        }
+        lines += [json.dumps(definition).encode(), json.dumps(reference).encode()]
+    return lines
+
+
+def test_past_the_context_budget_definitions_and_their_uses_are_problems(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    lines = context_lines(studio_artifacts["execution_import"], 40)
+    path = tmp_path / "contexts.jsonl"
+    path.write_bytes(b"\n".join(lines) + b"\n")
+    budget = 10 * (len(lines[0]) + 400)
+    reader = reader_for(path, max_context_bytes=budget)
+    items = read_all(reader, max_bytes=4096)
+    kinds = [item.kind for item in items]
+    accepted = kinds[0::2].count("context")
+    assert 0 < accepted < 40 and reader.contexts_limited
+    assert kinds[1::2] == ["record"] * accepted + ["problem"] * (40 - accepted)
+    for item in items[2 * accepted :]:
+        assert item.problem is not None and item.problem.code == "undecodable"
+        assert item.problem.detail.startswith("context limit")
+    assert 0 < reader.context_bytes <= budget
+    again = reader_for(path, max_context_bytes=budget)
+    first = again.read_batch(max_bytes=2**20)
+    before = again.context_bytes
+    again.rewind(first[0].ref)  # reading definitions again counts nothing
+    assert [item.kind for item in read_all(again)] == kinds
+    assert again.context_bytes == before == reader.context_bytes
+    unbounded = reader_for(path)
+    read_all(unbounded)
+    assert not unbounded.contexts_limited and unbounded.context_bytes > budget
+    unbounded.reset()
+    assert unbounded.context_bytes == 0
+
+
 def test_the_core_reader_imports_no_studio_module() -> None:
     probe = (
         "import sys, stormlog.infer.artifact_reader; "
