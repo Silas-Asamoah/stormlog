@@ -875,6 +875,28 @@ def test_bootstrap_route_refuses_bad_routes(ctx: StudioContext) -> None:
             make(json_request("/api/v1/admin/bootstrap", body))
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/session", "/api/v1/health", "/api/v1/tickets", "/api/v1/admin/bootstrap"],
+)
+def test_the_auth_routes_refuse_any_query_parameter(
+    ctx: StudioContext, path: str
+) -> None:
+    """§5.1: an unknown parameter is a 400 on every route; the health
+    route answered ``?x=1`` with 200 (Fable's P3-5)."""
+    route = handlers(ctx)[path]
+    for query in ({"x": ("1",)}, {"bootstrap": ("b",)}, {"ticket": ("",)}):
+        made = request(path, method=route.method, query=query, body=b"{}")
+        with pytest.raises(UsageError) as caught:
+            route.handler(made)
+        assert caught.value.code == "unknown_parameter"
+        assert caught.value.http_status == 400
+        assert caught.value.field == next(iter(query))
+        assert caught.value.details == {"allowed": []}
+    health = handlers(ctx)["/api/v1/health"].handler(request("/api/v1/health"))
+    assert body_json(health)["ok"] is True
+
+
 def json_value(value: Any) -> str:
     return json.dumps(value)
 
