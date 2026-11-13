@@ -276,6 +276,7 @@
       }
     },
     "warnings": {
+      "description": "Artifact-level warnings. Sample sufficiency is not one: C2's summary carries it (latency sufficiency), so the artifact document does not repeat C2's rule and the code insufficient_samples is refused here.",
       "type": "array",
       "items": {
         "type": "object",
@@ -286,7 +287,10 @@
         ],
         "properties": {
           "code": {
-            "type": "string"
+            "type": "string",
+            "not": {
+              "const": "insufficient_samples"
+            }
           },
           "message": {
             "type": "string"
