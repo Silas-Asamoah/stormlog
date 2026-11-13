@@ -45,7 +45,7 @@ from .server_group import members as group_members
 from .server_group import membership_issue
 from .slo import SloSpec, require_measured_window, slo_from_artifact
 from .telemetry import ServerIdentity, TelemetrySample, load_telemetry
-from .token_report import throughput
+from .token_report import throughput, token_coverage
 from .vllm_analysis import (
     JoinedSpans,
     joined_span_attributes,
@@ -471,6 +471,7 @@ def _case_report(
     report["intervals"] = population.intervals.to_record()
     report["arrivals"] = arrival_summary(case_requests, window)
     report["prompts"] = prompt_summary(case_requests, window)
+    report["tokens"]["coverage"] = token_coverage(ok)
     report["lengths"] = length_summary(ok)
     report["memory"].update(_server_case_memory(timelines, ok, grouped))
     return report
