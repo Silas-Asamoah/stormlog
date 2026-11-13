@@ -580,6 +580,16 @@ def test_bad_query_strings_are_400(studio: Studio) -> None:
     assert_error(reply, 400, "malformed_request")
 
 
+@pytest.mark.parametrize("target", ["//evil/api/v1/health", "//", "///api/v1/health"])
+def test_a_target_starting_with_two_slashes_is_malformed(
+    studio: Studio, target: str
+) -> None:
+    # Fable's nit: "//evil/api/v1/health" got a misleading 404 (http.server
+    # collapses the slashes to "/evil/..."), and "///api/v1/health" and "//"
+    # were served as "/api/v1/health" and "/".
+    assert_error(studio.get(target), 400, "malformed_request")
+
+
 def test_static_index_etag_and_revalidation(studio: Studio) -> None:
     page = studio.get("/")
     assert page.status == 200
