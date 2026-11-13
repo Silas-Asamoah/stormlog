@@ -658,6 +658,34 @@ def test_newer_types_versions_and_bad_lines_never_fail_an_index(
     assert "v2" not in snapshot.by_request_id
 
 
+def test_problems_are_counted_by_code_apart_from_server_view_requests(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: an execution import (server-view requests at version 2)
+    with one client request at version 2 and bad lines (Fable's F-9)."""
+    source = studio_artifacts["execution_import"]
+    extra = [
+        b'{"event_type": "infer.request", "schema_version": 2, "request_id": "v2"}',
+        b"not json at all",
+        b"also not json",
+        b"[1]",
+    ]
+    path = tmp_path / "counts.jsonl"
+    path.write_bytes(source.read_bytes() + b"\n".join(extra) + b"\n" + b'{"t')
+    harness = harness_for(path, tail_grace_s=0.0)
+    snapshot = harness.build(path.name)
+    assert snapshot.inventory["infer.request"] == {1: 10, 2: 7}  # 6 server view
+    assert dict(snapshot.problem_counts) == {
+        "unsupported_version": 1,
+        "not_json": 2,
+        "not_object": 1,
+        "truncated_final_line": 1,
+    }
+    assert sum(snapshot.problem_counts.values()) == snapshot.problem_count == 5
+    clean = harness_for(source).build(source.name)
+    assert dict(clean.problem_counts) == {} and clean.problem_count == 0
+
+
 def test_kept_records_are_finite(tmp_path: Path) -> None:
     path = tmp_path / "nan.jsonl"
     path.write_text(

@@ -641,6 +641,11 @@ class IndexSnapshot:
     # line's number); None from a producer that does not count lines (a
     # test stand-in). C1 always sets it.
     line_count: int | None = None
+    # problem_count by LineProblem.code; its values sum to problem_count.
+    # "unsupported_version" counts client infer.request lines at another
+    # version, which are never rows (§4.4), apart from server-view
+    # requests, which inventory counts. Empty from a stand-in.
+    problem_counts: Mapping[str, int] = field(default_factory=dict)
 
     def column(self, name: str) -> Sequence[Any]:
         """One request field for every row, in file order (D-1).

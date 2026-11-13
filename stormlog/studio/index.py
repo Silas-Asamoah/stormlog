@@ -1271,6 +1271,7 @@ class _State:
     inventory: dict[str, dict[int, int]] = field(default_factory=dict)
     problems: list[LineProblem] = field(default_factory=list)
     problem_count: int = 0
+    problem_counts: dict[str, int] = field(default_factory=dict)
     limits_hit: set[LimitHit] = field(default_factory=set)
     sessions: set[str] = field(default_factory=set)
     session: _Session | None = None
@@ -1289,7 +1290,14 @@ class _State:
         )
 
 
-_SNAPSHOT_REFRESH_KEYS = ("growing", "identity", "problems", "problem_count", "status")
+_SNAPSHOT_REFRESH_KEYS = (
+    "growing",
+    "identity",
+    "problems",
+    "problem_count",
+    "problem_counts",
+    "status",
+)
 
 
 class _Index:
@@ -1421,9 +1429,13 @@ class _Index:
     def _problem(self, problem: LineProblem) -> None:
         if problem.code == "truncated_final_line":
             return  # the reader keeps it while the tail is pending
-        self.state.problem_count += 1
-        if len(self.state.problems) < PROBLEMS_KEPT:
-            self.state.problems.append(problem)
+        state = self.state
+        state.problem_count += 1
+        state.problem_counts[problem.code] = (
+            state.problem_counts.get(problem.code, 0) + 1
+        )
+        if len(state.problems) < PROBLEMS_KEPT:
+            state.problems.append(problem)
 
     def _record(self, record: dict[str, Any], ref: LineRef) -> None:
         name = _event_name(record)
@@ -1612,15 +1624,17 @@ class _Index:
             return False
         return self.options.clock() - self.last_growth < self.options.growing_window_s
 
-    def _problems(self) -> tuple[tuple[LineProblem, ...], int]:
+    def _problems(self) -> tuple[tuple[LineProblem, ...], int, dict[str, int]]:
         problems = list(self.state.problems)
         count = self.state.problem_count
+        counts = dict(self.state.problem_counts)
         tail = self.reader.tail_problem
         if tail is not None:
             count += 1
+            counts[tail.code] = counts.get(tail.code, 0) + 1
             if len(problems) < PROBLEMS_KEPT:
                 problems.append(tail)
-        return tuple(problems), count
+        return tuple(problems), count, counts
 
     def memory(self) -> int:
         state = self.state
@@ -1636,7 +1650,7 @@ class _Index:
         view = _RequestView(state.requests, state.link_refs, pending, self.read_line)
         status, failure = self._status()
         identity = reader.identity
-        problems, problem_count = self._problems()
+        problems, problem_count, problem_counts = self._problems()
         whole = identity is not None and reader.offset == identity.size
         return IndexSnapshot(
             path=self.path,
@@ -1667,6 +1681,7 @@ class _Index:
             error_messages_resident=view.errors_resident,
             cut=state.cut,
             line_count=reader.next_line,
+            problem_counts=problem_counts,
         )
 
     def _publish(self, *, new_lines: bool) -> None:
