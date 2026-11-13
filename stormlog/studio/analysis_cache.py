@@ -32,6 +32,11 @@ Rules:
   At the timeout the runner kills the subprocess's process group with
   SIGKILL and records ``failed`` with reason ``timeout`` and no exit code;
   that key is not retried.
+- **Unexpected errors.** Anything else a run raises, such as a ``Popen``
+  that cannot start the interpreter, is ``failed`` with reason
+  ``internal`` and the scrubbed error as ``detail``; the worker goes on
+  to the next queued analysis, and a dead worker is restarted on the
+  next enqueue.
 - **Shutdown.** :meth:`AnalyzerRunner.close` kills a running subprocess the
   same way, drops queued work, removes temporary files, and from then on
   every state is ``unavailable`` with ``closed``.
@@ -264,7 +269,7 @@ class AnalyzerRunner:
         self._entries[key] = entry
         self._queue.append(entry)
         self._trim()
-        if self._thread is None:
+        if self._thread is None or not self._thread.is_alive():
             self._thread = threading.Thread(
                 target=self._work, name="stormlog-studio-analyzer", daemon=True
             )
@@ -292,7 +297,7 @@ class AnalyzerRunner:
                 entry = self._queue.popleft()
                 entry.state = _state("running")
             started = self._clock()
-            outcome = self._run(entry)
+            outcome = self._run_guarded(entry)
             with self._lock:
                 entry.state = outcome.state
                 entry.input = outcome.input
@@ -302,6 +307,18 @@ class AnalyzerRunner:
                 self._trim()
 
     # --- one run ---------------------------------------------------------------
+
+    def _run_guarded(self, entry: _Entry) -> _Outcome:
+        """:meth:`_run`, with anything it raises recorded as ``internal``.
+
+        A ``Popen`` that raises (a missing interpreter, a failed fork,
+        ENOMEM) must fail this entry, not end the worker thread and leave
+        every later analysis ``pending``.
+        """
+        try:
+            return self._run(entry)
+        except Exception as error:
+            return _Outcome(_state("failed", "internal"), detail=_scrubbed(str(error)))
 
     def _run(self, entry: _Entry) -> _Outcome:
         token = secrets.token_hex(16)
