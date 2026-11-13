@@ -107,6 +107,22 @@ def unsuccessful_summary(
     }
 
 
+def failure_share(offered: int, successful: int) -> dict[str, Any]:
+    """The share of offered requests that did not succeed, with its counts.
+
+    ``(offered - successful) / offered``; None with the reason
+    ``empty_selection`` when nothing was offered, never 0.0, so an empty
+    selection does not read as a clean one.
+    """
+    failed = offered - successful
+    return {
+        "share": failed / offered if offered else None,
+        "numerator": failed,
+        "denominator": offered,
+        "reason": None if offered else "empty_selection",
+    }
+
+
 def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Chunk counts and gaps of the successful streamed responses.
 
@@ -346,6 +362,7 @@ __all__ = [
     "LEVELS",
     "SERVER_METRICS",
     "elapsed_ms",
+    "failure_share",
     "latency_summary",
     "spread",
     "streaming_summary",
