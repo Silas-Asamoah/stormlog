@@ -62,7 +62,7 @@ Every error is a `stormlog.studio.error` document (`studio_error_v1`):
 | 405 | `method_not_allowed` |
 | 409 | `cursor_mismatch` (`details.reason`: `index_rebuilt`, `other_filter`, `other_sort`), `request_ambiguous` (lists the lines), `stale_line` |
 | 413, 415, 431 | `body_too_large`, `unsupported_media_type`, `head_too_large` |
-| 422 | `not_an_inference_artifact`, `unsupported_artifact` (`details.reason`: `audio`, `multiple_sessions`), `unreadable`, `report_too_large` |
+| 422 | `not_an_inference_artifact`, `unsupported_artifact` (`details.reason`: `audio`, `multiple_sessions`), `unreadable`, `report_too_large`, `limit_exceeded` (the cases route only) |
 | 500 | `internal_error`, with a generic message |
 | 503 | `busy` |
 
@@ -271,7 +271,10 @@ curl -s -i -H "Authorization: Bearer $T" 'http://127.0.0.1:8790/api/v1/artifact/
 
 **`GET /api/v1/artifact/cases`** (bearer). `artifact`. Answers `cases`: one
 summary per measured case, planned cases included,
-`comparison_scope: "full_measured_case"`, no deltas.
+`comparison_scope: "full_measured_case"`, no deltas. Errors: `422
+limit_exceeded` (`details.count` and `details.limit`) for an artifact with
+more cases than `limits.max_cases` (200); the summary route with `case=`
+still answers each one.
 
 ### Selection routes
 
