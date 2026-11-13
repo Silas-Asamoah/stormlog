@@ -6,10 +6,12 @@ import ast
 import hashlib
 import json
 import math
+import numbers
 import subprocess
 import sys
 from array import array
 from collections.abc import Iterator, Mapping
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -168,6 +170,79 @@ def test_to_wire_does_not_mutate_its_input() -> None:
     document = {"started_at_ns": 5, "rows": [{"ended_at_ns": 6}]}
     to_wire(document)
     assert document == {"started_at_ns": 5, "rows": [{"ended_at_ns": 6}]}
+
+
+class Tick:
+    """An integral number that is not an int, as numpy's int64 is."""
+
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def __int__(self) -> int:
+        return self.value
+
+    def __index__(self) -> int:
+        return self.value
+
+
+numbers.Integral.register(Tick)
+
+
+class Grid:
+    """An array-like with tolist, as a numpy array is."""
+
+    def tolist(self) -> list[list[Any]]:
+        return [[1, 2.5], [Fraction(1, 4)]]
+
+
+class SelfList:
+    """A tolist that answers itself must not recurse forever."""
+
+    def tolist(self) -> SelfList:
+        return self
+
+
+def test_other_integral_and_real_numbers_become_int_and_float() -> None:
+    wired = to_wire({"n": Tick(3), "at_ns": Tick(5), "share": Fraction(1, 4)})
+    assert wired == {"n": 3, "at_ns": "5", "share": 0.25}
+    assert type(wired["n"]) is int and type(wired["share"]) is float
+    assert to_wire(Tick(contracts.MAX_SAFE_INTEGER + 1)) == str(2**53)
+
+
+def test_objects_with_tolist_are_wired_through_it() -> None:
+    assert to_wire({"grid_ns": Grid()}) == {"grid_ns": [["1", 2.5], [0.25]]}
+    with pytest.raises(TypeError):
+        to_wire(SelfList())
+
+
+def test_numpy_values_are_wired_as_python_values() -> None:
+    np: Any = pytest.importorskip("numpy")
+    document = {
+        "count": np.int64(120),
+        "started_at_ns": np.int64(1788609625123456789),
+        "p95_ms": np.float64(616.4),
+        "ok": np.bool_(True),
+        "edges_ns": np.array([1, 2], dtype=np.int64),
+        "values_ms": np.array([[0.5, 1.5]]),
+        "flags": np.array([True, False]),
+        "n32": np.int32(7),
+        "x32": np.float32(0.5),
+    }
+    wired = to_wire(document)
+    assert wired == {
+        "count": 120,
+        "started_at_ns": "1788609625123456789",
+        "p95_ms": 616.4,
+        "ok": True,
+        "edges_ns": ["1", "2"],
+        "values_ms": [[0.5, 1.5]],
+        "flags": [True, False],
+        "n32": 7,
+        "x32": 0.5,
+    }
+    assert type(wired["ok"]) is bool and type(wired["count"]) is int
+    assert type(wired["x32"]) is float
+    assert json.loads(encode_json(document)) == wired
 
 
 @pytest.mark.parametrize("value", [b"bytes", {1.5: 1}, {"s": {1, 2}}, object()])
