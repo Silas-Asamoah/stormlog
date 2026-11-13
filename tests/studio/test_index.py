@@ -1228,6 +1228,37 @@ def test_a_changed_line_is_a_stale_line_conflict(
 # --- Lifecycle and concurrency ---------------------------------------------
 
 
+def test_a_stale_line_says_why(fresh_artifact: Callable[[str], Path]) -> None:
+    """C4a's export promises details.reason on stale_line (Fable's P3-7)."""
+    path = fresh_artifact("synthetic")
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    ref = snapshot.requests[3].ref
+    original = path.read_bytes()
+
+    def reason(data: bytes) -> Any:
+        path.write_bytes(data)
+        with pytest.raises(ConflictError) as raised:
+            harness.indexes.read_line(path.name, ref)
+        assert raised.value.details["line"] == ref.line
+        return raised.value.details["reason"]
+
+    flipped = bytearray(original)
+    flipped[ref.offset + 2] ^= 0x01
+    assert reason(bytes(flipped)) == "sha256"
+    end = ref.offset + ref.length
+    assert reason(original[:end] + b"X" + original[end + 1 :]) == "newline"
+    assert reason(original[: ref.offset + 5]) == "length"
+    assert reason(original[: ref.offset]) == "missing"
+    path.write_bytes(original)
+    assert harness.indexes.read_line(path.name, ref) == original[ref.offset : end]
+    stream = harness.indexes.read_lines(path.name, [ref])
+    path.write_bytes(bytes(flipped))
+    with pytest.raises(ConflictError) as raised:
+        next(stream)
+    assert raised.value.details == {"line": ref.line, "reason": "sha256"}
+
+
 def test_snapshot_never_waits_and_never_raises_not_ready(
     studio_artifacts: StandardArtifacts,
 ) -> None:
