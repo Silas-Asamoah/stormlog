@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_session_v1.schema.json",
+  "title": "Stormlog Studio session v1",
+  "description": "POST /api/v1/session, public: a bootstrap token traded for a session token (design §5.4, §7.2). The token is valid until 12 hours without a request or until its instance exits.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "session_token",
+    "instance_id"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.session"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "session_token": {
+      "description": "Bearer token. At least 32 random bytes, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,}$"
+    },
+    "instance_id": {
+      "$ref": "#/$defs/hex32"
+    }
+  },
+  "$defs": {
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  }
+}

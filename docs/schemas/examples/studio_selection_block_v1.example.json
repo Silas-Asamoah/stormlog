@@ -1,0 +1,38 @@
+{
+  "filter": {
+    "phase": "measured",
+    "cases": [
+      "c8_in4096_out128"
+    ],
+    "statuses": [],
+    "stream": null,
+    "token_sources": [],
+    "text": null,
+    "window": null,
+    "completed_by_ns": null,
+    "latency": null
+  },
+  "params": "case=c8_in4096_out128&phase=measured",
+  "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
+  "size": 120,
+  "pooled_cases": 1,
+  "whole_case": "c8_in4096_out128",
+  "cohort": {
+    "valid": true,
+    "issues": [],
+    "reason": null
+  },
+  "rate": {
+    "eligible": true,
+    "rule": "case",
+    "reason": null,
+    "interval": {
+      "kind": "measured_span",
+      "started_at_ns": "1788609600123456789",
+      "ended_at_ns": "1788609661323456789",
+      "seconds": 61.2,
+      "numerator_cohort": "all_measured"
+    }
+  },
+  "searched_fields": []
+}

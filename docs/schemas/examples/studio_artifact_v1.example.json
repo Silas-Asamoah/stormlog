@@ -1,0 +1,152 @@
+{
+  "format": "stormlog.studio.artifact",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/042.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "status": "ready",
+    "size": 2457600,
+    "bytes_read": 2457600,
+    "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "growing": false,
+    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1788609595000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "session": {
+    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "status": "completed",
+    "started_at_ns": "1788609595000000000",
+    "ended_at_ns": "1788609696000000000",
+    "terminal": true,
+    "config": {
+      "endpoint": "http://127.0.0.1:8000/v1/chat/completions",
+      "cases": [
+        "c8_in4096_out128",
+        "c8_in8192_out128"
+      ]
+    }
+  },
+  "index": {
+    "status": "ready",
+    "failure": null,
+    "bytes_read": 2457600,
+    "size": 2457600,
+    "progress": 1.0,
+    "pending_tail_bytes": 0,
+    "prefix_sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "requests": 144,
+    "samples": 99
+  },
+  "inventory": [
+    {
+      "event_type": "infer.session",
+      "total": 2,
+      "by_version": {
+        "1": 2
+      }
+    },
+    {
+      "event_type": "infer.artifact",
+      "total": 1,
+      "by_version": {
+        "2": 1
+      }
+    },
+    {
+      "event_type": "infer.capabilities",
+      "total": 1,
+      "by_version": {
+        "2": 1
+      }
+    },
+    {
+      "event_type": "infer.workload",
+      "total": 1,
+      "by_version": {
+        "1": 1
+      }
+    },
+    {
+      "event_type": "infer.system_sample",
+      "total": 99,
+      "by_version": {
+        "1": 99
+      }
+    },
+    {
+      "event_type": "infer.phase_start",
+      "total": 4,
+      "by_version": {
+        "1": 4
+      }
+    },
+    {
+      "event_type": "infer.dispatch",
+      "total": 144,
+      "by_version": {
+        "1": 144
+      }
+    },
+    {
+      "event_type": "infer.first_content",
+      "total": 131,
+      "by_version": {
+        "1": 131
+      }
+    },
+    {
+      "event_type": "infer.request",
+      "total": 144,
+      "by_version": {
+        "1": 144
+      }
+    },
+    {
+      "event_type": "infer.phase_window",
+      "total": 4,
+      "by_version": {
+        "1": 4
+      }
+    },
+    {
+      "event_type": "infer.summary",
+      "total": 1,
+      "by_version": {
+        "1": 1
+      }
+    }
+  ],
+  "problems": {
+    "count": 0,
+    "first": []
+  },
+  "cases": [
+    {
+      "case_id": "c8_in4096_out128",
+      "planned": true,
+      "observed": true,
+      "measured_requests": 120,
+      "by_status": {
+        "error": 2,
+        "ok": 115,
+        "timeout": 3
+      }
+    },
+    {
+      "case_id": "c8_in8192_out128",
+      "planned": true,
+      "observed": true,
+      "measured_requests": 8,
+      "by_status": {
+        "timeout": 8
+      }
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_selection_block_v1.schema.json",
+  "title": "Stormlog Studio selection block v1",
+  "description": "The selection block every selection route returns under the key selection (design §5.3): the canonical filter, its size and whether the selection has a rate. Not a document of its own.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "filter",
+    "params",
+    "fingerprint",
+    "size",
+    "pooled_cases",
+    "whole_case",
+    "cohort",
+    "rate",
+    "searched_fields"
+  ],
+  "properties": {
+    "filter": {
+      "description": "contracts.RequestFilter, field for field.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "cases",
+        "statuses",
+        "stream",
+        "token_sources",
+        "text",
+        "window",
+        "completed_by_ns",
+        "latency"
+      ],
+      "properties": {
+        "phase": {
+          "enum": [
+            "measured",
+            "warmup",
+            "all"
+          ]
+        },
+        "cases": {
+          "description": "Sorted, unique; empty is every case.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "statuses": {
+          "description": "Sorted; empty is every status.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "ok",
+              "timeout",
+              "rejected",
+              "error",
+              "dropped",
+              "cancelled",
+              "unreachable",
+              "delivery_unknown"
+            ]
+          }
+        },
+        "stream": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "token_sources": {
+          "description": "On output_token_source; empty is every source.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "server_usage",
+              "tiktoken",
+              "transformers",
+              "estimated",
+              "unknown"
+            ]
+          }
+        },
+        "text": {
+          "description": "The q parameter, casefolded.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/time_window"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_by_ns": {
+          "description": "Replay cut-off: keeps ended_at_ns <= this.",
+          "$ref": "#/$defs/ns_or_null"
+        },
+        "latency": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/latency_range"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "params": {
+      "description": "Canonical query string; absolute ns parameters only, so a deep link never depends on browser arithmetic.",
+      "type": "string"
+    },
+    "fingerprint": {
+      "description": "contracts.selection_fingerprint(path, index_id, generation, params): sha256: and the hex SHA-256 of the four, newline-joined.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "size": {
+      "description": "Requests selected.",
+      "$ref": "#/$defs/count"
+    },
+    "pooled_cases": {
+      "description": "Distinct cases among them.",
+      "$ref": "#/$defs/count"
+    },
+    "whole_case": {
+      "description": "The case, when the rows are exactly its measured requests.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cohort": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valid",
+        "issues",
+        "reason"
+      ],
+      "properties": {
+        "valid": {
+          "description": "Null when the selection is not a cohort.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "description": "not_a_cohort for any selection but a whole case.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "rate": {
+      "description": "contracts.RateScope.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligible",
+        "rule",
+        "reason",
+        "interval"
+      ],
+      "properties": {
+        "eligible": {
+          "type": "boolean"
+        },
+        "rule": {
+          "enum": [
+            "case",
+            "segment",
+            null
+          ]
+        },
+        "reason": {
+          "description": "Why there is no rate, or why the interval is not the first choice (design §3.3).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "searched_fields": {
+      "description": "Fields q searched; empty without q.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "interval": {
+      "description": "populations.MeasuredInterval.to_record().",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "started_at_ns",
+        "ended_at_ns",
+        "seconds",
+        "numerator_cohort"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "scheduled_window",
+            "measured_span",
+            "dispatch_window",
+            "drain",
+            "request_span",
+            "segment"
+          ]
+        },
+        "started_at_ns": {
+          "$ref": "#/$defs/ns"
+        },
+        "ended_at_ns": {
+          "$ref": "#/$defs/ns"
+        },
+        "seconds": {
+          "description": "Its length; null when empty, never zero.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "numerator_cohort": {
+          "enum": [
+            "arrival_cohort",
+            "all_measured",
+            "overlapping"
+          ]
+        }
+      }
+    },
+    "latency_range": {
+      "description": "contracts.LatencyRange; half-open.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "metric",
+        "min_ms",
+        "max_ms"
+      ],
+      "properties": {
+        "metric": {
+          "enum": [
+            "client.ttft",
+            "client.ttft_from_intended",
+            "client.e2e",
+            "client.e2e_from_intended",
+            "client.tpot"
+          ]
+        },
+        "min_ms": {
+          "description": "Inclusive.",
+          "type": "number"
+        },
+        "max_ms": {
+          "description": "Exclusive; null is unbounded.",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "ns_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ns"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "time_window": {
+      "description": "contracts.TimeWindow; half-open, client clock.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start_ns",
+        "end_ns",
+        "membership"
+      ],
+      "properties": {
+        "start_ns": {
+          "description": "Inclusive.",
+          "$ref": "#/$defs/ns"
+        },
+        "end_ns": {
+          "description": "Exclusive.",
+          "$ref": "#/$defs/ns"
+        },
+        "membership": {
+          "enum": [
+            "arrival",
+            "overlap"
+          ]
+        }
+      }
+    }
+  }
+}

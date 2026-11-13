@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_artifact_block_v1.schema.json",
+  "title": "Stormlog Studio artifact block v1",
+  "description": "The artifact block every artifact-scoped Studio document carries under the key artifact (design §5.1), written by contracts.artifact_block. Not a document of its own: it has no format or schema_version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "path",
+    "index_id",
+    "generation",
+    "status",
+    "size",
+    "bytes_read",
+    "sha256",
+    "growing",
+    "session_id",
+    "session_status",
+    "terminal",
+    "origin_ns",
+    "gaps_resident",
+    "error_messages_resident",
+    "limits_hit"
+  ],
+  "properties": {
+    "path": {
+      "description": "Root-relative POSIX path of the artifact.",
+      "type": "string",
+      "minLength": 1
+    },
+    "index_id": {
+      "description": "Random per index build; a rebuild gives a new one.",
+      "$ref": "#/$defs/hex32"
+    },
+    "generation": {
+      "description": "+1 each time the index takes in new lines.",
+      "$ref": "#/$defs/count"
+    },
+    "status": {
+      "enum": [
+        "building",
+        "ready",
+        "partial",
+        "failed"
+      ]
+    },
+    "size": {
+      "description": "File size in bytes at the last read; null when the file was never statted (failed: unreadable).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/count"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bytes_read": {
+      "description": "Bytes of complete lines consumed.",
+      "$ref": "#/$defs/count"
+    },
+    "sha256": {
+      "description": "Of the whole file; null until all of it is consumed.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "growing": {
+      "description": "The size changed within the last 5 s.",
+      "type": "boolean"
+    },
+    "session_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_status": {
+      "description": "Status of the last infer.session record.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "terminal": {
+      "description": "An infer.session record with a status other than running exists; false for a file with no session record.",
+      "type": "boolean"
+    },
+    "origin_ns": {
+      "description": "Time zero of the artifact's plots: the first infer.session record's timestamp_ns, else the first client request's started_at_ns.",
+      "$ref": "#/$defs/ns_or_null"
+    },
+    "gaps_resident": {
+      "type": "boolean"
+    },
+    "error_messages_resident": {
+      "type": "boolean"
+    },
+    "limits_hit": {
+      "description": "Index budgets reached, sorted.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "rows",
+          "gaps",
+          "error_messages",
+          "samples",
+          "kept_records"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "ns_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ns"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
