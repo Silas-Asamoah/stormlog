@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_sources_v1.schema.json",
+  "title": "Stormlog Studio sources v1",
+  "description": "GET /api/v1/artifact/sources (design §5.4), written by api.sources_body: what the artifact holds (its inventory), the small records the index keeps whole (kept: written against kept, so a record over the kept-record limit is disclosed, not silent), each panel's availability (the same states as stormlog.studio.artifact_capabilities), and the analyzer's observer states once its report is ready. Answered for any index state, a failed one included. Kept records went through contracts.finite_copy at index time and are in wire form (§5.1).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "inventory",
+    "kept",
+    "panels",
+    "analysis",
+    "observers",
+    "observers_source"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.sources"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "inventory": {
+      "description": "Every event type in file order of first appearance, as in stormlog.studio.artifact.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "total",
+          "by_version"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/$defs/count"
+          },
+          "by_version": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[0-9]+$"
+            },
+            "additionalProperties": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        }
+      }
+    },
+    "kept": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "event_type",
+          "written",
+          "kept",
+          "records"
+        ],
+        "properties": {
+          "event_type": {
+            "type": "string"
+          },
+          "written": {
+            "description": "Records of this type in the file.",
+            "$ref": "#/$defs/count"
+          },
+          "kept": {
+            "description": "Records the index kept whole.",
+            "$ref": "#/$defs/count"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      }
+    },
+    "panels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state",
+          "reason",
+          "collector",
+          "detail"
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "available",
+              "empty",
+              "pending",
+              "partial",
+              "unavailable",
+              "not_indexed",
+              "in_artifact_panel_later",
+              "unsupported"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "collector": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "detail": {}
+        }
+      }
+    },
+    "analysis": {
+      "description": "Where the out-of-process analysis is; its document is GET /api/v1/artifact/analysis.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "running",
+            "ready",
+            "unavailable",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "observers": {
+      "description": "The analyzer report's observers block when ready, else null.",
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "observers_source": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
