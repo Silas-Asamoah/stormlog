@@ -934,7 +934,10 @@ def to_wire(value: Any) -> Any:
     check: a ``numbers.Integral`` becomes an ``int`` (and then follows the
     integer rules), a ``numbers.Real`` a ``float``. Any other object with a
     callable ``tolist`` (a numpy array or scalar, ``numpy.bool_`` included)
-    becomes ``tolist()``, wired in turn. Any other type raises TypeError.
+    becomes ``tolist()``, wired in turn. Any other type raises TypeError,
+    and so do ``bytes``, ``bytearray`` and a ``memoryview`` of bytes
+    (format ``B``, ``b`` or ``c``): bytes have no JSON form. A memoryview of
+    numbers (``d``, ``q``, ...) is a list.
     """
     return _wire(value, ns=False)
 
@@ -953,6 +956,8 @@ def _wire(value: Any, *, ns: bool) -> Any:
 
 def _wire_foreign(value: Any, *, ns: bool) -> Any:
     """Numbers and arrays of other libraries, by the numbers ABCs or tolist."""
+    if _is_bytes(value):
+        raise TypeError(f"no wire form for {type(value).__name__} of bytes")
     if isinstance(value, numbers.Integral):
         return _wire(int(value), ns=ns)
     if isinstance(value, numbers.Real):
@@ -981,6 +986,15 @@ def _wire_key(key: Any) -> str:
     raise TypeError(f"no wire form for a {type(key).__name__} key")
 
 
+_BYTE_FORMATS = frozenset({"B", "b", "c"})
+
+
+def _is_bytes(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray)):
+        return True
+    return isinstance(value, memoryview) and value.format in _BYTE_FORMATS
+
+
 def _is_finite_number(value: Any) -> bool:
     """``report_stats.is_number``, which the contract does not import."""
     if isinstance(value, float):
@@ -991,8 +1005,10 @@ def _is_finite_number(value: Any) -> bool:
 def _is_list_like(value: Any) -> bool:
     if isinstance(value, (list, tuple, array)):
         return True
-    return isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, str)
+        and not _is_bytes(value)
     )
 
 
