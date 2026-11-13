@@ -18,6 +18,8 @@ import io
 import itertools
 import json
 import random
+import signal
+import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -26,6 +28,7 @@ from typing import Any, Literal
 from unittest import mock
 
 from stormlog.exit_codes import ExitCode
+from stormlog.infer.arrivals import CLOSED, FIXED_RATE, RATE_MODES, ArrivalSpec
 from stormlog.infer.cache_state import cache_state_record
 from stormlog.infer.cli import main as infer_main
 from stormlog.infer.config import ProfileConfig
@@ -67,6 +70,10 @@ class CaseSpec:
     same request count and the same stream setting to every case, and its
     cases are the product of its concurrencies and token lengths, so the
     cases given together must agree on those (``ProfileConfig.cases``).
+    In an open-loop run ``concurrency`` is the in-flight limit, one for the
+    whole run. ``stop_after`` ends the measured window through the run's
+    stop file when the Nth measured request reaches the server;
+    ``interrupt_after`` presses Ctrl+C then.
     """
 
     concurrency: int
@@ -77,16 +84,39 @@ class CaseSpec:
     all_fail: bool = False
     stream: bool = True
     usage: bool = True
+    stop_after: int | None = None
+    interrupt_after: int | None = None
 
     @property
     def case_id(self) -> str:
         """The ID the profiler gives this case (closed-loop arrivals)."""
         return f"c{self.concurrency}_in{self.input_tokens}_out{self.output_tokens}"
 
+    def run_case_id(self, arrival: ArrivalSpec) -> str:
+        """The ID the profiler gives this case under ``arrival``."""
+        if not arrival.open_loop:
+            return self.case_id
+        return f"{arrival.case_label()}_in{self.input_tokens}_out{self.output_tokens}"
+
     def policy(self) -> CasePolicy:
         return CasePolicy(
-            fail_every=self.fail_every, all_fail=self.all_fail, usage=self.usage
+            fail_every=self.fail_every,
+            all_fail=self.all_fail,
+            usage=self.usage,
+            stop_after=self.stop_after,
+            interrupt_after=self.interrupt_after,
         )
+
+
+def arrival_spec(arrival: str, rate_per_second: float | None) -> ArrivalSpec:
+    """A run's arrival shape: ``closed``, or a rate mode with its rate."""
+    if arrival == CLOSED:
+        if rate_per_second is not None:
+            raise ValueError("a closed loop takes no rate")
+        return ArrivalSpec()
+    if arrival not in RATE_MODES:
+        raise ValueError(f"arrival must be closed or one of {sorted(RATE_MODES)}")
+    return ArrivalSpec(mode=arrival, rate_per_second=rate_per_second)
 
 
 def _unique(values: Sequence[int]) -> tuple[int, ...]:
@@ -123,6 +153,9 @@ def profile_config(
     seed: int,
     system_sampler: str = "none",
     sample_interval_seconds: float = 1.0,
+    arrival: str = CLOSED,
+    rate_per_second: float | None = None,
+    stop_file: Path | None = None,
 ) -> ProfileConfig:
     """The config one profile run of ``cases`` takes.
 
@@ -130,10 +163,20 @@ def profile_config(
     counts or stream settings, or a set that is not the full product of its
     concurrencies and token lengths. ``system_sampler`` and
     ``sample_interval_seconds`` are the run's, as ``--system-sampler`` and
-    its interval set them.
+    its interval set them. ``arrival`` and ``rate_per_second`` are the
+    run's too (``--arrival``, ``--rate``): an open loop sends every case at
+    that rate with the cases' one ``concurrency`` as its in-flight limit.
+    ``stop_file`` is ``--stop-file``.
     """
     concurrency, inputs, outputs = _run_shape(cases)
+    spec = arrival_spec(arrival, rate_per_second)
+    if spec.open_loop and len(concurrency) != 1:
+        raise ValueError("an open-loop run has one in-flight limit for every case")
     return ProfileConfig(
+        arrival_mode=spec.mode,
+        rates=() if spec.rate_per_second is None else (spec.rate_per_second,),
+        max_in_flight=concurrency[0],
+        stop_file=None if stop_file is None else str(stop_file),
         endpoint=endpoint,
         model=MODEL,
         concurrency=concurrency,
@@ -160,6 +203,8 @@ def profile_artifact(
     seed: int = 0,
     system_sampler: str = "none",
     sample_interval_seconds: float = 1.0,
+    arrival: str = CLOSED,
+    rate_per_second: float | None = None,
 ) -> Path:
     """Profile ``fake_openai`` with the real ``InferenceProfiler``.
 
@@ -169,10 +214,23 @@ def profile_artifact(
     rewritten in place, as a rerun of ``infer profile`` does.
     ``system_sampler="psutil"`` writes the run's real ``infer.system_sample``
     rows (this process's RSS), one every ``sample_interval_seconds``.
+    ``arrival`` (``fixed-rate`` or ``poisson``) and ``rate_per_second``
+    make the run open-loop, for every case: one profile run has one arrival
+    shape per rate, as ``requests`` and ``stream`` are the run's.
+
+    A case with ``stop_after`` ends its measured window early through
+    ``<name>.stop``, which is removed first. A case with
+    ``interrupt_after`` stops the run with a Ctrl+C: the artifact ends with
+    an ``interrupted`` session record, the case has no phase window and the
+    cases after it never start. That needs the main thread; the profiler's
+    own handler takes the signal for the run.
     """
     output = Path(directory) / name
-    policies = {case.case_id: case.policy() for case in cases}
-    with fake_openai(policies) as server:
+    spec = arrival_spec(arrival, rate_per_second)
+    policies = {case.run_case_id(spec): case.policy() for case in cases}
+    stop_file = output.with_suffix(".stop")
+    stop_file.unlink(missing_ok=True)
+    with fake_openai(policies, stop_file=stop_file) as server:
         config = profile_config(
             cases,
             endpoint=server.endpoint,
@@ -181,10 +239,42 @@ def profile_artifact(
             seed=seed,
             system_sampler=system_sampler,
             sample_interval_seconds=sample_interval_seconds,
+            arrival=arrival,
+            rate_per_second=rate_per_second,
+            stop_file=stop_file if _stops(cases) else None,
         )
-        with contextlib.redirect_stdout(io.StringIO()):
-            InferenceProfiler(config).run()
+        _run(InferenceProfiler(config), interrupted=_interrupts(cases))
+        if server.state.interrupted != _interrupts(cases):
+            raise RuntimeError("the run ended before its interrupt was sent")
     return output
+
+
+def _stops(cases: Sequence[CaseSpec]) -> bool:
+    return any(case.stop_after is not None for case in cases)
+
+
+def _interrupts(cases: Sequence[CaseSpec]) -> bool:
+    return any(case.interrupt_after is not None for case in cases)
+
+
+def _run(profiler: InferenceProfiler, *, interrupted: bool) -> None:
+    """Run ``profiler``; a run meant to be interrupted must end so."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        if not interrupted:
+            profiler.run()
+            return
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("an interrupted profile needs the main thread")
+        # A backgrounded process starts with SIGINT ignored; the profiler
+        # only takes the signal over from Python's default handler.
+        previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+        try:
+            profiler.run()
+        except KeyboardInterrupt:
+            return
+        finally:
+            signal.signal(signal.SIGINT, previous)
+    raise RuntimeError("the profile was meant to be interrupted, and completed")
 
 
 # --- Synthetic artifacts -------------------------------------------------
@@ -802,6 +892,10 @@ MIXED_CASES = (
 )
 
 
+OPEN_LOOP_CASES = (CaseSpec(4, 8, 4, 12, fail_every=4), CaseSpec(4, 8, 16, 12))
+INTERRUPTED_CASES = (CaseSpec(2, 8, 4, 12), CaseSpec(2, 8, 16, 12, interrupt_after=5))
+
+
 def _profiled(name: str, cases: Sequence[CaseSpec], **options: Any) -> Builder:
     def build(directory: Path) -> Path:
         return profile_artifact(directory, cases, name=f"{name}.jsonl", **options)
@@ -869,6 +963,23 @@ STANDARD_ARTIFACTS: Mapping[str, Builder] = {
     "tokens_mixed": _synthetic("tokens_mixed", 60, tokens="mixed", fail_every=10),
     "warmup_measured": _profiled("warmup_measured", [CaseSpec(2, 8, 4, 8)], warmup=4),
     "empty": _synthetic("empty", 0),
+    # Open loop at 40/s: each case's phase window has its scheduled endpoint,
+    # so the case rate is over the schedule and a window covering the whole
+    # case gives the same rate (§3.3 rules 1 to 3).
+    "open_loop": _profiled(
+        "open_loop", OPEN_LOOP_CASES, arrival=FIXED_RATE, rate_per_second=40.0
+    ),
+    # 40 arrivals scheduled over 2 s, the window ended by the stop file at the
+    # 8th: stopped_early, with the endpoint where the window stopped.
+    "stopped_early": _profiled(
+        "stopped_early",
+        [CaseSpec(4, 8, 4, 40, stop_after=8)],
+        arrival=FIXED_RATE,
+        rate_per_second=20.0,
+    ),
+    # Ctrl+C at the 5th measured request of the second case: the first case
+    # is whole, the second has requests and no phase window, so no rate.
+    "interrupted": _profiled("interrupted", INTERRUPTED_CASES),
     "samples": _synthetic("samples", 60, samples=True),
     "samples_psutil": _profiled(
         "samples_psutil",
