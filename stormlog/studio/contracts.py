@@ -567,7 +567,9 @@ IndexStatus = Literal["building", "ready", "partial", "failed"]
 IndexFailure = Literal[
     "unreadable", "not_an_inference_artifact", "audio", "multiple_sessions", "internal"
 ]
-LimitHit = Literal["rows", "gaps", "error_messages", "samples", "kept_records"]
+LimitHit = Literal[
+    "rows", "gaps", "error_messages", "samples", "kept_records", "contexts"
+]
 
 
 @dataclass(frozen=True)
@@ -1348,6 +1350,7 @@ class Limits:
     sample_bytes: int = 32 * 2**20
     kept_bytes: int = 16 * 2**20
     kept_record_bytes: int = 64 * 2**10
+    context_bytes: int = 16 * 2**20  # infer.context definitions the decoder holds
     line_bytes: int = 64 * 2**20
     scan_depth: int = 8
     scan_entries: int = 50_000
