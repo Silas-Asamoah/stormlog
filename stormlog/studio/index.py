@@ -611,6 +611,9 @@ class _Requests:
         self.non_numeric_gaps: dict[int, int] = {}
         self.gaps: array[float] | None = array("d")
         self.gap_start: array[int] | None = array("q")
+        # 1 where the row has no text message (null, absent or a side
+        # value); kept when the pool is dropped, as gap_count is for gaps
+        self.error_null = bytearray()
         self.errors: bytearray | None = bytearray()
         self.error_start: array[int] | None = array("q")
         self.error_length: array[int] | None = array("i")
@@ -666,6 +669,7 @@ class _Requests:
         self.gaps.extend(_as_gaps(gaps))
 
     def _add_error(self, row: int, message: Any) -> None:
+        self.error_null.append(type(message) is not str)
         if type(message) is not str:
             if message is not None:
                 self.store.put_side(ERROR_MESSAGE, row, message)
@@ -689,7 +693,7 @@ class _Requests:
         """Bytes of the rows, without the gap and error-message pools."""
         client = sum(9 * len(values) for values in self.client.values())
         size = self.store.nbytes() + self.refs.nbytes() + client
-        size += 4 * len(self.gap_count) + self.ids.nbytes()
+        size += 4 * len(self.gap_count) + len(self.error_null) + self.ids.nbytes()
         size += sys.getsizeof(self.non_numeric_gaps)
         return size + 4 * (len(self.dispatch.data) + len(self.first_content.data))
 
@@ -756,6 +760,8 @@ class _RequestView:
         return list(self.gaps[start : start + count])
 
     def error_of(self, row: int) -> str | None:
+        if self.requests.error_null[row]:
+            return None  # no text: needs no pool, so no line read (F-11)
         if self.errors is None or self.error_start is None:
             raise NotResident(ERROR_MESSAGE)
         assert self.error_length is not None
@@ -811,7 +817,8 @@ class ColumnRow(RequestRow):
     ``error_message`` raises :class:`NotResident` when its pool is not
     resident; :meth:`load_gaps` and :meth:`load_error_message` then read
     the row's line, once, and raise ``ConflictError("stale_line")`` if its
-    bytes changed.
+    bytes changed. A null gaps list or error message is known without the
+    pool, so it reads as None and needs no line read.
     """
 
     __slots__ = ("_view", "_row")
