@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_export_preview_v1.schema.json",
+  "title": "Stormlog Studio export preview v1",
+  "description": "GET /api/v1/artifact/export/preview (design §5.6, §7.8), written by export.preview: what GET /api/v1/artifact/export would send for the same filters, shown before the download (decision 13). Slice 1 has one profile, original_bytes: the selection's client request lines, byte for byte, in file order. It is not a redaction (#111); sensitive_fields counts what may need one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "profile",
+    "count",
+    "bytes",
+    "source",
+    "stormlog_version",
+    "content",
+    "sensitive_fields",
+    "limitations",
+    "download"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.export_preview"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "description": "The §5.3 block every selection route returns, from C2's selection_block.",
+      "$ref": "studio_selection_block_v1.schema.json"
+    },
+    "profile": {
+      "description": "Original bytes; no share profile while #111 is open.",
+      "const": "original_bytes"
+    },
+    "count": {
+      "description": "Lines the export holds: the selection's size.",
+      "$ref": "#/$defs/count"
+    },
+    "bytes": {
+      "description": "The export's size: each line's bytes plus its newline.",
+      "$ref": "#/$defs/count"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "index_id",
+        "generation",
+        "size",
+        "bytes_read",
+        "sha256",
+        "prefix_sha256",
+        "records",
+        "client_requests",
+        "status",
+        "growing"
+      ],
+      "properties": {
+        "path": {
+          "description": "Root-relative POSIX path of the artifact.",
+          "type": "string",
+          "minLength": 1
+        },
+        "index_id": {
+          "$ref": "#/$defs/hex32"
+        },
+        "generation": {
+          "$ref": "#/$defs/count"
+        },
+        "size": {
+          "description": "File size at the index's last read; null before its first.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "bytes_read": {
+          "description": "Bytes of complete lines the index consumed.",
+          "$ref": "#/$defs/count"
+        },
+        "sha256": {
+          "description": "Of the whole file; null until the index has read all of it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prefix_sha256": {
+          "description": "Of the bytes_read bytes the selection was made from.",
+          "$ref": "#/$defs/sha256"
+        },
+        "records": {
+          "description": "Records the index counted, all types (its inventory); not a line count, which the index does not keep.",
+          "$ref": "#/$defs/count"
+        },
+        "client_requests": {
+          "description": "Client request rows in the index, all phases.",
+          "$ref": "#/$defs/count"
+        },
+        "status": {
+          "enum": [
+            "building",
+            "ready",
+            "partial",
+            "failed"
+          ]
+        },
+        "growing": {
+          "type": "boolean"
+        }
+      }
+    },
+    "stormlog_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_types",
+        "order",
+        "line_ending"
+      ],
+      "properties": {
+        "event_types": {
+          "description": "The record types exported: client requests only.",
+          "type": "array",
+          "items": {
+            "const": "infer.request"
+          },
+          "minItems": 1,
+          "maxItems": 1
+        },
+        "order": {
+          "const": "file"
+        },
+        "line_ending": {
+          "const": "\n"
+        }
+      }
+    },
+    "sensitive_fields": {
+      "description": "Fields of the exported lines that may carry something sensitive, with how many lines hold one.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "description",
+          "count",
+          "distinct",
+          "reason"
+        ],
+        "properties": {
+          "field": {
+            "description": "error_message: non-null messages. endpoint: non-null endpoints. model: names that look like a local path.",
+            "enum": [
+              "error_message",
+              "endpoint",
+              "model"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "count": {
+            "description": "Exported lines with such a value; null when the index does not hold the field.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "distinct": {
+            "description": "Distinct such values; null with count.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "reason": {
+            "description": "not_resident: the index dropped the field's pool, so the preview cannot count it without reading every line.",
+            "enum": [
+              null,
+              "not_resident"
+            ]
+          }
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "description": "not_a_redaction and no_phase_windows always; source_not_complete while the index has not read the whole file; index_partial when it stopped at a budget.",
+            "enum": [
+              "not_a_redaction",
+              "no_phase_windows",
+              "source_not_complete",
+              "index_partial"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "download": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "filename",
+        "content_type"
+      ],
+      "properties": {
+        "filename": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+\\.selection\\.jsonl$"
+        },
+        "content_type": {
+          "const": "application/x-ndjson"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
