@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_request_v1.schema.json",
+  "title": "Stormlog Studio request v1",
+  "description": "GET /api/v1/artifact/request (design §5.4): one request in full, with its record, gap statistics and links, and whether it is in the selection given.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "in_selection",
+    "row",
+    "record",
+    "non_finite_fields",
+    "record_omitted",
+    "elapsed_ms",
+    "gaps",
+    "links"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.request"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "$ref": "studio_selection_block_v1.schema.json"
+    },
+    "in_selection": {
+      "description": "A pinned request outside the selection stays shown.",
+      "type": "boolean"
+    },
+    "row": {
+      "$ref": "studio_requests_v1.schema.json#/$defs/row"
+    },
+    "record": {
+      "description": "The decoded record through contracts.finite_copy, without the fields in record_omitted; *_ns integers are decimal strings.",
+      "type": "object"
+    },
+    "non_finite_fields": {
+      "description": "Paths finite_copy nulled, such as ttft_ms.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "record_omitted": {
+      "description": "Fields served elsewhere: the gaps here and on the chunks route.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "elapsed_ms": {
+      "description": "latency_report.elapsed_ms for any status but ok, else null.",
+      "$ref": "#/$defs/ms_or_null"
+    },
+    "gaps": {
+      "description": "latency_report.spread of this request's gaps, plus counts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "p50",
+        "p95",
+        "max",
+        "n",
+        "gap_count",
+        "first"
+      ],
+      "properties": {
+        "p50": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "p95": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "max": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "n": {
+          "description": "Numeric gaps the spread counts.",
+          "$ref": "#/$defs/count"
+        },
+        "gap_count": {
+          "description": "Gaps as written.",
+          "$ref": "#/$defs/count"
+        },
+        "first": {
+          "description": "The first 128 gaps in written order; null for a non-number.",
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/ms_or_null"
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dispatch",
+        "first_content"
+      ],
+      "properties": {
+        "dispatch": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "line",
+            "sha256"
+          ],
+          "properties": {
+            "line": {
+              "$ref": "#/$defs/count"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "first_content": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "line",
+            "sha256"
+          ],
+          "properties": {
+            "line": {
+              "$ref": "#/$defs/count"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ms_or_null": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

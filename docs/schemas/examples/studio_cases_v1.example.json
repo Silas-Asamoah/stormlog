@@ -1,0 +1,1421 @@
+{
+  "format": "stormlog.studio.cases",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/042.jsonl",
+    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+    "generation": 7,
+    "status": "ready",
+    "size": 2457600,
+    "bytes_read": 2457600,
+    "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "growing": false,
+    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1788609595000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "comparison_scope": "full_measured_case",
+  "cases": [
+    {
+      "case_id": "c8_in4096_out128",
+      "planned": true,
+      "observed": true,
+      "summary": {
+        "selection": {
+          "filter": {
+            "phase": "measured",
+            "cases": [
+              "c8_in4096_out128"
+            ],
+            "statuses": [],
+            "stream": null,
+            "token_sources": [],
+            "text": null,
+            "window": null,
+            "completed_by_ns": null,
+            "latency": null
+          },
+          "params": "case=c8_in4096_out128&phase=measured",
+          "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
+          "size": 120,
+          "pooled_cases": 1,
+          "whole_case": "c8_in4096_out128",
+          "cohort": {
+            "valid": true,
+            "issues": [],
+            "reason": null
+          },
+          "rate": {
+            "eligible": true,
+            "rule": "case",
+            "reason": null,
+            "interval": {
+              "kind": "measured_span",
+              "started_at_ns": "1788609600123456789",
+              "ended_at_ns": "1788609661323456789",
+              "seconds": 61.2,
+              "numerator_cohort": "all_measured"
+            }
+          },
+          "searched_fields": []
+        },
+        "counts": {
+          "offered": 120,
+          "scheduled": null,
+          "dropped": 0,
+          "sent": 120,
+          "unreachable": 0,
+          "delivery_unknown": 0,
+          "rejected": 0,
+          "accepted": 120,
+          "successful": 115,
+          "failed": 2,
+          "timed_out": 3,
+          "cancelled": 0,
+          "censored": 3,
+          "other": {},
+          "server_admitted": null,
+          "server_evidence_coverage": null,
+          "cohort_valid": true,
+          "issues": [],
+          "server_evidence": "not_indexed"
+        },
+        "failure": {
+          "share": 0.041666666666666664,
+          "numerator": 5,
+          "denominator": 120,
+          "reason": null
+        },
+        "latency": {
+          "rule": {
+            "confidence": 0.95,
+            "margin": 5,
+            "tails": "symmetric",
+            "assumptions": "requests are independent and identically distributed, with continuous latencies; the dependence queueing creates between requests is not covered, and sufficiency is no precision in milliseconds"
+          },
+          "metrics": {
+            "client.ttft": {
+              "boundary": "client",
+              "successful_missing": 7,
+              "successful": {
+                "p50": {
+                  "value_ms": 518.45,
+                  "n": 108,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 44,
+                    "upper_rank": 65,
+                    "lower_ms": 495.8,
+                    "upper_ms": 541.0,
+                    "width_ms": 45.19999999999999,
+                    "coverage": 0.9571927792007744
+                  }
+                },
+                "p90": {
+                  "value_ms": 601.5699999999999,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": 616.4,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": 632.8919999999999,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                }
+              }
+            },
+            "client.ttft_from_intended": {
+              "boundary": "client",
+              "successful_missing": 115,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                }
+              }
+            },
+            "client.e2e": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": 781.0,
+                  "n": 115,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 47,
+                    "upper_rank": 69,
+                    "lower_ms": 762.5,
+                    "upper_ms": 787.3,
+                    "width_ms": 24.799999999999955,
+                    "coverage": 0.9602494948734572
+                  }
+                },
+                "p90": {
+                  "value_ms": 866.06,
+                  "n": 115,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 97,
+                    "upper_rank": 110,
+                    "lower_ms": 838.7,
+                    "upper_ms": 880.4,
+                    "width_ms": 41.69999999999993,
+                    "coverage": 0.9577656535146152
+                  }
+                },
+                "p95": {
+                  "value_ms": 880.4,
+                  "n": 115,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": 904.89,
+                  "n": 115,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": 782.9869565217391,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 49,
+                    "upper_rank": 72,
+                    "lower_ms": 765.7,
+                    "upper_ms": 793.2,
+                    "width_ms": 27.5,
+                    "coverage": 0.9646763174622304
+                  }
+                },
+                "p90": {
+                  "value_ms": 872.3234782608695,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 101,
+                    "upper_rank": 115,
+                    "lower_ms": 858.9,
+                    "upper_ms": 912.5,
+                    "width_ms": 53.60000000000002,
+                    "coverage": 0.9681928936924331
+                  }
+                },
+                "p95": {
+                  "value_ms": 905.8582608695651,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.e2e_from_intended": {
+              "boundary": "client",
+              "successful_missing": 115,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                }
+              }
+            },
+            "client.tpot": {
+              "boundary": "client",
+              "successful_missing": 7,
+              "successful": {
+                "p50": {
+                  "value_ms": 1.9822834645669296,
+                  "n": 108,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 44,
+                    "upper_rank": 65,
+                    "lower_ms": 1.8094488188976383,
+                    "upper_ms": 2.1527559055118113,
+                    "width_ms": 0.343307086614173,
+                    "coverage": 0.9571927792007744
+                  }
+                },
+                "p90": {
+                  "value_ms": 2.947874015748032,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": 3.2309055118110224,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": 3.503984251968504,
+                  "n": 108,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": true,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 120,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": "successful_values_missing",
+                  "interval": null
+                }
+              }
+            }
+          },
+          "unsuccessful": {
+            "error": {
+              "count": 2,
+              "elapsed_ms": {
+                "min": 12.4,
+                "p50": 12.4,
+                "max": 12.4
+              },
+              "elapsed_missing": 0
+            },
+            "timeout": {
+              "count": 3,
+              "elapsed_ms": {
+                "min": 30000.0,
+                "p50": 30000.0,
+                "max": 30000.0
+              },
+              "elapsed_missing": 0
+            }
+          }
+        },
+        "streaming": {
+          "granularity": "chunk",
+          "responses": 108,
+          "content_chunks_per_response": {
+            "p50": 16.0,
+            "p95": 16.0,
+            "max": 16.0
+          },
+          "chunk_interarrival_ms": {
+            "p50": 17.0,
+            "p95": 30.6,
+            "max": 43.6,
+            "n": 1620
+          },
+          "mean_tokens_per_chunk": 8.0,
+          "note": "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+        },
+        "tokens": {
+          "output": {
+            "eligible": 115,
+            "known": 115,
+            "exact": 115,
+            "by_source": {
+              "server_usage": 115
+            },
+            "known_sum": 14720,
+            "partial": false
+          },
+          "prompt": {
+            "eligible": 115,
+            "known": 115,
+            "exact": 115,
+            "by_source": {
+              "server_usage": 115
+            },
+            "known_sum": 471040,
+            "partial": false
+          }
+        },
+        "intervals": {
+          "rate": {
+            "kind": "measured_span",
+            "started_at_ns": "1788609600123456789",
+            "ended_at_ns": "1788609661323456789",
+            "seconds": 61.2,
+            "numerator_cohort": "all_measured"
+          },
+          "scheduled_window": null,
+          "dispatch_window": {
+            "kind": "dispatch_window",
+            "started_at_ns": "1788609600157226987",
+            "ended_at_ns": "1788609659941439358",
+            "seconds": 59.784212371,
+            "numerator_cohort": "all_measured"
+          },
+          "drain": {
+            "kind": "drain",
+            "started_at_ns": "1788609660423456789",
+            "ended_at_ns": "1788609661323456789",
+            "seconds": 0.9,
+            "numerator_cohort": "all_measured"
+          },
+          "measured_span": {
+            "kind": "measured_span",
+            "started_at_ns": "1788609600123456789",
+            "ended_at_ns": "1788609661323456789",
+            "seconds": 61.2,
+            "numerator_cohort": "all_measured"
+          },
+          "configured_rate_per_second": null,
+          "realized_offered_rate_per_second": null,
+          "rate_reason": null
+        },
+        "throughput": {
+          "interval_seconds": 61.2,
+          "interval_kind": "measured_span",
+          "numerator_cohort": "all_measured",
+          "requests_per_second": 1.8790849673202614,
+          "output_tokens_per_second": 240.52287581699346,
+          "total_tokens_per_second": 7937.254901960784
+        },
+        "client_memory": {
+          "observation_scope": "client_local",
+          "window": {
+            "started_at_ns": "1788609600157226987",
+            "ended_at_ns": "1788609685436030076"
+          },
+          "by_device": [
+            {
+              "sampler": "psutil",
+              "device_id": null,
+              "peak_process_rss_bytes": 181403648,
+              "peak_device_used_bytes": null,
+              "samples": 85
+            }
+          ]
+        },
+        "freshness": {
+          "generation": 7,
+          "last_record_ns": "1788609696600000000",
+          "terminal": true
+        }
+      }
+    },
+    {
+      "case_id": "c8_in8192_out128",
+      "planned": true,
+      "observed": true,
+      "summary": {
+        "selection": {
+          "filter": {
+            "phase": "measured",
+            "cases": [
+              "c8_in8192_out128"
+            ],
+            "statuses": [],
+            "stream": null,
+            "token_sources": [],
+            "text": null,
+            "window": null,
+            "completed_by_ns": null,
+            "latency": null
+          },
+          "params": "case=c8_in8192_out128&phase=measured",
+          "fingerprint": "sha256:a1d2e55f982c03cfcd8ea41bf4df98fa5b7923bed024f8aea0bae399eb8bd6ac",
+          "size": 8,
+          "pooled_cases": 1,
+          "whole_case": "c8_in8192_out128",
+          "cohort": {
+            "valid": true,
+            "issues": [],
+            "reason": null
+          },
+          "rate": {
+            "eligible": true,
+            "rule": "case",
+            "reason": null,
+            "interval": {
+              "kind": "measured_span",
+              "started_at_ns": "1788609663000000000",
+              "ended_at_ns": "1788609696000000000",
+              "seconds": 33.0,
+              "numerator_cohort": "all_measured"
+            }
+          },
+          "searched_fields": []
+        },
+        "counts": {
+          "offered": 8,
+          "scheduled": null,
+          "dropped": 0,
+          "sent": 8,
+          "unreachable": 0,
+          "delivery_unknown": 0,
+          "rejected": 0,
+          "accepted": 8,
+          "successful": 0,
+          "failed": 0,
+          "timed_out": 8,
+          "cancelled": 0,
+          "censored": 8,
+          "other": {},
+          "server_admitted": null,
+          "server_evidence_coverage": null,
+          "cohort_valid": true,
+          "issues": [],
+          "server_evidence": "not_indexed"
+        },
+        "failure": {
+          "share": 1.0,
+          "numerator": 8,
+          "denominator": 8,
+          "reason": null
+        },
+        "latency": {
+          "rule": {
+            "confidence": 0.95,
+            "margin": 5,
+            "tails": "symmetric",
+            "assumptions": "requests are independent and identically distributed, with continuous latencies; the dependence queueing creates between requests is not covered, and sufficiency is no precision in milliseconds"
+          },
+          "metrics": {
+            "client.ttft": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.ttft_from_intended": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.e2e": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.e2e_from_intended": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.tpot": {
+              "boundary": "client",
+              "successful_missing": 0,
+              "successful": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 0,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 8,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            }
+          },
+          "unsuccessful": {
+            "timeout": {
+              "count": 8,
+              "elapsed_ms": {
+                "min": 30000.0,
+                "p50": 30000.0,
+                "max": 30000.0
+              },
+              "elapsed_missing": 0
+            }
+          }
+        },
+        "streaming": {
+          "granularity": "chunk",
+          "responses": 0,
+          "content_chunks_per_response": {
+            "p50": null,
+            "p95": null,
+            "max": null
+          },
+          "chunk_interarrival_ms": {
+            "p50": null,
+            "p95": null,
+            "max": null,
+            "n": 0
+          },
+          "mean_tokens_per_chunk": null,
+          "note": "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
+        },
+        "tokens": {
+          "output": {
+            "eligible": 0,
+            "known": 0,
+            "exact": 0,
+            "by_source": {},
+            "known_sum": 0,
+            "partial": false
+          },
+          "prompt": {
+            "eligible": 0,
+            "known": 0,
+            "exact": 0,
+            "by_source": {},
+            "known_sum": 0,
+            "partial": false
+          }
+        },
+        "intervals": {
+          "rate": {
+            "kind": "measured_span",
+            "started_at_ns": "1788609663000000000",
+            "ended_at_ns": "1788609696000000000",
+            "seconds": 33.0,
+            "numerator_cohort": "all_measured"
+          },
+          "scheduled_window": null,
+          "dispatch_window": {
+            "kind": "dispatch_window",
+            "started_at_ns": "1788609663000000000",
+            "ended_at_ns": "1788609665625000000",
+            "seconds": 2.625,
+            "numerator_cohort": "all_measured"
+          },
+          "drain": {
+            "kind": "drain",
+            "started_at_ns": "1788609666000000000",
+            "ended_at_ns": "1788609696000000000",
+            "seconds": 30.0,
+            "numerator_cohort": "all_measured"
+          },
+          "measured_span": {
+            "kind": "measured_span",
+            "started_at_ns": "1788609663000000000",
+            "ended_at_ns": "1788609696000000000",
+            "seconds": 33.0,
+            "numerator_cohort": "all_measured"
+          },
+          "configured_rate_per_second": null,
+          "realized_offered_rate_per_second": null,
+          "rate_reason": null
+        },
+        "throughput": {
+          "interval_seconds": 33.0,
+          "interval_kind": "measured_span",
+          "numerator_cohort": "all_measured",
+          "requests_per_second": 0.0,
+          "output_tokens_per_second": 0.0,
+          "total_tokens_per_second": 0.0
+        },
+        "client_memory": {
+          "observation_scope": "client_local",
+          "window": {
+            "started_at_ns": "1788609663000000000",
+            "ended_at_ns": "1788609695625000000"
+          },
+          "by_device": [
+            {
+              "sampler": "psutil",
+              "device_id": null,
+              "peak_process_rss_bytes": 181403648,
+              "peak_device_used_bytes": null,
+              "samples": 33
+            }
+          ]
+        },
+        "freshness": {
+          "generation": 7,
+          "last_record_ns": "1788609696600000000",
+          "terminal": true
+        }
+      }
+    }
+  ]
+}

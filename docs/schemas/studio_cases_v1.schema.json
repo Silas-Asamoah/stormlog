@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_cases_v1.schema.json",
+  "title": "Stormlog Studio cases v1",
+  "description": "GET /api/v1/artifact/cases (design §5.4): one summary per measured case of the run, planned and all-failed cases included, with no deltas and no significance claims.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "comparison_scope",
+    "cases"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.cases"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "comparison_scope": {
+      "const": "full_measured_case"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "case_id",
+          "planned",
+          "observed",
+          "summary"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "planned": {
+            "description": "Listed in the infer.workload record.",
+            "type": "boolean"
+          },
+          "observed": {
+            "description": "Has measured client requests.",
+            "type": "boolean"
+          },
+          "summary": {
+            "$ref": "studio_summary_v1.schema.json#/$defs/body"
+          }
+        }
+      }
+    }
+  }
+}
