@@ -1,0 +1,30 @@
+{
+  "format": "stormlog.studio.report",
+  "schema_version": 1,
+  "path": "runs/042-diagnosis.json",
+  "size": 502,
+  "sha256": "9ff17f7dac2adb6643afd72c67634513c6fc10192e998c14ce45ddea44bff9b0",
+  "report": {
+    "schema_version": 1,
+    "format": "stormlog.report",
+    "report_kind": "inference_diagnosis",
+    "generated_at_utc": "2026-11-13T00:00:00Z",
+    "tool": {
+      "name": "stormlog",
+      "command": "infer diagnose",
+      "version": "0.6.0"
+    },
+    "verdict": {
+      "status": "findings",
+      "exit_code": 3,
+      "summary": "1 finding at failure severity"
+    },
+    "findings": [],
+    "metrics": {},
+    "artifacts": [],
+    "recommendations": [],
+    "session_id": "5f0c1d2e3a4b5c6d7e8f901234567890",
+    "run_id": null
+  },
+  "non_finite_fields": []
+}
