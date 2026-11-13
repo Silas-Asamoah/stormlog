@@ -744,6 +744,43 @@ def test_a_repeated_single_parameter_is_refused(served: Served) -> None:
     assert_error(reply, 400, "bad_parameter")
 
 
+# Every integer parameter api.py reads, with what else its route needs.
+INTEGER_PARAMETERS: tuple[tuple[str, str, dict[str, Any]], ...] = (
+    ("/api/v1/workspace/items", "limit", {}),
+    ("/api/v1/artifact/requests", "limit", {"artifact": MIXED}),
+    ("/api/v1/artifact/distribution", "bins", {"metric": "client.e2e"}),
+    ("/api/v1/artifact/points", "max_points", {}),
+    ("/api/v1/artifact/samples", "max_points", {}),
+    ("/api/v1/artifact/request", "line", {"request_id": True}),
+    ("/api/v1/artifact/request/chunks", "line", {"request_id": True}),
+    ("/api/v1/artifact/request/chunks", "offset", {"request_id": True}),
+    ("/api/v1/artifact/request/chunks", "limit", {"request_id": True}),
+    ("/api/v1/artifact/line", "line", {}),
+    ("/api/v1/artifact/evidence", "line", {}),
+)
+NOT_INTEGERS = ("--5", "-", "+5", "5-", "-0-", " 5", "1e3", "0x10", "１", "9" * 19)
+
+
+@pytest.mark.parametrize(("route", "name", "extra"), INTEGER_PARAMETERS)
+def test_every_integer_parameter_refuses_a_non_integer(
+    served: Served, route: str, name: str, extra: dict[str, Any]
+) -> None:
+    """Fable's P3-1: ``limit=--5`` was a 500; any such text is a 400."""
+    row = first_row(served)
+    query: dict[str, Any] = {"artifact": MIXED} if "/artifact/" in route else {}
+    query.update(extra)
+    if "request_id" in extra:
+        query["request_id"] = row["request_id"]
+    for text in NOT_INTEGERS:
+        error = assert_error(
+            served.get(route, **{**query, name: text}), 400, "bad_parameter"
+        )
+        assert error["field"] == name, text
+    valid = row["line"] if name == "line" else 10
+    reply = served.get(route, **{**query, name: valid})
+    assert reply.status == 200, reply.body[:300]
+
+
 # --- Analysis: 202 then 200 ------------------------------------------------------------
 
 
