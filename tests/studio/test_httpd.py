@@ -649,7 +649,7 @@ def test_request_log_names_the_route_never_the_query(
     while "\n" not in studio.stderr.getvalue() and time.monotonic() < deadline:
         time.sleep(0.01)
     logged = studio.stderr.getvalue()
-    assert "GET /api/v1/health 200" in logged
+    assert "GET /api/v1/health 400" in logged  # a query is refused (P3-5)
     assert "hunter2" not in logged
 
 
