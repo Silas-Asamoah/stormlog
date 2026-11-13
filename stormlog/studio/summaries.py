@@ -13,6 +13,11 @@ selection's rows: ``latency_summary``, ``streaming_summary``,
 presentation: picking rows, converting ns to ms from ``origin_ns``,
 counting values into bins and choosing which points to draw (§5.7).
 
+When the snapshot's table is columnar (``contracts.columnar``, as C1's
+index and ``DictTable`` are), :func:`summary` hands those functions the
+selection's columns and gap pool (``request_columns.ColumnRows``) and
+builds no row view (Fable's F-2); the floats are the row path's.
+
 Server evidence is ``not_indexed`` (decision 4(a)): the index keeps no
 joined spans or execution records, so ``counts.server_admitted`` and
 ``server_evidence_coverage`` are null with ``server_evidence:
@@ -24,7 +29,7 @@ from __future__ import annotations
 
 import math
 from bisect import bisect_left
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from stormlog.infer.latency_report import (
@@ -43,6 +48,7 @@ from stormlog.infer.populations import (
 )
 from stormlog.infer.quantiles import quantile
 from stormlog.infer.report_stats import is_number
+from stormlog.infer.request_columns import ColumnRows
 from stormlog.infer.sample_report import (
     group_samples,
     request_window,
@@ -61,6 +67,7 @@ from stormlog.studio.contracts import (
     Selection,
     TimeWindow,
     UsageError,
+    columnar,
     criterion_record,
     finite_copy,
 )
@@ -208,38 +215,116 @@ def summary(snapshot: IndexSnapshot, sel: Selection) -> dict[str, Any]:
     planned case with no observations, gives the same shape with every
     value empty (choice 16).
     """
-    rows = _rows(snapshot, sel.rows)
     population = _whole_case(sel, snapshot)
-    counts = _counts(rows, population)
-    ok = [row for row in rows if row.get("status") == "ok"]
+    table = columnar(snapshot.table)
+    if table is None:
+        numbers = _row_numbers(snapshot, sel, population)
+    else:
+        columns = ColumnRows(table, sel.rows, lacks=_lacks(snapshot))
+        numbers = _column_numbers(snapshot, sel, population, columns)
+    counts = numbers["counts"]
     return {
         "selection": selection_block(sel, snapshot),
         "counts": counts,
         "failure": failure_share(counts["offered"], counts["successful"]),
-        "latency": latency_summary(rows, client_values_of=_client_values),
-        "streaming": _streaming(snapshot, rows),
-        "tokens": token_coverage(rows),
+        "latency": numbers["latency"],
+        "streaming": numbers["streaming"],
+        "tokens": numbers["tokens"],
         "intervals": None if population is None else population.intervals.to_record(),
-        "throughput": _throughput(sel, population, ok),
-        "client_memory": _client_memory(snapshot, ok),
+        "throughput": numbers["throughput"],
+        "client_memory": numbers["client_memory"],
         "freshness": _freshness(snapshot),
     }
 
 
+def _row_numbers(
+    snapshot: IndexSnapshot, sel: Selection, population: CasePopulation | None
+) -> dict[str, Any]:
+    """The analyzer's numbers over row views, for a table without columns."""
+    rows = _rows(snapshot, sel.rows)
+    ok = [row for row in rows if row.get("status") == "ok"]
+    return {
+        "counts": _counts(rows, population),
+        "latency": latency_summary(rows, client_values_of=_client_values),
+        "streaming": _streaming(snapshot, lambda: streaming_summary(rows)),
+        "tokens": token_coverage(rows),
+        "throughput": _throughput(
+            sel, population, lambda interval: successful_throughput(ok, interval)
+        ),
+        "client_memory": _client_memory(snapshot, request_window(ok)),
+    }
+
+
+def _column_numbers(
+    snapshot: IndexSnapshot,
+    sel: Selection,
+    population: CasePopulation | None,
+    columns: ColumnRows,
+) -> dict[str, Any]:
+    """The same numbers from the selection's columns: no row view."""
+    statuses = columns.column("status")
+    ok = columns.subset(columns.successful())
+    return {
+        "counts": _counts(_status_records(statuses), population),
+        "latency": latency_summary((), columns=columns),
+        "streaming": _streaming(
+            snapshot, lambda: streaming_summary((), columns=columns)
+        ),
+        "tokens": token_coverage((), columns=columns),
+        "throughput": _throughput(
+            sel,
+            population,
+            lambda interval: successful_throughput((), interval, columns=columns),
+        ),
+        "client_memory": _client_memory(snapshot, request_window((), columns=ok)),
+    }
+
+
+def _status_records(statuses: Sequence[Any]) -> list[Mapping[str, Any]]:
+    """A ``{"status": value}`` record per row, all ``count_population``
+    reads; rows with the same status text share one record."""
+    shared: dict[str, Mapping[str, Any]] = {}
+    out: list[Mapping[str, Any]] = []
+    for status in statuses:
+        text = status if type(status) is str else None
+        record = shared.get(text) if text is not None else None
+        if record is None:
+            record = {"status": status}
+            if text is not None:
+                shared[text] = record
+        out.append(record)
+    return out
+
+
+def _lacks(snapshot: IndexSnapshot) -> Callable[[int, str], bool]:
+    """Whether row ``i`` lacks a key, asked only of a None cell: the one
+    row view a columnar summary may build."""
+    requests = snapshot.requests
+
+    def lacks(i: int, name: str) -> bool:
+        return name not in requests[i]
+
+    return lacks
+
+
+Rate = Callable[[MeasuredInterval | None], dict[str, Any]]
+
+
 def _throughput(
-    sel: Selection, population: CasePopulation | None, ok: Sequence[RequestRow]
+    sel: Selection, population: CasePopulation | None, rate_over: Rate
 ) -> dict[str, Any] | None:
     """The rate block of an eligible selection, or of a whole case.
 
     A whole case whose rate interval is undefined (an interrupted phase)
     gets the analyzer's block, every rate null over no interval, so the
     case equals its analyzer block (§3.4); any other selection without a
-    rate gets null (§5.4).
+    rate gets null (§5.4). ``rate_over`` is ``successful_throughput`` of
+    the selection over an interval.
     """
     if sel.rate.eligible:
-        return successful_throughput(ok, sel.rate.interval)
+        return rate_over(sel.rate.interval)
     if population is not None:
-        return successful_throughput(ok, population.intervals.rate)
+        return rate_over(population.intervals.rate)
     return None
 
 
@@ -254,7 +339,7 @@ def _client_values(record: Mapping[str, Any]) -> Mapping[str, CriterionValue]:
 
 
 def _counts(
-    rows: Sequence[RequestRow], population: CasePopulation | None
+    rows: Sequence[Mapping[str, Any]], population: CasePopulation | None
 ) -> dict[str, Any]:
     if population is None:
         counts = count_population(rows).to_record()
@@ -267,19 +352,23 @@ def _counts(
     return counts
 
 
-def _streaming(snapshot: IndexSnapshot, rows: Sequence[RequestRow]) -> dict[str, Any]:
+def _streaming(
+    snapshot: IndexSnapshot, streaming: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
     if not snapshot.gaps_resident:
         return dict(STREAMING_UNAVAILABLE)
     try:
-        return streaming_summary(rows)
+        return streaming()
     except NotResident:
         return dict(STREAMING_UNAVAILABLE)
 
 
-def _client_memory(snapshot: IndexSnapshot, ok: Sequence[RequestRow]) -> dict[str, Any]:
+def _client_memory(
+    snapshot: IndexSnapshot, window: tuple[int, int] | None
+) -> dict[str, Any]:
     """Client samples during the successful requests, by device, as the
-    analyzer windows them (first start to last end, both included)."""
-    window = request_window(ok)
+    analyzer windows them (``request_window`` of the successful requests:
+    first start to last end, both included)."""
     memory: dict[str, Any] = {"observation_scope": "client_local"}
     if window is None:
         return {**memory, "window": None, "by_device": []}
