@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_evidence_v1.schema.json",
+  "title": "Stormlog Studio evidence v1",
+  "description": "GET /api/v1/artifact/evidence (design §5.4, §5.8), written by api.py: whether a pointer into the artifact (line, and optionally record_id and sha256) still names the record it named. resolved: the line exists, its bytes hash to the index's SHA-256 and to sha256 when given, and its record ID is record_id when given. unresolved: line_out_of_range (the index holds no reference for the line: past the end, or a line it did not keep), hash_mismatch (the given sha256 differs, or the file's bytes changed), or record_id_mismatch. found is the line seen, null for line_out_of_range. A request row's record_id is the decoded record's (diagnosis_inputs.record_id); another line's is read from its raw JSON.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "query",
+    "state",
+    "reason",
+    "found"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.evidence"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "line",
+        "record_id",
+        "sha256"
+      ],
+      "properties": {
+        "line": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "record_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "state": {
+      "enum": [
+        "resolved",
+        "unresolved"
+      ]
+    },
+    "reason": {
+      "enum": [
+        "line_out_of_range",
+        "hash_mismatch",
+        "record_id_mismatch",
+        null
+      ]
+    },
+    "found": {
+      "anyOf": [
+        {
+          "description": "The line the index holds a reference for.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "line",
+            "offset",
+            "length",
+            "sha256",
+            "record_id"
+          ],
+          "properties": {
+            "line": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "record_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}
