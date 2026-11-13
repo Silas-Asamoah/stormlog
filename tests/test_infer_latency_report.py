@@ -11,7 +11,12 @@ from typing import Any
 import pytest
 
 from stormlog.infer.analysis import analyze_inference_events
-from stormlog.infer.latency_report import latency_summary, streaming_summary
+from stormlog.infer.latency_report import (
+    elapsed_ms,
+    latency_summary,
+    spread,
+    streaming_summary,
+)
 from stormlog.infer.quantiles import quantile
 from stormlog.infer.vllm_analysis import JoinedSpans
 
@@ -284,3 +289,26 @@ def test_the_rule_states_what_the_intervals_assume() -> None:
 
 def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
     assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}
+
+
+def test_elapsed_ms_is_the_e2e_time_or_send_to_end_for_an_abandoned_request() -> None:
+    assert elapsed_ms({"e2e_latency_ms": 250}) == 250.0
+    cancelled = {
+        "status": "cancelled",
+        "started_at_ns": SECOND,
+        "ended_at_ns": 2 * SECOND,
+    }
+    assert elapsed_ms(cancelled) == 1_000.0
+    assert elapsed_ms({**cancelled, "status": "dropped"}) is None
+    assert elapsed_ms({**cancelled, "ended_at_ns": SECOND // 2}) is None
+    assert elapsed_ms({"status": "error", "e2e_latency_ms": None}) is None
+
+
+def test_spread_is_the_median_95th_percentile_and_maximum() -> None:
+    values = [5.0, 1.0, 3.0, 2.0, 4.0]
+    assert spread(values) == {
+        "p50": quantile(values, 0.5),
+        "p95": quantile(values, 0.95),
+        "max": 5.0,
+    }
+    assert spread([]) == {"p50": None, "p95": None, "max": None}
