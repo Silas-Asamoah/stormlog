@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -19,6 +21,7 @@ from stormlog.studio.metric_catalog import (
 from tests.studio.conftest import StandardArtifacts
 from tests.studio.test_selection import (
     closed_case,
+    session_record,
     snapshot_from_records,
     snapshot_of,
 )
@@ -118,6 +121,33 @@ def test_server_evidence_in_the_artifact_is_not_indexed(
     plain = panels(snapshot_of(studio_artifacts["mixed"]), READY)["panels"]
     assert plain["server_evidence"]["state"] == "unavailable"
     assert plain["server_evidence"]["collector"]
+
+
+def test_an_unsupported_client_line_is_no_server_evidence(tmp_path: Path) -> None:
+    # Fable's F-9: a client infer.request at version 2 (no context) is an
+    # unsupported_version problem, never a row; it was counted as a
+    # server-view request, so the panel claimed server evidence.
+    from tests.studio.test_index import Harness
+
+    records = [session_record(), *closed_case()]
+    records.append(dict(records[-2], schema_version=2))
+    path = tmp_path / "run.jsonl"
+    path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records))
+    snapshot = Harness(tmp_path).build(path.name)
+    assert snapshot.problem_counts == {"unsupported_version": 1}
+    server = panels(snapshot, READY)["panels"]["server_evidence"]
+    assert (server["state"], server["reason"]) == ("unavailable", "no_server_evidence")
+
+
+def test_server_view_requests_are_counted_apart_from_unsupported_client_lines() -> None:
+    snapshot = replace(
+        snapshot_from_records(closed_case()),
+        inventory={"infer.request": {1: 10, 2: 3}},
+        problem_counts={"unsupported_version": 1},
+    )
+    server = panels(snapshot, READY)["panels"]["server_evidence"]
+    assert server["state"] == "not_indexed"
+    assert server["detail"]["records"] == {"infer.request (server view)": 2}
 
 
 def test_states_follow_what_the_artifact_holds(
