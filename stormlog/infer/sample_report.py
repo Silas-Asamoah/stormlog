@@ -7,7 +7,8 @@ gives one entry per ``(sampler, device_id)``.
 
 ``request_window`` and ``samples_in_window`` are the analyzer's rules for the
 samples it counts against a case: from the first request's start to the last
-request's end, both ends included.
+request's end, both ends included. ``sample_gaps`` says where one series of
+samples breaks.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
+from .observers import SCRAPE_GAP_FACTOR
+from .quantiles import quantile
 from .report_stats import int_value, is_number
 from .request_columns import no_records
 
@@ -101,6 +104,25 @@ def group_samples(
     return sorted(ordered, key=lambda group: (str(group[0]), str(group[1])))
 
 
+def sample_gaps(
+    times: Sequence[int], *, factor: float = SCRAPE_GAP_FACTOR
+) -> list[tuple[int, int]]:
+    """Where a series of samples breaks: each pair of consecutive times
+    (ascending) more than ``factor`` times the series' median interval
+    apart.
+
+    The series has no configured interval to compare with, so its own
+    median interval stands in for the one ``observers`` applies
+    ``SCRAPE_GAP_FACTOR`` to (a scrape gap). None when the median is 0 or
+    there are fewer than two times.
+    """
+    intervals = [b - a for a, b in zip(times, times[1:])]
+    median = quantile(intervals, 0.5)
+    if not median:
+        return []
+    return [(a, b) for a, b in zip(times, times[1:]) if b - a > factor * median]
+
+
 def _part(value: Any) -> tuple[str, Any]:
     """A hashable group key that keeps 1, 1.0, True and "1" apart."""
     if value is None or isinstance(value, (str, int)):
@@ -130,6 +152,7 @@ __all__ = [
     "PEAK_FIELDS",
     "group_samples",
     "request_window",
+    "sample_gaps",
     "sample_peaks",
     "samples_in_window",
 ]
