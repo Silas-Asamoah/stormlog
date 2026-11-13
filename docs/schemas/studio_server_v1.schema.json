@@ -70,7 +70,8 @@
         "chunk_page",
         "text_chars",
         "cached_documents",
-        "cached_selections"
+        "cached_selections",
+        "max_cases"
       ],
       "properties": {
         "max_connections": {
@@ -182,6 +183,10 @@
           "minimum": 0
         },
         "cached_selections": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_cases": {
           "type": "number",
           "minimum": 0
         }

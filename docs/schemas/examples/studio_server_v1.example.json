@@ -33,6 +33,7 @@
     "chunk_page": 10000,
     "text_chars": 256,
     "cached_documents": 64,
-    "cached_selections": 16
+    "cached_selections": 16,
+    "max_cases": 200
   }
 }
