@@ -144,14 +144,14 @@ def _line(
         return Line(number, digest, None, None, None), None
     try:
         raw = json.loads(chunk)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:  # a line nested too deep too
         return Line(number, digest, None, None, None), f"not JSON ({exc})"
     if not isinstance(raw, dict):
         return Line(number, digest, None, None, None), "not a JSON object"
     try:
         record: InferenceRecord | None = decoder.decode_event(raw)
         problem = None
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         record, problem = None, str(exc)
     return Line(number, digest, raw, record, record_id(raw)), problem
 
