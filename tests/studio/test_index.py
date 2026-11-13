@@ -1007,6 +1007,29 @@ def test_past_the_error_budget_messages_are_read_from_the_file(
         snapshot.column(ERROR_MESSAGE)
 
 
+def test_a_null_error_message_needs_no_line_once_the_pool_is_dropped(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["mixed"]
+    harness = harness_for(path, Limits(error_message_bytes=100))
+    snapshot = harness.build(path.name)
+    assert not snapshot.error_messages_resident
+    expected = [record for _, _, record in client_lines(path)]
+    nulls = [i for i, r in enumerate(expected) if r.get(ERROR_MESSAGE) is None]
+    texts = [i for i, r in enumerate(expected) if isinstance(r.get(ERROR_MESSAGE), str)]
+    assert nulls and texts
+    opened = harness.root.opened
+    for i in nulls:  # known without the pool (F-11)
+        row = snapshot.requests[i]
+        assert row.get(ERROR_MESSAGE) is None and row.load_error_message() is None
+    assert harness.root.opened == opened
+    for i in texts:
+        with pytest.raises(NotResident):
+            snapshot.requests[i].get(ERROR_MESSAGE)
+        assert snapshot.requests[i].load_error_message() == expected[i][ERROR_MESSAGE]
+    assert harness.root.opened == opened + len(texts)
+
+
 def with_samples(source: Path, target: Path, count: int) -> Path:
     """Made here: C5's profiles use the noop sampler, so this appends
     psutil-shaped ``infer.system_sample`` records to a copy."""
