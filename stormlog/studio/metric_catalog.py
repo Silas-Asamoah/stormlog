@@ -540,9 +540,13 @@ def _memory_panel(snapshot: IndexSnapshot) -> dict[str, Any]:
 def _server_panel(snapshot: IndexSnapshot) -> dict[str, Any]:
     held = _held(snapshot, SERVER_EVIDENCE_TYPES)
     server_view = snapshot.inventory.get("infer.request", {})
-    server_requests = sum(
+    other_versions = sum(
         count for version, count in server_view.items() if version != 1
     )
+    # Client requests at another version are no server evidence: C1 counts
+    # them as unsupported_version problems, apart (§4.4, Fable's F-9).
+    unsupported = snapshot.problem_counts.get("unsupported_version", 0)
+    server_requests = max(0, other_versions - unsupported)
     if server_requests:
         held["infer.request (server view)"] = server_requests
     if not held:
