@@ -340,10 +340,19 @@ def _ensure_private_dir(path: Path) -> Path:
 
 
 def _write_private(path: Path, text: str) -> Path:
-    """Write ``text`` to a new 0600 file, replacing an older one."""
+    """Write ``text`` to a new 0600 file, replacing an older one.
+
+    The temporary name holds the PID, so one left by a crash is stale once
+    that PID is reused by a new launcher: it is removed (never followed,
+    and only in Studio's own 0700 directories) and the write goes ahead.
+    """
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-    fd = os.open(temporary, flags, 0o600)
+    try:
+        fd = os.open(temporary, flags, 0o600)
+    except FileExistsError:
+        temporary.unlink()
+        fd = os.open(temporary, flags, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(text)
     os.replace(temporary, path)
