@@ -49,6 +49,7 @@ from stormlog.infer.populations import (
     populations_from_records,
 )
 from stormlog.infer.report_stats import is_number
+from stormlog.infer.request_columns import SUMMARY_FIELDS
 from stormlog.infer.tokens import TOKEN_SOURCES
 from stormlog.studio.contracts import (
     ConflictError,
@@ -64,6 +65,7 @@ from stormlog.studio.contracts import (
     SortKey,
     TimeWindow,
     UsageError,
+    columnar,
     selection_fingerprint,
 )
 
@@ -71,6 +73,7 @@ __all__ = [
     "FILTER_PARAMETERS",
     "SORT_KEYS",
     "TEXT_FIELDS",
+    "WARM_COLUMNS",
     "CaseFacts",
     "arrival_ns",
     "canonical_params",
@@ -80,6 +83,7 @@ __all__ = [
     "parse_filter",
     "request_row",
     "select",
+    "warm",
     "without_latency",
 ]
 
@@ -403,37 +407,107 @@ POPULATION_FIELDS = (
     "intended_at_ns",
 )
 
+
+@dataclass(frozen=True)
+class _Held:
+    """One cached ``CaseFacts``: the table it was computed over (weakly,
+    so the id is not reused while held), and the kept records and
+    inventory it read, which a ``replace`` shares and a new snapshot does
+    not."""
+
+    table: weakref.ref[Any]
+    kept: Mapping[str, Any]
+    inventory: Mapping[str, Any]
+    facts: CaseFacts
+
+    def serves(self, snapshot: IndexSnapshot) -> bool:
+        return (
+            self.table() is snapshot.table
+            and self.kept is snapshot.kept
+            and self.inventory is snapshot.inventory
+        )
+
+
 _FACTS_LOCK = threading.Lock()
-_FACTS: dict[int, tuple[weakref.ref[IndexSnapshot], CaseFacts]] = {}
+_FACTS: dict[int, _Held] = {}
 _FACTS_KEPT = 8
 
 
 def case_facts(snapshot: IndexSnapshot) -> CaseFacts:
-    """The snapshot's case facts, computed on first use and kept with it.
+    """The snapshot's case facts, computed on first use and kept with its
+    table.
 
     The cost is linear in the measured rows (about 2 s at 500,000 on the
     cloud box, most of it in ``populations_from_records``), so the caller
-    that publishes a snapshot should warm it on the builder pool (§2.1);
-    otherwise the first selection of the snapshot pays it.
+    that publishes a snapshot warms it on the builder pool with
+    :func:`warm` (§2.1); otherwise the first selection pays it. The key is
+    ``id(snapshot.table)`` (Fable's F-7): a snapshot republished with
+    ``dataclasses.replace`` for a touch or a ``growing`` flip shares its
+    table, kept records and inventory, so it finds the facts; new rows or
+    a new index make a new table. A table that cannot be referenced
+    weakly is not cached.
     """
-    key = id(snapshot)
+    table = snapshot.table
+    key = id(table)
     with _FACTS_LOCK:
         held = _FACTS.get(key)
-        if held is not None and held[0]() is snapshot:
-            return held[1]
+        if held is not None and held.serves(snapshot):
+            return held.facts
     facts = _compute_facts(snapshot)
+    try:
+        reference = weakref.ref(table, _forget(key))
+    except TypeError:
+        return facts
     with _FACTS_LOCK:
-        if len(_FACTS) >= _FACTS_KEPT:
+        if key not in _FACTS and len(_FACTS) >= _FACTS_KEPT:
             _FACTS.pop(next(iter(_FACTS)))
-        _FACTS[key] = (weakref.ref(snapshot, _forget(key)), facts)
+        _FACTS[key] = _Held(reference, snapshot.kept, snapshot.inventory, facts)
     return facts
 
 
-def _forget(key: int) -> Callable[[weakref.ref[IndexSnapshot]], None]:
-    def drop(reference: weakref.ref[IndexSnapshot]) -> None:
+# What a first select (the default filter), page and summary read by
+# column, besides case_facts' POPULATION_FIELDS; a test pins that the
+# summary reads nothing else.
+WARM_COLUMNS = (
+    "phase",
+    "timestamp_ns",
+    *SUMMARY_FIELDS,
+)
+
+
+def warm(snapshot: IndexSnapshot) -> None:
+    """Compute what the first select and summary of ``snapshot`` need.
+
+    ``case_facts``, then the columns in :data:`WARM_COLUMNS` and, for a
+    columnar table, its client arrays, gap counts and (when resident) gap
+    pool; each is cached on the snapshot's table. C4 registers it as a
+    publish listener (``contracts.publish_hook``), so it runs on the
+    builder pool after each publish, never on a request (Fable's F-7).
+    A snapshot without rows warms nothing.
+    """
+    if not len(snapshot.table):
+        return
+    case_facts(snapshot)
+    for name in WARM_COLUMNS:
+        snapshot.column(name)
+    table = columnar(snapshot.table)
+    if table is None:
+        return
+    for metric in CLIENT_METRICS:
+        table.client_values(metric)
+    table.gap_counts()
+    if snapshot.gaps_resident:
+        try:
+            table.gap_pool()
+        except NotResident:
+            pass
+
+
+def _forget(key: int) -> Callable[[weakref.ref[Any]], None]:
+    def drop(reference: weakref.ref[Any]) -> None:
         with _FACTS_LOCK:
             held = _FACTS.get(key)
-            if held is not None and held[0] is reference:
+            if held is not None and held.table is reference:
                 del _FACTS[key]
 
     return drop
