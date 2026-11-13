@@ -43,8 +43,10 @@ Rules:
 
 The subprocess runs ``sys.executable -m stormlog``, in the private analysis
 directory (so a ``stormlog`` package in the workspace cannot shadow the
-installed one), with stdin and stdout closed and stderr captured; the last
-512 bytes of stderr, scrubbed, become the document's ``detail`` on failure.
+installed one), with an environment that keeps no API key, token, secret
+or proxy (:func:`analyzer_environment`), and with stdin and stdout closed
+and stderr captured; the last 512 bytes of stderr, scrubbed, become the
+document's ``detail`` on failure.
 """
 
 from __future__ import annotations
@@ -76,7 +78,13 @@ from stormlog.studio.contracts import (
     finite_copy,
 )
 
-__all__ = ["ANALYZE_COMMAND", "KEPT_RESULTS", "RETRY_AFTER_S", "AnalyzerRunner"]
+__all__ = [
+    "ANALYZE_COMMAND",
+    "KEPT_RESULTS",
+    "RETRY_AFTER_S",
+    "AnalyzerRunner",
+    "analyzer_environment",
+]
 
 # The argv before the input path and the output options.
 ANALYZE_COMMAND: tuple[str, ...] = (
@@ -95,6 +103,14 @@ _BLOCK = 64 * 2**10
 _COPY_BLOCK = 2**20
 _DETAIL_BYTES = 512
 _Key = tuple[str, str, int, int, int, int, int]
+# The analyzer's environment. ``infer analyze`` reads no variable it
+# needs: its report is byte-identical under an empty environment. These
+# keep the interpreter finding stormlog when it is a user-site install
+# (HOME), a PYTHONPATH checkout or an activated venv, and the locale.
+_ENV_KEPT = frozenset({"PATH", "HOME", "LANG", "LANGUAGE", "TMPDIR", "VIRTUAL_ENV"})
+_ENV_KEPT_PREFIXES = ("LC_", "PYTHON")
+# Never passed on, even when kept above (PYTHON_API_KEY, LC_TOKEN).
+_ENV_SECRET_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET")
 
 
 @dataclass(frozen=True)
@@ -383,6 +399,7 @@ class AnalyzerRunner:
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
                 cwd=self._dir,
+                env=analyzer_environment(os.environ),
                 start_new_session=True,
             )
         with self._lock:
@@ -428,6 +445,24 @@ class _Skip(Exception):
     def __init__(self, state: AnalysisState) -> None:
         super().__init__(state.reason)
         self.state = state
+
+
+def analyzer_environment(environ: Mapping[str, str]) -> dict[str, str]:
+    """The variables of ``environ`` the analyzer subprocess gets.
+
+    Only ``PATH``, ``HOME``, ``LANG``, ``LANGUAGE``, ``TMPDIR``,
+    ``VIRTUAL_ENV``, ``LC_*`` and ``PYTHON*``, and never a name ending in
+    ``_API_KEY``, ``_TOKEN`` or ``_SECRET`` or holding ``PROXY``, in any
+    case: Studio holds no credentials (§7.6), so its analyzer is given
+    none of the user's, and it reads only local files, so no proxy.
+    """
+    return {name: value for name, value in environ.items() if _env_kept(name.upper())}
+
+
+def _env_kept(name: str) -> bool:
+    if name.endswith(_ENV_SECRET_SUFFIXES) or "PROXY" in name:
+        return False
+    return name in _ENV_KEPT or name.startswith(_ENV_KEPT_PREFIXES)
 
 
 def _key(rel: str, snapshot: IndexSnapshot) -> _Key:
