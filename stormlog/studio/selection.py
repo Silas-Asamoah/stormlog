@@ -1030,7 +1030,8 @@ def _decode_cursor(cursor: str) -> dict[str, Any]:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
         _check_cursor(payload)
-    except (ValueError, UnicodeError, binascii.Error, TypeError) as exc:
+    except (ValueError, UnicodeError, binascii.Error, TypeError, RecursionError) as exc:
+        # RecursionError: a cursor of nested brackets is a bad cursor too.
         raise _bad("cursor", "not a cursor this server issued") from exc
     return dict(payload)
 

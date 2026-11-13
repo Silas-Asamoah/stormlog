@@ -1271,6 +1271,18 @@ def test_a_cursor_this_server_did_not_issue_is_a_400(cursor: str) -> None:
     assert raised.value.field == "cursor"
 
 
+@pytest.mark.parametrize("bomb", [b"[" * 12_000, b'{"a":' * 12_000])
+def test_a_cursor_nesting_bomb_is_a_400(bomb: bytes) -> None:
+    """Fable's P3: json.loads raised RecursionError on 3.10 to 3.13, which
+    _decode_cursor did not catch, so the requests route answered 500."""
+    cursor = base64.urlsafe_b64encode(bomb).decode("ascii").rstrip("=")
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    with pytest.raises(UsageError) as raised:
+        page(snapshot, sel, sort="artifact", order="asc", cursor=cursor, limit=5)
+    assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
+
+
 def _forged(cursor: str, **changes: Any) -> str:
     padded = cursor + "=" * (-len(cursor) % 4)
     payload = json.loads(base64.urlsafe_b64decode(padded))
