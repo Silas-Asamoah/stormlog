@@ -1345,6 +1345,7 @@ class Limits:
     text_chars: int = 256
     cached_documents: int = 64
     cached_selections: int = 16
+    max_cases: int = 200  # cases /artifact/cases summarises (Fable's P3-2)
 
 
 @dataclass(frozen=True)
