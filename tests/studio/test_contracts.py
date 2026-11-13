@@ -423,6 +423,15 @@ def test_dict_row_identity_rule_for_missing_fields() -> None:
     assert row.load_gaps() == () and row.load_error_message() == "boom"
 
 
+def test_dict_row_reads_a_null_identity_as_unknown() -> None:
+    nulls = {"session_id": None, "request_id": None, "case_id": None, "phase": None}
+    row = DictRow(request_record(**nulls))
+    assert (row.session_id, row.request_id) == ("unknown", "unknown")
+    assert (row.case_id, row.phase) == ("unknown", "unknown")
+    assert contracts.identity_text(None) == "unknown"
+    assert contracts.identity_text(0) == "0" and contracts.identity_text("") == ""
+
+
 def test_dict_row_record_id_matches_diagnosis_inputs_for_v2_records() -> None:
     record = request_record(schema_version=2, event_id="evt-1")
     assert DictRow(record).record_id == record_id(record) == "evt-1"
