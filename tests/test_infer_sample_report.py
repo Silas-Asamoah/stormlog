@@ -9,6 +9,7 @@ from stormlog.infer import analysis
 from stormlog.infer.sample_report import (
     group_samples,
     request_window,
+    sample_gaps,
     sample_peaks,
     samples_in_window,
 )
@@ -149,3 +150,16 @@ def test_the_helpers_follow_the_analyzers_rules() -> None:
             pooled = analysis._peak_sample_value([dict(s) for s in kept], field)
             peaks = [p[f"peak_{field}"] for p in sample_peaks(kept)]
             assert peaks == ([] if not kept else [pooled])
+
+
+def test_a_series_breaks_where_samples_are_over_twice_its_median_apart() -> None:
+    times = [0, 10, 20, 30, 51, 61, 81, 82]
+    # Intervals 10, 10, 10, 21, 10, 20, 1: median 10, so 21 breaks, 20 not.
+    assert sample_gaps(times) == [(30, 51)]
+    assert sample_gaps(times, factor=1.5) == [(30, 51), (61, 81)]
+
+
+def test_a_series_without_a_median_interval_has_no_gaps() -> None:
+    assert sample_gaps([]) == []
+    assert sample_gaps([5]) == []
+    assert sample_gaps([5, 5, 5, 9]) == []
