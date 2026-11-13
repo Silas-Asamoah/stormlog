@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 import threading
 import time
 import tracemalloc
@@ -565,6 +566,41 @@ def test_a_rewrite_in_place_rebuilds_under_a_new_index_id(
     assert second.session is not None and first.session is not None
     assert second.session.session_id != first.session.session_id
     assert len(first.requests) == 10  # the old snapshot is untouched
+
+
+def test_a_completed_build_trims_the_heap_once(
+    fresh_artifact: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def trim() -> bool:
+        calls.append(1)
+        return True
+
+    monkeypatch.setattr(index_module, "trim_heap", trim)
+    path = fresh_artifact("tokens_exact")
+    harness = harness_for(path, batch_bytes=1_000)
+    harness.build(path.name)
+    assert len(calls) == 1  # once per build, not per batch
+    with path.open("ab") as handle:
+        handle.write(complete_lines(path)[-1] + b"\n")
+    harness.refresh(path.name)
+    assert len(calls) == 1  # growth is not a build
+    rewrite_in_place(path, cases=MIXED_CASES[:1])
+    harness.refresh(path.name)
+    assert len(calls) == 2  # a rebuild under a new index ID is
+
+
+def test_trim_heap_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert index_module.trim_heap() is sys.platform.startswith("linux")
+
+    def no_libc(name: Any) -> Any:
+        raise OSError("no C library")
+
+    monkeypatch.setattr(index_module.ctypes, "CDLL", no_libc)
+    assert index_module.trim_heap() is False
+    monkeypatch.setattr(index_module.sys, "platform", "darwin")
+    assert index_module.trim_heap() is False
 
 
 def test_an_import_replace_keeps_the_index_and_adds_its_lines(
