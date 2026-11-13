@@ -35,6 +35,7 @@ import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 from referencing import Registry, Resource
 
+from stormlog.infer.diagnosis_inputs import MAX_NESTING
 from stormlog.report import build_report
 from stormlog.studio import api, app, selection
 from stormlog.studio.contracts import (
@@ -957,6 +958,33 @@ def test_an_oversized_line_is_refused_unread(
             "limit": 65536,
         }
         assert len(reply.body) < 1000
+
+
+@pytest.mark.parametrize("depth", [MAX_NESTING, MAX_NESTING + 1, 50_000])
+def test_evidence_reads_a_line_nested_past_the_limit_as_not_json(
+    private: Callable[..., Served], studio_artifacts: StandardArtifacts, depth: int
+) -> None:
+    """Fable's P3: the route parsed a problem line with json.loads, so a line
+    nested past MAX_NESTING had a record_id where json.loads took it (always
+    at 129 levels, at 50,000 only from 3.14) though the index calls it
+    not_json. Past the limit it now has none, on every Python."""
+    studio = private()
+    data = studio_artifacts["mixed"].read_bytes()
+    inner = "[" * (depth - 1) + "]" * (depth - 1)
+    deep = (
+        '{"schema_version": 1, "event_type": "infer.system_sample", '
+        f'"timestamp_ns": 7, "deep": {inner}}}'
+    )
+    (studio.root / "deep.jsonl").write_bytes(data + deep.encode() + b"\n")
+    line = data.count(b"\n")
+    snapshot = studio.ready("deep.jsonl")
+    problems = [(p.ref.line, p.code) for p in snapshot.problems]
+    reply = studio.get("/api/v1/artifact/evidence", artifact="deep.jsonl", line=line)
+    found = assert_document(reply, "evidence")["found"]
+    if depth <= MAX_NESTING:
+        assert (problems, found["record_id"]) == ([], "infer.system_sample@7")
+    else:
+        assert (problems, found["record_id"]) == ([(line, "not_json")], None)
 
 
 # --- Growth, refresh and the cut --------------------------------------------------------
