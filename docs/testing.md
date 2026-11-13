@@ -372,7 +372,9 @@ explicitly before retaining a response.
 Inference artifact lines and Studio reports get the same treatment, with a
 128-container limit (`diagnosis_inputs.MAX_NESTING`) counted on the bytes
 before `json.loads` runs. Studio's artifact reader and `stormlog infer
-diagnose` both call a deeper line `not_json`, and Studio refuses a deeper
+diagnose` both call a deeper line `not_json`; `stormlog infer analyze`,
+`compare` and the two imports refuse it as they refuse any line that is not
+JSON (`correlation_codec`'s reader); and Studio refuses a deeper
 report as not a report, whatever the Python version or the thread's stack
 size. Their tests use lines just inside and just past the limit, plus one
 50,000 levels deep that Python 3.14 parses on an 8 MiB stack. None of them
