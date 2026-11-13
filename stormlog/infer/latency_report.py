@@ -18,7 +18,6 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import numpy.typing as npt
 
 from .quantiles import (
     OrderStatisticInterval,
@@ -43,6 +42,10 @@ from .request_columns import (
 from .slo import CriterionValue, client_values, server_values
 
 if TYPE_CHECKING:
+    # numpy.typing needs numpy >= 1.21, above the declared floor: only
+    # annotations use it.
+    import numpy.typing as npt
+
     from .vllm_analysis import JoinedSpans
 
 ValuesOf = Callable[[Mapping[str, Any]], Mapping[str, CriterionValue]]
