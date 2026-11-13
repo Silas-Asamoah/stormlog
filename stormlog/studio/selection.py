@@ -84,6 +84,7 @@ __all__ = [
     "parse_filter",
     "request_row",
     "select",
+    "selection_of",
     "warm",
     "without_latency",
 ]
@@ -605,7 +606,18 @@ def select(snapshot: IndexSnapshot, f: RequestFilter) -> Selection:
     rows: Sequence[int] = range(len(snapshot.table))
     for keep in _conditions(snapshot, f):
         rows = [i for i in rows if keep(i)]
-    selected = array("q", rows)
+    return selection_of(snapshot, f, array("q", rows))
+
+
+def selection_of(
+    snapshot: IndexSnapshot, f: RequestFilter, selected: array[int]
+) -> Selection:
+    """The :class:`~stormlog.studio.contracts.Selection` of ``f`` from known rows.
+
+    ``selected`` must be the rows :func:`select` would find for ``f``, in
+    file order: ``summaries.cases`` passes a case's measured rows from
+    :func:`case_facts`, grouped once, instead of a scan per case.
+    """
     case_column = snapshot.column("case_id")
     cases = tuple(sorted({identity_text(case_column[i]) for i in selected}))
     rate, whole_case = _rate_scope(snapshot, f, selected, cases)
