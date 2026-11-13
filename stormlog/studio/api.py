@@ -77,6 +77,7 @@ from stormlog.studio.contracts import (
     encode_json,
     envelope,
 )
+from stormlog.studio.index import refuse_oversized
 from stormlog.studio.workspace import read_report
 
 __all__ = [
@@ -562,7 +563,7 @@ class _Api:
         query = request.query
         _check_names(query, ("artifact", "line", "sha256"))
         snapshot = self._snapshot(query)
-        ref = _known_ref(snapshot, _line_number(query))
+        ref = _known_ref(snapshot, _line_number(query), self.limits.line_bytes)
         expected = _one(query, "sha256")
         if expected is not None and expected != ref.sha256:
             raise ConflictError(
@@ -816,14 +817,25 @@ def _line_number(query: Query) -> int:
     return line
 
 
-def find_ref(snapshot: IndexSnapshot, line: int) -> LineRef | None:
+def find_ref(snapshot: IndexSnapshot, line: int, *, line_bytes: int) -> LineRef | None:
     """The reference the index holds for ``line``, or None.
 
     A client request row's line is always found (by bisection over the
     rows' references, which are in file order); another line only when the
     index kept its reference: the first 1,000 of each event type, a
     problem line, a request's dispatch or first-content line, or the cut.
+
+    A line longer than ``line_bytes`` is an ``oversized`` problem the
+    reader never parsed; its reference is refused with 422 ``unreadable``
+    (``details.reason`` ``oversized``) rather than read whole.
     """
+    ref = _held_ref(snapshot, line)
+    if ref is not None:
+        refuse_oversized(ref, line_bytes)
+    return ref
+
+
+def _held_ref(snapshot: IndexSnapshot, line: int) -> LineRef | None:
     table = columnar(snapshot.table)
     refs: Sequence[LineRef] = (
         table.line_refs() if table is not None else [r.ref for r in snapshot.requests]
@@ -850,8 +862,8 @@ def _other_refs(snapshot: IndexSnapshot) -> Iterable[LineRef | None]:
     )
 
 
-def _known_ref(snapshot: IndexSnapshot, line: int) -> LineRef:
-    ref = find_ref(snapshot, line)
+def _known_ref(snapshot: IndexSnapshot, line: int, line_bytes: int) -> LineRef:
+    ref = find_ref(snapshot, line, line_bytes=line_bytes)
     if ref is not None:
         return ref
     count = snapshot.line_count
@@ -868,7 +880,7 @@ def _resolve(
     ctx: StudioContext, snapshot: IndexSnapshot, line: int, wanted: Mapping[str, Any]
 ) -> dict[str, Any]:
     """``resolved`` with the line found, or ``unresolved`` with a reason."""
-    ref = find_ref(snapshot, line)
+    ref = find_ref(snapshot, line, line_bytes=ctx.options.limits.line_bytes)
     if ref is None:
         return _unresolved("line_out_of_range", None)
     if wanted["sha256"] is not None and wanted["sha256"] != ref.sha256:
