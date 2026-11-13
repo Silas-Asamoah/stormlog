@@ -20,6 +20,7 @@ import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 from referencing import Registry, Resource
 
+from stormlog.infer import artifact_lines
 from stormlog.infer.diagnosis_inputs import record_id
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import contracts
@@ -53,7 +54,12 @@ from stormlog.studio.contracts import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO_ROOT / "stormlog" / "studio" / "contracts.py"
-ALLOWED_STORMLOG_IMPORTS = {"stormlog.infer.populations", "stormlog.infer.slo"}
+ARTIFACT_LINES = REPO_ROOT / "stormlog" / "infer" / "artifact_lines.py"
+ALLOWED_STORMLOG_IMPORTS = {
+    "stormlog.infer.artifact_lines",
+    "stormlog.infer.populations",
+    "stormlog.infer.slo",
+}
 SCHEMA_DIR = REPO_ROOT / "docs" / "schemas"
 EXAMPLE_DIR = SCHEMA_DIR / "examples"
 SCHEMA_BASE = "https://github.com/Silas-Asamoah/stormlog/docs/schemas/"
@@ -660,6 +666,15 @@ def test_contracts_imports_only_stdlib_populations_and_slo() -> None:
     for name in _imported_modules(CONTRACTS):
         allowed = name.split(".")[0] in stdlib or name in ALLOWED_STORMLOG_IMPORTS
         assert allowed, f"contracts imports {name}"
+
+
+def test_the_line_types_live_in_infer_and_import_only_the_stdlib() -> None:
+    stdlib = sys.stdlib_module_names
+    for name in _imported_modules(ARTIFACT_LINES):
+        assert name.split(".")[0] in stdlib, f"artifact_lines imports {name}"
+    for name in ("LineRef", "ProblemCode", "LineProblem", "FileIdentity"):
+        assert getattr(contracts, name) is getattr(artifact_lines, name), name
+        assert name in contracts.__all__ and name in artifact_lines.__all__
 
 
 def test_importing_contracts_loads_no_other_studio_module() -> None:
