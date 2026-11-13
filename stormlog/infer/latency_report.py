@@ -176,11 +176,18 @@ def _pooled_gaps(
 
 
 def _gaps(record: Mapping[str, Any]) -> list[float]:
-    return [
-        float(gap)
-        for gap in record.get("chunk_interarrival_ms") or []
-        if is_number(gap)
-    ]
+    return [float(gap) for gap in _gap_list(record) if is_number(gap)]
+
+
+def _gap_list(record: Mapping[str, Any]) -> list[Any]:
+    """The record's ``chunk_interarrival_ms`` when it is a list, else none.
+
+    A value that is not a list (a string, a number, an object) holds no
+    gaps, as Studio's index stores it (``RequestRow.gap_count`` is 0): its
+    characters or keys are not chunks, and a number is not iterable.
+    """
+    gaps = record.get("chunk_interarrival_ms")
+    return gaps if isinstance(gaps, list) else []
 
 
 def _metrics(
@@ -331,7 +338,7 @@ def _tokens_per_chunk(streamed: Sequence[Mapping[str, Any]]) -> float | None:
     # int_value, as every other token sum: a count that is not a finite
     # number adds 0 instead of failing the whole analysis.
     tokens = sum(int_value(r.get("output_tokens")) for r in counted)
-    chunks = sum(len(r.get("chunk_interarrival_ms") or []) + 1 for r in counted)
+    chunks = sum(len(_gap_list(r)) + 1 for r in counted)
     return tokens / chunks if chunks else None
 
 
