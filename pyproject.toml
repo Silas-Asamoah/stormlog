@@ -179,7 +179,9 @@ include = ["stormlog*"]
 exclude = ["tests*", "examples*", "docs*"]
 
 [tool.setuptools.package-data]
-stormlog = ["*.txt", "*.md"]
+# Studio's frontend: a flat directory plus vendor/. Explicit patterns,
+# because a "**" glob needs setuptools 62.3 and the build pins 61.0.
+stormlog = ["*.txt", "*.md", "studio/static/*", "studio/static/vendor/*"]
 "stormlog.tensorflow" = ["*.txt", "*.md"]
 "stormlog.jax" = ["*.txt", "*.md"]
 
