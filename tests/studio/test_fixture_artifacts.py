@@ -4,26 +4,50 @@ reads it as the rest of the Studio suite assumes."""
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stormlog.exit_codes import ExitCode
+from stormlog.infer.cli import main as infer_main
 from stormlog.infer.events import InferenceRequestEvent
 from tests.studio.artifacts import (
+    ANALYZE_FAILS,
+    MULTI_SESSION,
+    NO_TERMINAL_RECORD,
+    STANDARD_ARTIFACTS,
     CaseSpec,
+    GrowingCopy,
     decoded_records,
+    last_line_start,
     profile_artifact,
     profile_config,
+    rewrite_in_place,
     synthetic_artifact,
+    truncated_copy,
     with_execution_import,
 )
+from tests.studio.conftest import StandardArtifacts
 from tests.studio.fake_openai import CasePolicy, fake_openai
+
+NAMES = sorted(STANDARD_ARTIFACTS)
+
+
+def _analyze(path: Path, output: Path) -> int:
+    with (
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()),
+    ):
+        args = ["analyze", str(path), "--format", "json", "--output", str(output)]
+        return infer_main(args)
 
 
 def _lines(path: Path) -> list[dict[str, Any]]:
@@ -48,6 +72,128 @@ def _measured(path: Path) -> list[dict[str, Any]]:
     return [r for r in _client_requests(path) if r["phase"] == "measured"]
 
 
+def _sessions(path: Path) -> set[str]:
+    kinds = {"infer.session", "infer.request"}
+    return {
+        str(record["session_id"])
+        for record in _lines(path)
+        if record.get("event_type") in kinds and record.get("schema_version", 1) == 1
+    }
+
+
+def _is_terminal(record: dict[str, Any]) -> bool:
+    return record.get("event_type") == "infer.session" and record.get("status") not in (
+        None,
+        "running",
+    )
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_infer_analyze_reads_each_artifact_unless_it_is_meant_to_fail(
+    name: str, studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    code = _analyze(studio_artifacts[name], tmp_path / "report.json")
+
+    if name in ANALYZE_FAILS:
+        assert code == int(ExitCode.INVALID_INPUT)
+    else:
+        assert code == int(ExitCode.OK)
+        assert json.loads((tmp_path / "report.json").read_text())["cases"] is not None
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_only_the_multi_session_artifact_holds_two_sessions(
+    name: str, studio_artifacts: StandardArtifacts
+) -> None:
+    path = studio_artifacts[name]
+
+    assert len(_sessions(path)) == (2 if name in MULTI_SESSION else 1)
+
+
+def test_the_multi_session_artifact_is_two_whole_runs_end_to_end(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["multi_session"]
+    sessions = [r for r in _lines(path) if r.get("event_type") == "infer.session"]
+
+    assert [r["status"] for r in sessions] == [
+        "running",
+        "completed",
+        "running",
+        "completed",
+    ]
+    first, second = sessions[0]["session_id"], sessions[2]["session_id"]
+    assert first != second
+    by_session = Counter(r["session_id"] for r in _measured(path))
+    assert by_session == {first: 12, second: 12}
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_a_terminal_session_record_ends_only_the_finished_artifacts(
+    name: str, studio_artifacts: StandardArtifacts
+) -> None:
+    terminal = [r for r in _lines(studio_artifacts[name]) if _is_terminal(r)]
+
+    assert bool(terminal) == (name not in NO_TERMINAL_RECORD)
+
+
+@pytest.mark.parametrize("cut", ["mid_line", "after_newline"])
+def test_truncated_copies_cut_where_they_say(
+    cut: Any, studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    source = studio_artifacts["tokens_exact"]
+    data = source.read_bytes()
+    start = last_line_start(data)
+
+    copy = truncated_copy(source, tmp_path / "cut.jsonl", cut=cut).read_bytes()
+
+    assert data.startswith(copy)
+    if cut == "after_newline":
+        assert copy == data[:start]
+        assert copy.endswith(b"\n")
+        assert _is_terminal(json.loads(data[start:]))
+    else:
+        tail = copy[start:]
+        assert 0 < len(tail) < len(data) - 1 - start
+        assert b"\n" not in tail
+        assert copy[:start] == data[:start]
+
+
+def test_the_standard_truncated_artifacts_are_cut_copies_of_their_source(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    for name in ("truncated_mid_line", "truncated_after_newline"):
+        path = studio_artifacts[name]
+        source = path.with_name(f"{name}.src.jsonl").read_bytes()
+        start = last_line_start(source)
+        cut = path.read_bytes()
+        assert source.startswith(cut)
+        if name.endswith("newline"):
+            assert cut == source[:start]
+        else:
+            assert start < len(cut) < len(source) - 1
+            assert not cut.endswith(b"\n")
+
+
+def test_rewrite_in_place_keeps_the_inode_and_changes_the_leading_bytes(
+    tmp_path: Path,
+) -> None:
+    cases = [CaseSpec(1, 8, 4, 3)]
+    path = profile_artifact(tmp_path, cases, warmup=0)
+    before = path.stat()
+    first_line = path.read_bytes().split(b"\n", 1)[0]
+
+    rewrite_in_place(path, cases=[CaseSpec(2, 8, 4, 5)])
+
+    after = path.stat()
+    assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
+    # Line 0, the anchor C1 re-checks, is a new infer.session record.
+    assert path.read_bytes()[: len(first_line)] != first_line
+    old_session = json.loads(first_line)["session_id"]
+    assert _sessions(path) == {_lines(path)[0]["session_id"]} != {old_session}
+    assert len(_measured(path)) == 5
+
+
 def test_the_execution_import_replaces_the_file_keeping_its_bytes_as_prefix(
     tmp_path: Path,
 ) -> None:
@@ -67,6 +213,81 @@ def test_the_execution_import_replaces_the_file_keeping_its_bytes_as_prefix(
         if r["event_type"] == "infer.request" and "context" in r
     ]
     assert len(server_view) == 4
+
+
+def test_the_execution_import_fixture_has_server_admitted_requests(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    assert _analyze(studio_artifacts["execution_import"], tmp_path / "r.json") == 0
+    report = json.loads((tmp_path / "r.json").read_text())
+    (case,) = report["cases"].values()
+
+    assert case["population"]["server_admitted"] == 6
+    assert case["population"]["failed"] == 2
+
+
+def _field(name: str, studio: StandardArtifacts, key: str) -> Counter[Any]:
+    return Counter(r[key] for r in _client_requests(studio[name]))
+
+
+@pytest.mark.parametrize(
+    ("name", "key", "expected"),
+    [
+        ("all_failed", "status", {"error": 10}),
+        ("mixed", "status", {"ok": 49, "error": 7}),
+        ("non_streaming", "stream", {False: 10}),
+        ("tokens_exact", "output_token_source", {"server_usage": 10}),
+        ("tokens_estimated", "output_token_source", {"estimated": 10}),
+        ("tokens_missing", "output_token_source", {"unknown": 60}),
+        ("tokens_missing", "output_tokens", {None: 60}),
+        (
+            "tokens_mixed",
+            "output_token_source",
+            {"server_usage": 18, "estimated": 18, "unknown": 24},
+        ),
+        ("warmup_measured", "phase", {"warmup": 4, "measured": 8}),
+        ("empty", "phase", {}),
+    ],
+)
+def test_each_state_fixture_holds_its_state(
+    name: str,
+    key: str,
+    expected: dict[Any, int],
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    assert _field(name, studio_artifacts, key) == expected
+
+
+def test_the_growing_artifact_stops_inside_its_measured_phase(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    records = _lines(studio_artifacts["growing"])
+    kinds = Counter(r["event_type"] for r in records)
+
+    assert kinds["infer.phase_start"] == 2
+    assert kinds["infer.phase_window"] == 1  # the warmup's; measured is open
+    assert 0 < len(_measured(studio_artifacts["growing"])) < 12
+
+
+def test_a_growing_copy_grows_on_its_inode_to_equal_its_source(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    source = studio_artifacts["tokens_exact"]
+    data = source.read_bytes()
+    growing = GrowingCopy(source, tmp_path / "g.jsonl", lines=3)
+    inode = growing.target.stat().st_ino
+    assert growing.target.read_bytes().count(b"\n") == 3
+
+    growing.append_partial()
+    partial = growing.target.read_bytes()
+    assert not partial.endswith(b"\n") and data.startswith(partial)
+    growing.append(2)
+    assert growing.target.read_bytes().count(b"\n") == 5
+    growing.finish()
+
+    assert growing.target.read_bytes() == data
+    assert growing.target.stat().st_ino == inode
+    assert growing.remaining == 0
 
 
 def test_synthetic_requests_equal_what_the_dataclass_writes(tmp_path: Path) -> None:
@@ -173,3 +394,12 @@ def test_one_run_refuses_cases_it_cannot_hold(
         profile_config(
             cases, endpoint="http://x", output=tmp_path / "a", warmup=0, seed=0
         )
+
+
+def test_fresh_artifact_gives_a_private_copy(
+    fresh_artifact: Callable[[str], Path], studio_artifacts: StandardArtifacts
+) -> None:
+    copy = fresh_artifact("empty")
+
+    assert copy.read_bytes() == studio_artifacts["empty"].read_bytes()
+    assert copy != studio_artifacts["empty"]

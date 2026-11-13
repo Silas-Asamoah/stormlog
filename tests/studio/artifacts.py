@@ -6,7 +6,9 @@ runs the real ``infer import-execution`` over hook logs built with
 ``tests/vllm_execution_helpers.py``; ``synthetic_artifact`` writes request
 events through ``JsonlEventWriter`` and the infer dataclasses, around the
 header, phase and session records of a real ``InferenceProfiler`` that
-never sends (design §9.3, §10.3 C5).
+never sends. The other helpers cut, grow, concatenate or rewrite those
+files the way a killed run, a running one, ``cat`` or a rerun to the same
+path would (design §4.2, §8.2, §10.3 C5).
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import itertools
 import json
 import random
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
@@ -567,3 +569,186 @@ def with_execution_import(artifact: Path) -> Path:
     if code != int(ExitCode.OK):
         raise RuntimeError(f"import-execution exited {code}")
     return artifact
+
+
+# --- Cuts, growth, concatenation and reruns ------------------------------
+
+Cut = Literal["mid_line", "after_newline"]
+
+
+def last_line_start(data: bytes) -> int:
+    """Where the last complete line of ``data`` begins."""
+    if not data.endswith(b"\n"):
+        raise ValueError("the source must end with a newline")
+    return data.rfind(b"\n", 0, len(data) - 1) + 1
+
+
+def truncated_copy(source: Path, target: Path, *, cut: Cut) -> Path:
+    """Copy ``source`` without the end of its last line.
+
+    ``after_newline`` drops the last line whole, so the copy ends with a
+    newline: a run killed before its terminal session record. ``mid_line``
+    keeps the first half of the last line's bytes, without its newline: a
+    write cut off part way (design §4.2 hazard 3).
+    """
+    data = Path(source).read_bytes()
+    start = last_line_start(data)
+    end = start
+    if cut == "mid_line":
+        end = start + max(1, (len(data) - 1 - start) // 2)
+    elif cut != "after_newline":
+        raise ValueError(f"unknown cut {cut!r}")
+    Path(target).write_bytes(data[:end])
+    return Path(target)
+
+
+class GrowingCopy:
+    """A prefix of a finished artifact that grows as a running profile's
+    file does: appended to in place, line by line, on the same inode."""
+
+    def __init__(self, source: Path, target: Path, *, lines: int) -> None:
+        self.data = Path(source).read_bytes()
+        self.ends = [i + 1 for i, byte in enumerate(self.data) if byte == 0x0A]
+        if not 0 <= lines <= len(self.ends):
+            raise ValueError(f"the source has {len(self.ends)} lines")
+        self.target = Path(target)
+        self.offset = self.ends[lines - 1] if lines else 0
+        self.target.write_bytes(self.data[: self.offset])
+
+    @property
+    def remaining(self) -> int:
+        """Complete lines not yet written."""
+        return sum(1 for end in self.ends if end > self.offset)
+
+    def _write_to(self, end: int) -> None:
+        with self.target.open("ab") as handle:
+            handle.write(self.data[self.offset : end])
+        self.offset = end
+
+    def append(self, count: int = 1) -> None:
+        """Write the next ``count`` lines, finishing a partial one first."""
+        pending = [end for end in self.ends if end > self.offset]
+        if count < 1 or count > len(pending):
+            raise ValueError(f"{len(pending)} lines remain")
+        self._write_to(pending[count - 1])
+
+    def append_partial(self) -> None:
+        """Write the first half of the next line, without its newline."""
+        end = next(end for end in self.ends if end > self.offset)
+        self._write_to(self.offset + max(1, (end - 1 - self.offset) // 2))
+
+    def finish(self) -> None:
+        """Write the rest: the file now equals its source."""
+        self._write_to(len(self.data))
+
+
+def concatenated(sources: Sequence[Path], target: Path) -> Path:
+    """``cat sources > target``: the only way one file gets two sessions."""
+    Path(target).write_bytes(b"".join(Path(path).read_bytes() for path in sources))
+    return Path(target)
+
+
+def rewrite_in_place(
+    path: Path, *, cases: Sequence[CaseSpec], warmup: int = 2, seed: int = 0
+) -> None:
+    """Rerun a profile to ``path``: the writer opens it with ``"w"``, so the
+    same inode is truncated and rewritten with a new session (§4.2 hazard 4)."""
+    profile_artifact(
+        Path(path).parent, cases, name=Path(path).name, warmup=warmup, seed=seed
+    )
+
+
+# --- The standard set ----------------------------------------------------
+
+Builder = Callable[[Path], Path]
+
+# Two cases per concurrency, one of them losing every 4th measured request.
+MIXED_CASES = (
+    CaseSpec(2, 8, 4, 12, fail_every=4),
+    CaseSpec(2, 8, 16, 12),
+    CaseSpec(4, 8, 4, 12),
+    CaseSpec(4, 8, 16, 12, fail_every=3),
+)
+
+
+def _profiled(name: str, cases: Sequence[CaseSpec], **options: Any) -> Builder:
+    def build(directory: Path) -> Path:
+        return profile_artifact(directory, cases, name=f"{name}.jsonl", **options)
+
+    return build
+
+
+def _synthetic(name: str, requests: int, **options: Any) -> Builder:
+    def build(directory: Path) -> Path:
+        return synthetic_artifact(
+            directory,
+            requests=requests,
+            gaps_per_request=15,
+            seed=7,
+            name=f"{name}.jsonl",
+            concurrency=8,
+            **options,
+        )
+
+    return build
+
+
+def _truncated(name: str, cut: Cut) -> Builder:
+    def build(directory: Path) -> Path:
+        source = profile_artifact(directory, MIXED_CASES[:1], name=f"{name}.src.jsonl")
+        return truncated_copy(source, directory / f"{name}.jsonl", cut=cut)
+
+    return build
+
+
+def _growing(directory: Path) -> Path:
+    """A profile caught mid-run: its measured phase has begun and only part
+    of its requests are written; no phase window, no terminal record."""
+    source = profile_artifact(directory, MIXED_CASES[:1], name="growing.src.jsonl")
+    lines = source.read_bytes().split(b"\n")
+    starts = [i for i, line in enumerate(lines) if b'"infer.phase_start"' in line]
+    cut = starts[-1] + 8  # the measured phase's start, then a few records
+    return GrowingCopy(source, directory / "growing.jsonl", lines=cut).target
+
+
+def _execution_import(directory: Path) -> Path:
+    cases = [CaseSpec(2, 8, 4, 8, fail_every=4)]
+    return with_execution_import(
+        profile_artifact(directory, cases, name="execution_import.jsonl")
+    )
+
+
+def _multi_session(directory: Path) -> Path:
+    first = profile_artifact(directory, MIXED_CASES[:1], name="multi_session.a.jsonl")
+    second = profile_artifact(directory, MIXED_CASES[:1], name="multi_session.b.jsonl")
+    return concatenated([first, second], directory / "multi_session.jsonl")
+
+
+# Each builder writes ``<name>.jsonl`` (and maybe ``<name>.*`` helpers) into
+# the directory it is given, so the whole set can share one directory.
+STANDARD_ARTIFACTS: Mapping[str, Builder] = {
+    "mixed": _profiled("mixed", MIXED_CASES),
+    "all_failed": _profiled("all_failed", [CaseSpec(2, 8, 4, 8, all_fail=True)]),
+    "non_streaming": _profiled("non_streaming", [CaseSpec(2, 8, 4, 8, stream=False)]),
+    "tokens_exact": _profiled("tokens_exact", [CaseSpec(2, 8, 4, 8)]),
+    "tokens_estimated": _profiled(
+        "tokens_estimated", [CaseSpec(2, 8, 4, 8, usage=False)]
+    ),
+    "tokens_missing": _synthetic("tokens_missing", 60, tokens="missing"),
+    "tokens_mixed": _synthetic("tokens_mixed", 60, tokens="mixed", fail_every=10),
+    "warmup_measured": _profiled("warmup_measured", [CaseSpec(2, 8, 4, 8)], warmup=4),
+    "empty": _synthetic("empty", 0),
+    "synthetic": _synthetic("synthetic", 2_000, fail_every=50),
+    "execution_import": _execution_import,
+    "truncated_mid_line": _truncated("truncated_mid_line", "mid_line"),
+    "truncated_after_newline": _truncated("truncated_after_newline", "after_newline"),
+    "growing": _growing,
+    "multi_session": _multi_session,
+}
+
+# What the rest of the suite may rely on about each standard artifact.
+ANALYZE_FAILS = frozenset({"truncated_mid_line"})  # one bad line fails the file
+MULTI_SESSION = frozenset({"multi_session"})  # Studio refuses it (decision 7)
+NO_TERMINAL_RECORD = frozenset(
+    {"truncated_mid_line", "truncated_after_newline", "growing"}
+)
