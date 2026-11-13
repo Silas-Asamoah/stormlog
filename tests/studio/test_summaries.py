@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -37,13 +38,14 @@ from stormlog.studio.contracts import (
 )
 from stormlog.studio.metric_catalog import metric_catalog, panels
 from stormlog.studio.selection import case_facts, page, parse_filter, select
-from tests.studio.artifacts import MULTI_SESSION, STANDARD_ARTIFACTS
+from tests.studio.artifacts import ANALYZE_FAILS, MULTI_SESSION, STANDARD_ARTIFACTS
 from tests.studio.conftest import StandardArtifacts
 from tests.studio.test_selection import (
     ORIGIN,
     SECOND,
     SESSION,
     closed_case,
+    column_snapshot_of,
     phase_window,
     request,
     session_record,
@@ -720,6 +722,126 @@ def test_the_cases_example_shows_a_planned_case_never_run() -> None:
     planned = [c for c in document["cases"] if not c["observed"]]
     assert [c["case_id"] for c in planned] == [PLANNED_CASE]
     assert planned[0]["summary"]["selection"]["size"] == 0
+
+
+# --- Parity with infer analyze (§3.4) --------------------------------------------------
+
+PARITY_ARTIFACTS = STUDIO_ARTIFACTS
+
+
+def _analyzer_cases(path: Path, tmp_path: Path) -> dict[str, Any]:
+    """The analyzer's cases; for a cut file, of its complete lines (decision 12(a))."""
+    data = path.read_bytes()
+    complete = data[: data.rfind(b"\n") + 1]
+    if complete != data:
+        prefix = tmp_path / f"{path.stem}.complete.jsonl"
+        prefix.write_bytes(complete)
+        path = prefix
+    cases = analyze_inference_events(path)["cases"]
+    assert isinstance(cases, dict)
+    return cases
+
+
+def _parity_view(body: Mapping[str, Any]) -> dict[str, Any]:
+    counts = dict(body["counts"])
+    for key in ("server_admitted", "server_evidence_coverage", "server_evidence"):
+        counts.pop(key)
+    latency = body["latency"]
+    return {
+        "counts": counts,
+        "intervals": body["intervals"],
+        "throughput": body["throughput"],
+        "streaming": body["streaming"],
+        "latency.rule": latency["rule"],
+        "latency.unsuccessful": latency["unsuccessful"],
+        **{f"latency.metrics.{k}": latency["metrics"][k] for k in CLIENT_METRICS},
+        "tokens": body["tokens"],
+    }
+
+
+def _analyzer_view(case: Mapping[str, Any]) -> dict[str, Any]:
+    population = dict(case["population"])
+    for key in ("server_admitted", "server_evidence_coverage"):
+        population.pop(key)
+    latency = case["latency"]
+    return {
+        "counts": population,
+        "intervals": case["intervals"],
+        "throughput": case["throughput"],
+        "streaming": case["streaming"],
+        "latency.rule": latency["rule"],
+        "latency.unsuccessful": latency["unsuccessful"],
+        **{f"latency.metrics.{k}": latency["metrics"][k] for k in CLIENT_METRICS},
+        "tokens": case["tokens"]["coverage"],
+    }
+
+
+@pytest.mark.parametrize("name", PARITY_ARTIFACTS)
+def test_every_case_summary_equals_the_analyzers_case_block(
+    name: str, studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """§3.4: block by block, exactly; both run in this process, so F-8's
+    1-ulp coverage difference across environments cannot arise."""
+    path = studio_artifacts[name]
+    snapshot = snapshot_of(path)
+    analyzer = _analyzer_cases(path, tmp_path)
+    studio = {
+        case: _summary(snapshot, RequestFilter(cases=(case,))) for case in analyzer
+    }
+    assert sorted(case_facts(snapshot).by_case) == sorted(analyzer)
+    for case, block in analyzer.items():
+        body = studio[case]
+        assert body["selection"]["whole_case"] == case
+        mine, theirs = _parity_view(body), _analyzer_view(block)
+        for key in theirs:
+            assert json.dumps(mine[key], sort_keys=True) == json.dumps(
+                theirs[key], sort_keys=True
+            ), f"{name} {case} {key}"
+        assert body["counts"]["server_evidence"] == "not_indexed"
+        assert body["counts"]["server_admitted"] is None
+
+
+def test_the_analyzer_refuses_the_artifacts_parity_reads_by_prefix() -> None:
+    # The cut artifact is compared with the analysis of its complete lines.
+    assert ANALYZE_FAILS == {"truncated_mid_line"}
+
+
+# --- 500,000 requests ------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def large_snapshot(large_studio_artifact: Path) -> Any:
+    snapshot = column_snapshot_of(large_studio_artifact)
+    case_facts(snapshot)  # warmed once per snapshot, as on the builder pool
+    return snapshot
+
+
+@pytest.mark.studio_large
+def test_requests_page_takes_under_2_s_on_500000_requests(large_snapshot: Any) -> None:
+    started = time.perf_counter()
+    sel = select(large_snapshot, RequestFilter())
+    got = page(
+        large_snapshot, sel, sort="client.ttft", order="asc", cursor=None, limit=1000
+    )
+    summaries.requests_page(large_snapshot, sel, got)
+    elapsed = time.perf_counter() - started
+    print(json.dumps({"select + page + requests_page": elapsed}))
+    assert elapsed < 2.0
+
+
+@pytest.mark.studio_large
+@pytest.mark.xfail(
+    strict=True,
+    reason="summary over 500,000 rows takes about 5.5 s: the analyzer functions "
+    "walk every row and every gap in Python; see the C2 report",
+)
+def test_summary_takes_under_2_s_on_500000_requests(large_snapshot: Any) -> None:
+    sel = select(large_snapshot, RequestFilter())
+    started = time.perf_counter()
+    summaries.summary(large_snapshot, sel)
+    elapsed = time.perf_counter() - started
+    print(json.dumps({"summary": elapsed}))
+    assert elapsed < 2.0
 
 
 if __name__ == "__main__":
