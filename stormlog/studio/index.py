@@ -1320,14 +1320,23 @@ class _State:
         )
 
 
+# What a republish of the same lines takes from the fresh snapshot. The
+# whole-file ``sha256`` and the pending tail derive from the identity and
+# the offset, so they move with the identity (Fable's P2-2).
 _SNAPSHOT_REFRESH_KEYS = (
     "growing",
     "identity",
+    "pending_tail_bytes",
     "problems",
     "problem_count",
     "problem_counts",
+    "sha256",
     "status",
 )
+
+
+class _Rewritten(Exception):
+    """The file was rewritten while a batch was read past its last stat."""
 
 
 class _Index:
@@ -1405,7 +1414,11 @@ class _Index:
         after = self.reader.identity
         if before is not None and after is not None and before.size != after.size:
             self.last_growth = self.last_stat
-        progressed = self._read_all()
+        try:
+            progressed = self._read_all()
+        except _Rewritten:
+            self._restart()
+            return True
         if self.cancelled.is_set():
             return False  # a cancelled build is not built (F-14)
         self.state.built = True
@@ -1429,8 +1442,25 @@ class _Index:
             if self.reader.offset == before:
                 break
             progressed = True
+            self._catch_up_identity()
             self._publish(new_lines=True)
         return progressed
+
+    def _catch_up_identity(self) -> None:
+        """Stat again when a batch read past the size the last stat saw.
+
+        Bytes written between a round's stat and its read are read too, so
+        without this the snapshot says ``bytes_read > size`` and, the file
+        being wholly read but not by its stale identity, no ``sha256``
+        (Fable's P2-2). A file rewritten meanwhile raises
+        :class:`_Rewritten`; the round restarts the index.
+        """
+        identity = self.reader.identity
+        if identity is None or self.reader.offset <= identity.size:
+            return
+        if self.reader.identity_change() == "changed":
+            raise _Rewritten
+        self.last_growth = self.options.clock()
 
     def _unreadable(self, exc: BaseException) -> None:
         """The file could not be read.
