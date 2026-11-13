@@ -14,28 +14,49 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .report_stats import int_value, is_number
+from .request_columns import no_records
+
+if TYPE_CHECKING:
+    from .request_columns import ColumnRows
 
 PEAK_FIELDS = ("device_used_bytes", "process_rss_bytes")
 
 
-def request_window(requests: Iterable[Mapping[str, Any]]) -> tuple[int, int] | None:
+def request_window(
+    requests: Iterable[Mapping[str, Any]], *, columns: ColumnRows | None = None
+) -> tuple[int, int] | None:
     """The earliest start and latest end of the requests that record both.
 
-    None when no request records a numeric start and end.
+    None when no request records a numeric start and end. With ``columns``
+    the requests are those rows, read by column, and ``requests`` must be
+    empty.
     """
+    if columns is not None:
+        no_records(requests)
+        started, ended = columns.column("started_at_ns"), columns.column("ended_at_ns")
+        if started and _all_ints(started) and _all_ints(ended):
+            return min(started), max(ended)
+        pairs: Iterable[tuple[Any, Any]] = zip(started, ended)
+    else:
+        pairs = ((r.get("started_at_ns"), r.get("ended_at_ns")) for r in requests)
     starts: list[int] = []
     ends: list[int] = []
-    for record in requests:
-        started, ended = record.get("started_at_ns"), record.get("ended_at_ns")
+    for started, ended in pairs:
         if is_number(started) and is_number(ended):
             starts.append(int_value(started))
             ends.append(int_value(ended))
     if not starts:
         return None
     return min(starts), max(ends)
+
+
+def _all_ints(cells: Sequence[Any]) -> bool:
+    """Every cell a JSON int: then ``is_number`` holds and ``int_value``
+    is the cell itself, so the window is the plain minimum and maximum."""
+    return set(map(type, cells)) == {int}
 
 
 def samples_in_window(
