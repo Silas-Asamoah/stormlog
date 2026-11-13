@@ -54,20 +54,28 @@ def latency_summary(
     spans: JoinedSpans | None = None,
     rule: SufficiencyRule = SufficiencyRule(),
     levels: Sequence[float] = LEVELS,
+    client_values_of: ValuesOf = client_values,
 ) -> dict[str, Any]:
-    """Quantiles of each latency metric over a case's measured requests."""
-    metrics = {
-        key: _metric(requests, key, client_values, rule, levels)
-        for key in CLIENT_METRICS
-    }
+    """Quantiles of each latency metric over a case's measured requests.
+
+    ``client_values_of`` gives a record's client values. It defaults to
+    ``slo.client_values``; a caller that stored them per row, as Studio's
+    index does, passes a lookup instead. It is called once per successful
+    request, for all the client metrics together.
+    """
+    failures = [r for r in requests if r.get("status") != "ok"]
+    metrics = _metrics(
+        requests, failures, CLIENT_METRICS, client_values_of, rule, levels
+    )
     if spans is not None and spans.by_request:
         joined = spans
 
         def from_span(record: Mapping[str, Any]) -> Mapping[str, CriterionValue]:
             return _server_values(record, joined)
 
-        for key in SERVER_METRICS:
-            metrics[key] = _metric(requests, key, from_span, rule, levels)
+        metrics.update(
+            _metrics(requests, failures, SERVER_METRICS, from_span, rule, levels)
+        )
     return {
         "rule": rule.to_record(),
         "metrics": metrics,
@@ -130,24 +138,45 @@ def _gaps(record: Mapping[str, Any]) -> list[float]:
     ]
 
 
-def _metric(
+def _metrics(
     requests: Sequence[Mapping[str, Any]],
-    key: str,
+    failures: Sequence[Mapping[str, Any]],
+    keys: Sequence[str],
     values_of: ValuesOf,
     rule: SufficiencyRule,
     levels: Sequence[float],
-) -> dict[str, Any]:
-    successful: list[float] = []
-    missing = 0
+) -> dict[str, dict[str, Any]]:
+    """Each metric in ``keys``, reading each successful record's values once."""
+    values: dict[str, list[float]] = {key: [] for key in keys}
+    missing = dict.fromkeys(keys, 0)
     for record in requests:
         if record.get("status") != "ok":
             continue
-        value = values_of(record)[key].value_ms
-        if value is None:
-            missing += 1
-        else:
-            successful.append(value)
-    failures = [r for r in requests if r.get("status") != "ok"]
+        criteria = values_of(record)
+        for key in keys:
+            value = criteria[key].value_ms
+            if value is None:
+                missing[key] += 1
+            else:
+                values[key].append(value)
+    return {
+        key: _metric(key, values[key], missing[key], failures, rule, levels)
+        for key in keys
+    }
+
+
+def _metric(
+    key: str,
+    values: list[float],
+    missing: int,
+    failures: Sequence[Mapping[str, Any]],
+    rule: SufficiencyRule,
+    levels: Sequence[float],
+) -> dict[str, Any]:
+    # Sorted once here, so the sorts inside quantiles each find one run and
+    # take a linear pass; only _observed_bound's, with timeouts appended,
+    # sorts more.
+    successful = sorted(values)
     timeouts = _timeout_elapsed(failures) if key == "client.e2e" else None
     return {
         "boundary": key.split(".", 1)[0],
