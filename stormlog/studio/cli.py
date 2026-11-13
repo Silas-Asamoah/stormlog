@@ -72,6 +72,8 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_INPUT = 5
 _URL_TIMEOUT_S = 10.0
+# A health or bootstrap document is a few hundred bytes.
+_URL_MAX_BYTES = 64 * 2**10
 # C4's composition root, imported only when no composer is given.
 APP_MODULE = "stormlog.studio.app"
 _WINDOWS_MESSAGE = (
@@ -517,7 +519,24 @@ def _alive(pid: Any) -> bool:
 
 
 def _request_bootstrap(record: dict[str, Any], route: str | None) -> str:
+    """A fresh sign-in URL from the instance ``record`` names.
+
+    A live PID is not proof the instance still runs (the PID may be
+    reused), so before the admin token is sent, ``GET /api/v1/health``
+    must answer with the record's ``instance_id``; and the URL printed
+    must be on the record's ``base_url``. Another server on the port
+    receives no token and cannot have a link of its choosing printed.
+    """
     base = str(record.get("base_url", ""))
+    # Never through a proxy: the admin token goes only to loopback.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    health = _fetch_json(opener, urllib.request.Request(base + "/api/v1/health"), base)
+    instance = record.get("instance_id")
+    if not isinstance(instance, str) or _field(health, "instance_id") != instance:
+        raise StudioUsageError(
+            f"the server at {base} is not the Studio instance its state file "
+            "names; start `stormlog studio` again"
+        )
     request = urllib.request.Request(
         base + "/api/v1/admin/bootstrap",
         data=json.dumps({"route": route}).encode("utf-8"),
@@ -527,13 +546,26 @@ def _request_bootstrap(record: dict[str, Any], route: str | None) -> str:
         },
         method="POST",
     )
-    # Never through a proxy: the admin token goes only to loopback.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    url = _field(_fetch_json(opener, request, base), "url")
+    if not isinstance(url, str) or not url.startswith(base + "/#/"):
+        raise StudioUsageError(
+            f"the server at {base} answered with a URL that is not its own; "
+            "not printing it"
+        )
+    return url
+
+
+def _fetch_json(
+    opener: urllib.request.OpenerDirector, request: urllib.request.Request, base: str
+) -> Any:
     try:
         with opener.open(request, timeout=_URL_TIMEOUT_S) as response:
-            document = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read(_URL_MAX_BYTES).decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise StudioUsageError(f"Studio refused: HTTP {exc.code}") from None
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         raise StudioUsageError(f"no Studio answers at {base}") from None
-    return str(document["url"])
+
+
+def _field(document: Any, name: str) -> Any:
+    return document.get(name) if isinstance(document, dict) else None
