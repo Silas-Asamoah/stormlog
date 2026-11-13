@@ -16,9 +16,12 @@ same for ``tail_grace_s``.
 
 Every record is decoded with one :class:`CorrelationRecordDecoder` kept
 across calls, so a compact (v4) line finds the context line that defined
-its ``context_id`` however far back it was. A line that is not JSON, not an
-object or not decodable becomes a :class:`LineProblem`; nothing a line holds
-can make the reader raise.
+its ``context_id`` however far back it was. The decoder holds every
+definition for the life of the reader, so their estimated size is bounded
+by ``max_context_bytes``: past it a new definition is the problem
+``undecodable`` ("context limit"), and so is every later line that refers
+to one. A line that is not JSON, not an object or not decodable becomes a
+:class:`LineProblem`; nothing a line holds can make the reader raise.
 
 :meth:`ArtifactReader.identity_change` tells a caller whether the file is
 the one already read (§4.3's table): ``same``, ``grown``,
@@ -54,6 +57,7 @@ from stormlog.scrub import scrub_text
 
 __all__ = [
     "BATCH_BYTES",
+    "CONTEXT_BYTES",
     "MAX_LINE_BYTES",
     "TAIL_GRACE_S",
     "ArtifactReader",
@@ -69,6 +73,11 @@ ItemKind = Literal["record", "blank", "context", "problem"]
 MAX_LINE_BYTES = 64 * 2**20
 # How much one read_batch reads, unless one line is longer.
 BATCH_BYTES = 8 * 2**20
+# §8.1 (Fable's F-3): the context definitions the decoder may hold.
+CONTEXT_BYTES = 16 * 2**20
+# The decoder's cost of one definition beyond its line's bytes: measured
+# at 1,020 bytes for a 642-byte line (the context, its ID, two dict slots).
+CONTEXT_OVERHEAD_BYTES = 384
 # §4.3: a pending tail unchanged this long is reported as truncated.
 TAIL_GRACE_S = 5.0
 # LineProblem.detail is at most this many characters.
@@ -158,6 +167,8 @@ class ArtifactReader:
     that reached the end of the file), ``prefix_sha256`` (of bytes
     ``[0, offset)``; the file's SHA-256 when nothing is pending) and
     ``identity`` (the file as last statted; None before the first call).
+    ``context_bytes`` estimates what the decoder's context definitions
+    hold, and ``contexts_limited`` says a definition was refused.
     """
 
     def __init__(
@@ -167,11 +178,13 @@ class ArtifactReader:
         max_line_bytes: int = MAX_LINE_BYTES,
         tail_grace_s: float = TAIL_GRACE_S,
         clock: Callable[[], float] = time.monotonic,
+        max_context_bytes: int = CONTEXT_BYTES,
     ) -> None:
         if max_line_bytes < 1:
             raise ValueError("max_line_bytes must be positive")
         self._opener = opener
         self.max_line_bytes = max_line_bytes
+        self.max_context_bytes = max_context_bytes
         self.tail_grace_s = tail_grace_s
         self._clock = clock
         self.reset()
@@ -184,6 +197,9 @@ class ArtifactReader:
         self.identity: FileIdentity | None = None
         self._hasher = hashlib.sha256()
         self._decoder = CorrelationRecordDecoder()
+        # estimated bytes of the definitions the decoder holds
+        self.context_bytes = 0
+        self.contexts_limited = False
         self._first: LineRef | None = None
         self._last: LineRef | None = None
         self._tail: _Tail | None = None
@@ -368,13 +384,39 @@ class ArtifactReader:
             return _problem(ref, "not_json", str(exc))
         if not isinstance(raw, dict):
             return _problem(ref, "not_object", type(raw).__name__)
+        cost = self._definition_cost(raw, ref)
+        if self.context_bytes + cost > self.max_context_bytes:
+            self.contexts_limited = True
+            limit = f"context limit: {self.max_context_bytes} bytes of definitions"
+            return _problem(ref, "undecodable", limit)
         try:
             record = self._decoder.decode(raw)
         except Exception as exc:  # any decoder failure is this line's problem
-            return _problem(ref, "undecodable", f"{type(exc).__name__}: {exc}")
+            return _problem(ref, "undecodable", self._decode_failure(exc))
         if record is None:
+            self.context_bytes += cost
             return ReadItem(ref, None, None, "context")
         return ReadItem(ref, record, None)
+
+    def _definition_cost(self, raw: dict[str, Any], ref: LineRef) -> int:
+        """What defining this line's context adds to ``context_bytes``: 0
+        for any other line, and for an ID already defined."""
+        if raw.get("event_type") != "infer.context":
+            return 0
+        identity = raw.get("context_id")
+        if isinstance(identity, str):
+            try:
+                self._decoder.registry.lookup(identity)
+                return 0
+            except ValueError:
+                pass
+        return CONTEXT_OVERHEAD_BYTES + ref.length
+
+    def _decode_failure(self, exc: Exception) -> str:
+        detail = f"{type(exc).__name__}: {exc}"
+        if self.contexts_limited and "unknown context_id" in str(exc):
+            return "context limit: " + detail  # its definition was refused
+        return detail
 
     # --- The pending tail ---------------------------------------------
 
