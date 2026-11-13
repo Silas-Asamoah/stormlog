@@ -14,6 +14,7 @@ import math
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -23,7 +24,7 @@ import pytest
 from stormlog.infer import artifact_lines
 from stormlog.infer.artifact_reader import ArtifactReader, ReadItem
 from stormlog.infer.correlation_codec import expand_inference_records
-from stormlog.infer.diagnosis_inputs import read_input
+from stormlog.infer.diagnosis_inputs import MAX_NESTING, nested_too_deep, read_input
 from stormlog.studio.contracts import LineProblem
 from tests.studio.artifacts import (
     MIXED_CASES,
@@ -264,7 +265,6 @@ def test_nesting_past_the_limit_is_not_json_on_any_python_or_thread(
     thread's stack; the reader's does not, and what it keeps can be walked."""
     from concurrent.futures import ThreadPoolExecutor
 
-    from stormlog.infer.diagnosis_inputs import MAX_NESTING
     from stormlog.studio.contracts import encode_json, finite_copy
 
     brackets = b"[" * 3 * MAX_NESTING
@@ -286,6 +286,41 @@ def test_nesting_past_the_limit_is_not_json_on_any_python_or_thread(
     record = items[0].record
     assert record is not None
     encode_json(finite_copy(record)[0])
+
+
+# Each line has more than MAX_NESTING brackets, so nested_too_deep scans its
+# strings rather than counting. About 2 MiB each; the scan is about 25 ms/MiB.
+_OPEN = b"[" * (MAX_NESTING + 1)
+_SHALLOW = b"[" + b"[]," * MAX_NESTING + b"0]"  # nests 2, opens 129
+
+
+@pytest.mark.parametrize(
+    ("chunk", "deep"),
+    [
+        # Unterminated: each escaped quote restarted the scan (Fable's P1).
+        (_OPEN + b'"' + b'\\"' * 1_000_000, True),
+        # The same ending in a lone backslash, which "\Z" alone did not match.
+        (_OPEN + b'"' + b'\\"' * 1_000_000 + b"\\", True),
+        # Many short strings, then brackets after them.
+        (b'["ab",' + b'"ab",' * 400_000 + _SHALLOW + b"]", False),
+        # One huge string of escapes, holding brackets that do not count.
+        (b'["' + b'\\"[{' * 500_000 + b'",' + _SHALLOW + b"]", False),
+    ],
+    ids=["unterminated", "lone_backslash", "short_strings", "huge_string"],
+)
+def test_the_string_scan_takes_linear_time(chunk: bytes, deep: bool) -> None:
+    """An unterminated string runs to the end, where json.loads fails anyway,
+    so no quote starts the scan again: 64,000 escaped quotes took about 70 s,
+    and with re holding the GIL, every other thread waited."""
+    started = time.perf_counter()
+    assert nested_too_deep(chunk) is deep
+    assert time.perf_counter() - started < 5.0
+
+
+def test_brackets_after_an_unterminated_string_do_not_count() -> None:
+    assert not nested_too_deep(b"[" * 100 + b'"x' + b"[" * 100)
+    assert not nested_too_deep(b"[" * 100 + b'"x\\' + b"[" * 100)
+    assert nested_too_deep(b"[" * 129 + b'"x\\')
 
 
 def test_nan_in_a_record_is_read_as_written(tmp_path: Path) -> None:

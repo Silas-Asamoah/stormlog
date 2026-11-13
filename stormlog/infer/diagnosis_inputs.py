@@ -29,8 +29,11 @@ INPUT_KIND = "inference_jsonl"
 # and from 3.14 whatever the thread's stack holds, while Studio's
 # finite_copy and to_wire recurse once a level against a limit of 1,000.
 MAX_NESTING = 128
-# A JSON string, quotes and escapes included: its brackets do not nest.
-_JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*"')
+# A JSON string, quotes and escapes included: its brackets do not nest. An
+# unterminated string, even one ending in a lone backslash, runs to the end,
+# where json.loads fails anyway: a match never fails once it starts, so no
+# later quote starts the scan again (quadratic on a run of escaped quotes).
+_JSON_STRING = re.compile(rb'"[^"\\]*(?:\\.[^"\\]*)*(?:"|\\?\Z)', re.DOTALL)
 _NOT_BRACKETS = bytes(byte for byte in range(256) if byte not in b"[]{}")
 
 # How a v1 record's ID is built: from these fields, joined by "/" after the
