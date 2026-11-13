@@ -163,7 +163,18 @@ each load.
 Paths in the API are relative to the workspace root. Studio refuses
 absolute paths, `..` segments, backslashes, NUL bytes and symlinks that
 lead out of the root, and it checks that the file it opens is the file it
-resolved.
+resolved. It opens a file one path component at a time from the root,
+never following a symlink, so a directory swapped for a symlink while
+Studio opens a file under it is refused too.
+
+One case is not refused: a **hard link** inside the root to a file
+outside it. A hard link is the file itself, not a pointer to a path, so
+Studio serves it like any other file under the root. Making one needs
+write access to a directory under the root and read access to the
+target, so it lets nobody read what they could not read already. But if
+other people can write under the root (a shared `runs/` directory),
+whatever they link there is shown, analysed and exported by Studio as
+part of the root. Serve a directory only you can write to.
 
 Studio bounds what any client can hold:
 
