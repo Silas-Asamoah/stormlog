@@ -51,6 +51,7 @@ from stormlog.studio.contracts import (
     SessionInfo,
     TimeWindow,
     UsageError,
+    publish_hook,
     selection_fingerprint,
 )
 from stormlog.studio.selection import (
@@ -1054,6 +1055,89 @@ def test_case_facts_are_computed_once_per_snapshot() -> None:
     assert case_facts(snapshot) is case_facts(snapshot)
     other = snapshot_from_records(closed_case())
     assert case_facts(other) is not case_facts(snapshot)
+
+
+def test_case_facts_survive_a_republish_that_shares_the_table() -> None:
+    # Fable's F-7: C1 republishes a touch or a growing flip with replace(),
+    # a new snapshot over the same table; keyed on the snapshot, the facts
+    # were computed again with no new row.
+    snapshot = snapshot_from_records(closed_case())
+    facts = case_facts(snapshot)
+    for changes in ({"growing": True}, {"status": "partial"}, {"generation": 1}):
+        assert case_facts(replace(snapshot, **changes)) is facts
+    # Other kept records, another inventory or a new table are new facts.
+    other_kept = replace(snapshot, kept={})
+    assert case_facts(other_kept) is not facts
+    assert case_facts(other_kept).planned == ()
+    assert case_facts(replace(snapshot, inventory={})) is not facts
+    assert case_facts(replace(snapshot, table=DictTable(snapshot.requests))) is not (
+        facts
+    )
+
+
+class _AskedTable(DictTable):
+    """A DictTable that records every column asked of it."""
+
+    def __init__(self, rows: Sequence[RequestRow]) -> None:
+        super().__init__(rows)
+        self.asked: set[str] = set()
+
+    def column(self, name: str) -> Sequence[Any]:
+        self.asked.add(name)
+        return super().column(name)
+
+
+def test_warm_leaves_nothing_for_the_first_select_and_summary_to_compute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stormlog.studio import summaries
+
+    snapshot = snapshot_from_records(closed_case())
+    table = _AskedTable(snapshot.requests)
+    snapshot = replace(snapshot, table=table)
+    selection.warm(snapshot)
+    warmed = set(table.asked)
+    assert warmed >= set(selection.WARM_COLUMNS) | set(selection.POPULATION_FIELDS)
+
+    def not_again(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("case_facts computed again")
+
+    monkeypatch.setattr(selection, "_compute_facts", not_again)
+    table.asked.clear()
+    sel = select(snapshot, RequestFilter())
+    summaries.summary(snapshot, sel)
+    assert table.asked <= warmed, sorted(table.asked - warmed)
+
+
+def test_warm_is_a_publish_listener_of_the_real_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.studio.test_index import Harness
+
+    path = tmp_path / "run.jsonl"
+    path.write_text(
+        "".join(json.dumps(r) + "\n" for r in [session_record(), *closed_case()])
+    )
+    harness = Harness(tmp_path)
+    registry = publish_hook(harness.indexes)
+    assert registry is not None
+    registry.add_publish_listener(selection.warm)
+    snapshot = harness.build(path.name)
+    assert snapshot.status == "ready"
+
+    def not_again(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("case_facts not warmed")
+
+    monkeypatch.setattr(selection, "_compute_facts", not_again)
+    assert sorted(case_facts(snapshot).by_case) == ["c1"]
+
+
+def test_warm_does_nothing_without_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("warmed an empty snapshot")
+
+    monkeypatch.setattr(selection, "_compute_facts", never)
+    selection.warm(snapshot_from_records([session_record()]))
 
 
 # --- paging -------------------------------------------------------------------------
