@@ -93,15 +93,23 @@ def group_samples(
     """The samples by ``(sampler, device_id)``, as ``sample_peaks`` groups them.
 
     Each group is ``(sampler, device_id, members)``, members in the order
-    given; groups are ordered by sampler, then device, as text.
+    given, with the group's first ``sampler`` and ``device_id`` values as
+    written (never a stand-in for them, so a NaN id and the text "nan" stay
+    two groups with two ids); groups are ordered by sampler, then device,
+    as text.
     """
-    groups: dict[tuple[tuple[str, Any], tuple[str, Any]], list[Mapping[str, Any]]]
-    groups = {}
+    groups: dict[
+        tuple[tuple[str, Any], tuple[str, Any]],
+        tuple[Any, Any, list[Mapping[str, Any]]],
+    ] = {}
     for sample in samples:
-        key = (_part(sample.get("sampler")), _part(sample.get("device_id")))
-        groups.setdefault(key, []).append(sample)
-    ordered = [(key[0][1], key[1][1], members) for key, members in groups.items()]
-    return sorted(ordered, key=lambda group: (str(group[0]), str(group[1])))
+        sampler, device_id = sample.get("sampler"), sample.get("device_id")
+        key = (_part(sampler), _part(device_id))
+        group = groups.get(key)
+        if group is None:
+            group = groups[key] = (sampler, device_id, [])
+        group[2].append(sample)
+    return sorted(groups.values(), key=lambda group: (str(group[0]), str(group[1])))
 
 
 def sample_gaps(
@@ -124,7 +132,9 @@ def sample_gaps(
 
 
 def _part(value: Any) -> tuple[str, Any]:
-    """A hashable group key that keeps 1, 1.0, True and "1" apart."""
+    """A hashable group key that keeps 1, 1.0, True and "1" apart: the
+    type's name, and the value or, for one that is not hashable or not
+    equal to itself (a list, an object, NaN), its repr."""
     if value is None or isinstance(value, (str, int)):
         return type(value).__name__, value
     if isinstance(value, float) and math.isfinite(value):
