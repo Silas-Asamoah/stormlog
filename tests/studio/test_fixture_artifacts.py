@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import math
 import time
 import urllib.error
 import urllib.request
@@ -13,21 +14,30 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
 from stormlog.exit_codes import ExitCode
+from stormlog.infer.audio_events import AudioRequestEvent
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.events import InferenceRequestEvent, InferenceSystemSample
+from stormlog.infer.events import (
+    InferenceRequestEvent,
+    InferenceSystemSample,
+    JsonlEventWriter,
+)
 from stormlog.infer.populations import case_populations
+from stormlog.studio.contracts import ProblemCode
+from stormlog.telemetry import validate_telemetry_record
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     LARGE_GAPS,
     LARGE_REQUESTS,
     MULTI_SESSION,
     NO_TERMINAL_RECORD,
+    PROBLEM_LINES,
     STANDARD_ARTIFACTS,
+    UNSUPPORTED,
     CaseSpec,
     GrowingCopy,
     SamplePlan,
@@ -111,8 +121,9 @@ def test_only_the_multi_session_artifact_holds_two_sessions(
     name: str, studio_artifacts: StandardArtifacts
 ) -> None:
     path = studio_artifacts[name]
+    expected = 2 if name in MULTI_SESSION else 1
 
-    assert len(_sessions(path)) == (2 if name in MULTI_SESSION else 1)
+    assert len(_sessions(path)) == (0 if name in UNSUPPORTED else expected)
 
 
 def test_the_multi_session_artifact_is_two_whole_runs_end_to_end(
@@ -139,7 +150,7 @@ def test_a_terminal_session_record_ends_only_the_finished_artifacts(
 ) -> None:
     terminal = [r for r in _lines(studio_artifacts[name]) if _is_terminal(r)]
 
-    assert bool(terminal) == (name not in NO_TERMINAL_RECORD)
+    assert bool(terminal) == (name not in NO_TERMINAL_RECORD | set(UNSUPPORTED))
 
 
 @pytest.mark.parametrize("cut", ["mid_line", "after_newline"])
@@ -555,6 +566,102 @@ def test_an_open_loop_run_has_one_in_flight_limit(tmp_path: Path) -> None:
     assert [case.case_id for case in config.cases()] == [
         cases[0].run_case_id(config.arrival_specs()[0])
     ]
+
+
+def test_the_timeouts_artifact_has_two_timed_out_requests(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    measured = _measured(studio_artifacts["timeouts"])
+    timed_out = [r for r in measured if r["status"] == "timeout"]
+
+    assert Counter(r["status"] for r in measured) == {"ok": 6, "timeout": 2}
+    for record in timed_out:
+        assert record["http_status"] is None
+        assert record["ttft_ms"] is None
+        assert record["e2e_latency_ms"] >= 250.0
+
+
+def test_the_nan_gap_artifact_writes_one_bare_nan(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["nan_gap"]
+    lines = [line for line in path.read_bytes().split(b"\n") if b"NaN" in line]
+    (line,) = lines
+    record = json.loads(line)
+    gaps = record["chunk_interarrival_ms"]
+
+    assert b"NaN," in line or b"NaN]" in line
+    assert record["request_index"] == 0
+    assert [math.isnan(gap) for gap in gaps].count(True) == 1
+    assert math.isnan(gaps[len(gaps) // 2])
+
+
+def test_nan_gap_needs_a_gap(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        synthetic_artifact(tmp_path, requests=3, gaps_per_request=0, nan_gap=True)
+
+
+def test_the_audio_artifact_is_two_audio_requests(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    records = _lines(studio_artifacts["audio"])
+
+    assert [r["event_type"] for r in records] == ["infer.audio.request"] * 2
+    assert [r["status"] for r in records] == ["ok", "error"]
+    for record in records:
+        assert AudioRequestEvent.from_record(dict(record)).to_record() == record
+
+
+def test_the_non_inference_artifact_is_memory_telemetry(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    records = _lines(studio_artifacts["not_an_inference_artifact"])
+
+    assert len(records) == 4
+    for record in records:
+        validate_telemetry_record(record)
+        assert record["schema_version"] == 4
+        assert record["collector"] == "stormlog.cpu_tracker"
+        assert not str(record["event_type"]).startswith("infer.")
+
+
+def test_the_unsupported_version_artifact_ends_with_a_v2_client_request(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    path = studio_artifacts["unsupported_version"]
+    records = _lines(path)
+    last = records[-1]
+    v1 = [r for r in _measured(path) if r["request_id"] == last["request_id"]]
+
+    assert _is_terminal(records[-2])
+    assert last["event_type"] == "infer.request"
+    assert last["schema_version"] == 2
+    assert "context" not in last and "context_id" not in last
+    assert [dict(r, schema_version=2) for r in v1] == [last]
+    with JsonlEventWriter(tmp_path / "refused.jsonl") as writer:
+        with pytest.raises(ValueError):
+            writer.append(last)
+
+
+def test_problem_lines_name_problem_codes_of_the_contract() -> None:
+    assert set(PROBLEM_LINES.values()) <= set(get_args(ProblemCode))
+    assert set(PROBLEM_LINES) | set(UNSUPPORTED) <= set(STANDARD_ARTIFACTS)
+
+
+def test_the_fake_server_holds_every_nth_measured_request() -> None:
+    state = ServerState(
+        policies={"c1_in8_out4": CasePolicy(slow_every=2, delay_seconds=0.5)}
+    )
+    warmup = state.answer("stormlog-r-1-c1_in8_out4_warmup_0_0")
+    delays = [
+        state.answer(f"stormlog-r-1-c1_in8_out4_measured_0_{i}").delay_seconds
+        for i in range(4)
+    ]
+
+    assert warmup.delay_seconds == 0.0
+    assert delays == [0.0, 0.5, 0.0, 0.5]
+    with pytest.raises(ValueError):
+        CasePolicy(delay_seconds=-1.0)
 
 
 def _samples(path: Path) -> list[dict[str, Any]]:
