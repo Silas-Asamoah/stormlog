@@ -342,3 +342,39 @@ def test_spread_is_the_median_95th_percentile_and_maximum() -> None:
         "max": 5.0,
     }
     assert spread([]) == {"p50": None, "p95": None, "max": None}
+
+
+def _pooled_by_list(requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """The pooled gap spread as streaming_summary computed it with a list."""
+    gaps = [
+        float(gap)
+        for r in requests
+        if r["status"] == "ok" and r["stream"] and r.get("ttft_ms") is not None
+        for gap in r.get("chunk_interarrival_ms") or []
+        if isinstance(gap, (int, float)) and not isinstance(gap, bool)
+    ]
+    return {
+        "p50": quantile(gaps, 0.5),
+        "p95": quantile(gaps, 0.95),
+        "max": max(gaps, default=None),
+        "n": len(gaps),
+    }
+
+
+@pytest.mark.parametrize(
+    "gap_lists",
+    [
+        [[]],
+        [[3]],
+        [[0.0], [-0.0]],
+        [[-0.0], [0.0, -0.0]],
+        [[5.0, 1, 3.25], [], [2.5, "x", None, True, 7.75], [1e300, 5e-324]],
+        [[float(17 * i % 101) for i in range(j, j + 15)] for j in range(40)],
+    ],
+)
+def test_pooled_gaps_give_the_floats_a_pooled_list_gave(gap_lists: list[Any]) -> None:
+    requests = [_streamed(i, chunk_interarrival_ms=g) for i, g in enumerate(gap_lists)]
+    requests.append(_streamed(99, status="error", chunk_interarrival_ms=[1e6]))
+    got = streaming_summary(requests)["chunk_interarrival_ms"]
+    # repr tells -0.0 from 0.0, which == does not.
+    assert repr(got) == repr(_pooled_by_list(requests))
