@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 from collections.abc import Callable, Iterator
@@ -607,6 +608,14 @@ def test_a_malformed_cursor_is_a_bad_parameter(
 ) -> None:
     with pytest.raises(UsageError) as raised:
         mixed.items(kind=None, q=None, cursor=cursor, limit=1)
+    assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
+
+
+def test_a_cursor_nesting_bomb_is_a_bad_parameter(mixed: ArtifactScanner) -> None:
+    # Fable's probe: 12,000 "[" in base64 raised RecursionError, a 500.
+    bomb = base64.urlsafe_b64encode(b"[" * 12_000).decode("ascii").rstrip("=")
+    with pytest.raises(UsageError) as raised:
+        mixed.items(kind=None, q=None, cursor=bomb, limit=1)
     assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
 
 
