@@ -31,6 +31,7 @@ from stormlog.infer.populations import (
     _belongs,
     populations_from_records,
 )
+from stormlog.infer.report_stats import is_number
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import selection
 from stormlog.studio.contracts import (
@@ -380,6 +381,11 @@ class ColumnRow(RequestRow):
     def gap_count(self) -> int:
         gaps = self._table.columns["chunk_interarrival_ms"][self._i]
         return len(gaps) if isinstance(gaps, list) else 0
+
+    @property
+    def numeric_gap_count(self) -> int:
+        gaps = self._table.columns["chunk_interarrival_ms"][self._i]
+        return sum(map(is_number, gaps)) if isinstance(gaps, list) else 0
 
     def __getitem__(self, key: str) -> Any:
         values = self._table.columns.get(key)
@@ -889,6 +895,8 @@ def test_an_interrupted_case_has_no_rate_even_with_a_window() -> None:
         sel = select(snapshot, f)
         assert sel.rate.reason == "phase_window_missing"
         assert not sel.rate.eligible
+        # Without a window the rows are still the case's whole cohort.
+        assert sel.whole_case == (None if f.window else "c1")
 
 
 def test_an_artifact_older_than_phase_windows_uses_the_request_span() -> None:
