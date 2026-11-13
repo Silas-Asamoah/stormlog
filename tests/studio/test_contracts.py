@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import numbers
+import re
 import subprocess
 import sys
 from array import array
@@ -46,6 +47,7 @@ from stormlog.studio.contracts import (
     encode_json,
     envelope,
     finite_copy,
+    selection_fingerprint,
     to_wire,
 )
 
@@ -842,6 +844,45 @@ def test_criterion_record_matches_every_example_row() -> None:
     assert {key: criterion_record(value) for key, value in built.items()} == (
         detail["row"]["client"]
     )
+
+
+def test_selection_fingerprint_hashes_the_four_parts_newline_joined() -> None:
+    params = "case=c8_in4096_out128&phase=measured"
+    text = f"runs/042.jsonl\n{INDEX_ID}\n7\n{params}"
+    expected = "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert selection_fingerprint("runs/042.jsonl", INDEX_ID, 7, params) == expected
+
+
+def test_selection_fingerprint_changes_with_each_part() -> None:
+    base = ("runs/042.jsonl", INDEX_ID, 7, "phase=measured")
+    variants = [
+        ("runs/043.jsonl", INDEX_ID, 7, "phase=measured"),
+        ("runs/042.jsonl", "0" * 32, 7, "phase=measured"),
+        ("runs/042.jsonl", INDEX_ID, 8, "phase=measured"),
+        ("runs/042.jsonl", INDEX_ID, 7, "phase=all"),
+        ("runs/042.jsonl\n" + INDEX_ID, INDEX_ID, 7, "phase=measured"),
+    ]
+    prints = {selection_fingerprint(*parts) for parts in [base, *variants]}
+    assert len(prints) == 1 + len(variants)
+    assert all(re.fullmatch(r"sha256:[0-9a-f]{64}", value) for value in prints)
+
+
+def test_every_example_selection_has_the_contract_fingerprint() -> None:
+    checked = 0
+    for path in sorted(EXAMPLE_DIR.glob("studio_*.example.json")):
+        example = _load(path)
+        artifact = example.get("artifact")
+        for node in _walk(example):
+            if artifact is None or "fingerprint" not in node:
+                continue
+            assert node["fingerprint"] == selection_fingerprint(
+                artifact["path"],
+                artifact["index_id"],
+                artifact["generation"],
+                node["params"],
+            ), path.name
+            checked += 1
+    assert checked >= 4
 
 
 def test_artifact_block_refuses_an_integer_ns_field() -> None:

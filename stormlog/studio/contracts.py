@@ -69,6 +69,7 @@ __all__ = [
     "RateScope",
     "Selection",
     "Page",
+    "selection_fingerprint",
     "HttpRequest",
     "HttpResponse",
     "Auth",
@@ -572,7 +573,7 @@ class Selection:
 
     filter: RequestFilter
     params: str  # canonical query string
-    fingerprint: str  # "sha256:" + hex of (path, index_id, generation, params)
+    fingerprint: str  # selection_fingerprint(path, index_id, generation, params)
     path: str
     index_id: str
     generation: int
@@ -581,6 +582,22 @@ class Selection:
     whole_case: str | None  # the case, when rows are exactly its measured requests
     rate: RateScope
     searched_fields: tuple[str, ...]
+
+
+def selection_fingerprint(
+    path: str, index_id: str, generation: int, params: str
+) -> str:
+    """A selection's ``fingerprint``: ``"sha256:"`` and 64 hex characters.
+
+    The SHA-256 of the UTF-8 bytes of ``path``, ``index_id``, the decimal
+    ``generation`` and the canonical ``params``, joined by ``"\\n"``. Only
+    ``path`` can hold a newline: ``index_id`` is hex, ``generation``
+    decimal and ``params`` a percent-encoded query string. So the text
+    splits back from the right in one way only, and two selections never
+    join to the same text.
+    """
+    text = "\n".join((path, index_id, str(generation), params))
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
