@@ -29,6 +29,24 @@ from .report_stats import int_value, is_number
 if TYPE_CHECKING:
     import numpy.typing as npt
 
+# The record fields the columnar summaries read by ``column`` (besides
+# the client values and the gap pool).
+SUMMARY_FIELDS = (
+    "status",
+    "stream",
+    "ttft_ms",
+    "e2e_latency_ms",
+    "started_at_ns",
+    "ended_at_ns",
+    "output_tokens",
+    "output_token_source",
+    "output_token_exact",
+    "prompt_tokens",
+    "prompt_token_source",
+    "prompt_token_exact",
+    "total_tokens",
+)
+
 # Whether row ``i`` of the table lacks key ``name`` (rather than holding
 # null): a column gives None for both.
 Lacks = Callable[[int, str], bool]
@@ -239,6 +257,7 @@ def sorted_floats(values: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 
 
 __all__ = [
+    "SUMMARY_FIELDS",
     "ColumnRows",
     "GapArrays",
     "Lacks",
