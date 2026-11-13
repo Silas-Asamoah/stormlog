@@ -1,0 +1,200 @@
+{
+  "format": "stormlog.studio.points",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/tokens_mixed.jsonl",
+    "index_id": "0123456789abcdef0123456789abcdef",
+    "generation": 3,
+    "status": "ready",
+    "size": 113467,
+    "bytes_read": 113467,
+    "sha256": "877f73b2321282360b792966250abb83edd4416fb1bb40141bd02edb6dc4f2f9",
+    "growing": false,
+    "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1790000000000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "selection": {
+    "filter": {
+      "phase": "measured",
+      "cases": [
+        "c8_in128_out64"
+      ],
+      "statuses": [],
+      "stream": null,
+      "token_sources": [],
+      "text": null,
+      "window": null,
+      "completed_by_ns": null,
+      "latency": null
+    },
+    "params": "case=c8_in128_out64&phase=measured",
+    "fingerprint": "sha256:cfb96db314262a6265906d892925bbbb03e5156bafb09ad3484000739c3f8558",
+    "size": 60,
+    "pooled_cases": 1,
+    "whole_case": "c8_in128_out64",
+    "cohort": {
+      "valid": true,
+      "issues": [],
+      "reason": null
+    },
+    "rate": {
+      "eligible": true,
+      "rule": "case",
+      "reason": null,
+      "interval": {
+        "kind": "measured_span",
+        "started_at_ns": "1790000000005000000",
+        "ended_at_ns": "1790000001765441000",
+        "seconds": 1.760441,
+        "numerator_cohort": "all_measured"
+      }
+    },
+    "searched_fields": []
+  },
+  "x": "start",
+  "y": "client.e2e",
+  "points": [
+    {
+      "line": 7,
+      "request_id": "c8_in128_out64_measured_1_1",
+      "status": "ok",
+      "x_ms": 5.05,
+      "x_ns": "1790000000005050000",
+      "y": 250.826
+    },
+    {
+      "line": 16,
+      "request_id": "c8_in128_out64_measured_2_10",
+      "status": "ok",
+      "x_ms": 191.926,
+      "x_ns": "1790000000191926000",
+      "y": 156.291
+    },
+    {
+      "line": 15,
+      "request_id": "c8_in128_out64_measured_1_9",
+      "status": "error",
+      "x_ms": 255.956,
+      "x_ns": "1790000000255956000",
+      "y": 5.0
+    },
+    {
+      "line": 29,
+      "request_id": "c8_in128_out64_measured_7_23",
+      "status": "ok",
+      "x_ms": 378.17,
+      "x_ns": "1790000000378170000",
+      "y": 242.252
+    },
+    {
+      "line": 28,
+      "request_id": "c8_in128_out64_measured_6_22",
+      "status": "ok",
+      "x_ms": 406.561,
+      "x_ns": "1790000000406561000",
+      "y": 294.914
+    },
+    {
+      "line": 25,
+      "request_id": "c8_in128_out64_measured_3_19",
+      "status": "error",
+      "x_ms": 473.992,
+      "x_ns": "1790000000473992000",
+      "y": 8.0
+    },
+    {
+      "line": 36,
+      "request_id": "c8_in128_out64_measured_6_30",
+      "status": "ok",
+      "x_ms": 701.555,
+      "x_ns": "1790000000701555000",
+      "y": 244.527
+    },
+    {
+      "line": 35,
+      "request_id": "c8_in128_out64_measured_5_29",
+      "status": "error",
+      "x_ms": 744.143,
+      "x_ns": "1790000000744143000",
+      "y": 4.0
+    },
+    {
+      "line": 45,
+      "request_id": "c8_in128_out64_measured_7_39",
+      "status": "error",
+      "x_ms": 813.711,
+      "x_ns": "1790000000813711000",
+      "y": 7.0
+    },
+    {
+      "line": 49,
+      "request_id": "c8_in128_out64_measured_3_43",
+      "status": "ok",
+      "x_ms": 939.811,
+      "x_ns": "1790000000939811000",
+      "y": 290.146
+    },
+    {
+      "line": 48,
+      "request_id": "c8_in128_out64_measured_2_42",
+      "status": "ok",
+      "x_ms": 1033.418,
+      "x_ns": "1790000001033418000",
+      "y": 293.587
+    },
+    {
+      "line": 55,
+      "request_id": "c8_in128_out64_measured_1_49",
+      "status": "error",
+      "x_ms": 1097.277,
+      "x_ns": "1790000001097277000",
+      "y": 3.0
+    },
+    {
+      "line": 59,
+      "request_id": "c8_in128_out64_measured_5_53",
+      "status": "ok",
+      "x_ms": 1207.483,
+      "x_ns": "1790000001207483000",
+      "y": 241.329
+    },
+    {
+      "line": 56,
+      "request_id": "c8_in128_out64_measured_2_50",
+      "status": "ok",
+      "x_ms": 1327.085,
+      "x_ns": "1790000001327085000",
+      "y": 193.761
+    },
+    {
+      "line": 62,
+      "request_id": "c8_in128_out64_measured_0_56",
+      "status": "ok",
+      "x_ms": 1398.402,
+      "x_ns": "1790000001398402000",
+      "y": 248.404
+    },
+    {
+      "line": 65,
+      "request_id": "c8_in128_out64_measured_3_59",
+      "status": "error",
+      "x_ms": 1468.633,
+      "x_ns": "1790000001468633000",
+      "y": 6.0
+    }
+  ],
+  "drawn": 16,
+  "total": 60,
+  "without_value": 0,
+  "method": "bucket_extremes",
+  "bounds": {
+    "max_points": 16,
+    "buckets": 8,
+    "non_ok": 500
+  }
+}
