@@ -727,9 +727,25 @@ class BusyError(StudioError):
 
 
 class NotReady(Exception):
-    """Still building; httpd answers 202 with `state` and Retry-After."""
+    """The analysis is still running: C3 answers 202, not an error.
+
+    Only C4's analysis routes raise it, while the out-of-process analysis
+    of the artifact is ``pending`` or ``running`` (:class:`AnalysisCache`).
+    No index raises it: :meth:`IndexRegistry.snapshot` always returns a
+    snapshot, a zero-row ``status="building"`` one until the first batch
+    lands, so every artifact route answers 200 with
+    ``artifact.status: "building"`` instead.
+
+    ``state`` is the complete ``stormlog.studio.analysis`` document, built
+    and enveloped by C4 (``envelope("analysis", body, snapshot)``). C3
+    serves it verbatim, through :func:`encode_json`, with status 202 and
+    ``Retry-After: retry_after_s``, and adds nothing to it. A ``state``
+    whose ``format`` is not ``stormlog.studio.analysis`` raises ValueError.
+    """
 
     def __init__(self, state: Mapping[str, Any], retry_after_s: int = 1) -> None:
+        if state.get("format") != FORMAT_PREFIX + "analysis":
+            raise ValueError("NotReady.state is a stormlog.studio.analysis document")
         super().__init__("not ready")
         self.state: dict[str, Any] = dict(state)
         self.retry_after_s = retry_after_s
@@ -926,14 +942,27 @@ class IndexRegistry(Protocol):
     def snapshot(self, rel: str) -> IndexSnapshot:
         """The current snapshot of ``rel``, without waiting for a build.
 
-        Resolves ``rel`` (NotFoundError, ForbiddenError); raises NotReady
-        until the first snapshot exists; schedules a refresh on the builder
-        pool when the last ``stat`` is more than 1 s old.
+        Never raises :class:`NotReady`. Resolves ``rel`` (NotFoundError,
+        ForbiddenError). As soon as C1 schedules a build of ``rel``, it
+        publishes a zero-row snapshot with ``status="building"`` (no
+        requests, ``bytes_read`` 0, ``identity`` None until the first
+        ``fstat``), so this always has a snapshot to return and every
+        artifact route answers 200 with ``artifact.status: "building"``;
+        the frontend re-reads it every 2 s (§4.4). Schedules a refresh on
+        the builder pool when the last ``stat`` is more than 1 s old.
         """
         ...
 
     def wait(self, rel: str, timeout_s: float) -> IndexSnapshot:
-        """The first snapshot of ``rel``, waiting up to ``timeout_s``."""
+        """The newest snapshot of ``rel``, waiting up to ``timeout_s``.
+
+        Returns as soon as the first complete snapshot exists (status
+        ``ready``, ``partial`` or ``failed``), or when ``timeout_s``
+        elapses, whichever comes first. On a timeout it returns the newest
+        snapshot, whose status may still be ``"building"``: it never
+        raises on a timeout (no TimeoutError, no :class:`NotReady`). It
+        raises only what :meth:`snapshot` raises for ``rel`` itself.
+        """
         ...
 
     def read_line(self, rel: str, ref: LineRef) -> bytes:
@@ -1027,7 +1056,15 @@ class AnalysisState:
 
 
 class AnalysisCache(Protocol):
-    """C4: ``analysis_cache.AnalyzerRunner``."""
+    """C4: ``analysis_cache.AnalyzerRunner``.
+
+    The analysis routes read :meth:`get`. While the state is ``pending``
+    or ``running`` they raise :class:`NotReady` with the complete
+    ``stormlog.studio.analysis`` document as ``state`` (enveloped by C4,
+    with the snapshot's artifact block), and C3 serves it verbatim with
+    202 and Retry-After. This is the only 202 in Studio's API; every other
+    state of the analysis, and every index state, is answered with 200.
+    """
 
     def get(self, rel: str, snapshot: IndexSnapshot) -> AnalysisState:
         """The analysis of this snapshot's file, starting one if none runs."""
