@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import sys
 import threading
 import time
@@ -25,7 +26,9 @@ import pytest
 
 from stormlog.infer.correlation_codec import expand_inference_records
 from stormlog.infer.latency_report import CLIENT_METRICS as LATENCY_METRICS
+from stormlog.studio import export
 from stormlog.studio import index as index_module
+from stormlog.studio import selection
 from stormlog.studio.contracts import (
     ConflictError,
     DictRow,
@@ -133,11 +136,43 @@ class Root:
         return path.relative_to(self.path).as_posix()
 
 
+class RacingRoot(Root):
+    """A root that runs a writer once, just before a chosen later open.
+
+    A refresh opens the file to stat it, then to read each batch, so
+    ``arm(write, skip=1)`` writes between a round's stat and its read.
+    """
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.write: Callable[[], None] | None = None
+        self.skip = 0
+
+    def arm(self, write: Callable[[], None], *, skip: int) -> None:
+        self.write, self.skip = write, skip
+
+    def open(self, rel: str) -> BinaryIO:
+        if self.write is not None:
+            if self.skip == 0:
+                write, self.write = self.write, None
+                write()
+            else:
+                self.skip -= 1
+        return super().open(rel)
+
+
 class Harness:
     """Indexes over one directory, a manual pool and a manual clock."""
 
-    def __init__(self, directory: Path, limits: Limits | None = None, **options: Any):
-        self.root = Root(directory)
+    def __init__(
+        self,
+        directory: Path,
+        limits: Limits | None = None,
+        *,
+        root: Root | None = None,
+        **options: Any,
+    ):
+        self.root = root or Root(directory)
         self.pool = ManualPool()
         self.clock = Clock()
         self.indexes = ArtifactIndexes(
@@ -541,6 +576,73 @@ def test_a_growing_file_refreshes_under_the_same_index_id(
     still = harness.refresh("g.jsonl", seconds=6)
     assert not still.growing and still.generation == done.generation
     assert still.requests is done.requests  # republished, same rows and caches
+
+
+def _whole_file_headers(snapshot: IndexSnapshot) -> dict[str, str]:
+    f = selection.parse_filter({"phase": ["all"]}, origin_ns=snapshot.origin_ns)
+    return dict(export.download_headers(snapshot, selection.select(snapshot, f)))
+
+
+@pytest.mark.parametrize("write", ["finish", "rewrite"])
+def test_bytes_written_between_stat_and_read_are_stated_too(
+    studio_artifacts: StandardArtifacts, tmp_path: Path, write: str
+) -> None:
+    """A round reads what the file holds, which can be more than its stat
+    saw; no snapshot says ``bytes_read > size``, and a file finished so is
+    hashed whole and exported with its SHA-256 (Fable's P2-2)."""
+    source = studio_artifacts["mixed"]
+    growing = GrowingCopy(source, tmp_path / "g.jsonl", lines=40)
+    root = RacingRoot(tmp_path)
+    harness = Harness(tmp_path, root=root)
+    seen: list[IndexSnapshot] = []
+    harness.indexes.add_publish_listener(seen.append)
+    first = harness.build("g.jsonl")
+    growing.append(30)
+
+    def rewrite() -> None:
+        rewrite_in_place(growing.target, cases=MIXED_CASES)
+
+    root.arm(growing.finish if write == "finish" else rewrite, skip=1)
+    done = harness.refresh("g.jsonl")
+    assert root.write is None  # the write ran between the stat and the read
+    assert seen and all(
+        s.identity is not None and s.bytes_read <= s.identity.size for s in seen
+    )
+    data = growing.target.read_bytes()
+    whole = hashlib.sha256(data).hexdigest()
+    assert done.bytes_read == len(data) and done.sha256 == whole
+    check_rows(done, growing.target)
+    assert (done.index_id == first.index_id) == (write == "finish")
+    os.utime(growing.target, ns=(time.time_ns(), time.time_ns() + 10**9))  # a touch
+    touched = harness.refresh("g.jsonl", seconds=6)
+    assert touched.sha256 == whole and not touched.growing
+    headers = _whole_file_headers(touched)
+    assert headers["X-Stormlog-Source-Sha256"] == whole
+    assert "X-Stormlog-Source-Prefix-Sha256" not in headers
+
+
+def test_a_republish_of_the_same_lines_restates_the_tail_and_hash(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """A refresh that finds no new line still republishes what derives
+    from the file's identity: the pending tail and the whole-file SHA-256
+    (Fable's P2-2: ``_SNAPSHOT_REFRESH_KEYS``)."""
+    growing = GrowingCopy(studio_artifacts["mixed"], tmp_path / "g.jsonl", lines=40)
+    harness = harness_for(growing.target)
+    first = harness.build("g.jsonl")
+    size = growing.target.stat().st_size
+    assert first.sha256 is not None and first.pending_tail_bytes == 0
+    growing.append_partial()
+    tailed = harness.refresh("g.jsonl")
+    assert tailed.generation == first.generation and tailed.bytes_read == size
+    assert tailed.pending_tail_bytes == growing.target.stat().st_size - size
+    assert tailed.sha256 is None
+    assert "X-Stormlog-Source-Sha256" not in _whole_file_headers(tailed)
+    os.truncate(growing.target, size)  # the half line is gone again
+    back = harness.refresh("g.jsonl")
+    assert back.generation == first.generation and back.pending_tail_bytes == 0
+    assert back.sha256 == hashlib.sha256(growing.target.read_bytes()).hexdigest()
+    assert _whole_file_headers(back)["X-Stormlog-Source-Sha256"] == back.sha256
 
 
 def test_publish_listeners_see_each_complete_snapshot_once_current(
