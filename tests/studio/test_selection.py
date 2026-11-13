@@ -889,6 +889,8 @@ def test_an_interrupted_case_has_no_rate_even_with_a_window() -> None:
         sel = select(snapshot, f)
         assert sel.rate.reason == "phase_window_missing"
         assert not sel.rate.eligible
+        # Without a window the rows are still the case's whole cohort.
+        assert sel.whole_case == (None if f.window else "c1")
 
 
 def test_an_artifact_older_than_phase_windows_uses_the_request_span() -> None:

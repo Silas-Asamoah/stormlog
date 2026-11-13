@@ -681,17 +681,26 @@ def _rate_scope(
     reason = _filter_reason(f, cases)
     if reason is not None:
         return _no_rate(reason), None
-    case = f.cases[0] if f.cases else cases[0] if cases else None
+    case = _the_case(f, cases)
     facts = case_facts(snapshot)
     population = None if case is None else facts.populations.get(case)
     if case is None or population is None:
         return _no_rate("empty_selection"), None
     if facts.missing_kept:
         return _no_rate("kept_record_over_limit"), None
-    interval = population.intervals.rate
-    if interval is None:
-        return _no_rate(population.intervals.rate_reason or "no_rate_interval"), None
+    if population.intervals.rate is None:
+        # The whole case is still the case's cohort; only its rate is
+        # undefined, and a window cannot give it one (§3.3 rule 2).
+        unrated = _no_rate(population.intervals.rate_reason or "no_rate_interval")
+        return unrated, case if f.window is None else None
     return _windowed(snapshot, f, rows, facts.by_case[case], case, population)
+
+
+def _the_case(f: RequestFilter, cases: tuple[str, ...]) -> str | None:
+    """The one case the filter names, else the one case its rows are in."""
+    if f.cases:
+        return f.cases[0]
+    return cases[0] if cases else None
 
 
 def _filter_reason(f: RequestFilter, cases: tuple[str, ...]) -> str | None:
