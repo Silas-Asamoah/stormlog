@@ -1,0 +1,9 @@
+{
+  "format": "stormlog.studio.static_manifest",
+  "schema_version": 1,
+  "files": {
+    "index.html": {
+      "content_type": "text/html; charset=utf-8"
+    }
+  }
+}
