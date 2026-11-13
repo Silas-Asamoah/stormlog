@@ -434,6 +434,59 @@ def test_one_analysis_at_a_time(
         assert settle(runner, rel, snap).status == "ready"
 
 
+def test_a_popen_that_raises_fails_its_entry_and_later_runs_complete(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_popen = analysis_cache.subprocess.Popen
+    calls: list[int] = []
+
+    def popen_once_broken(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 1:
+            raise FileNotFoundError(2, "No such file or directory", "/gone/python")
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(analysis_cache.subprocess, "Popen", popen_once_broken)
+    runner = make(runners, workspace, state_dir, command=fake_analyzer(tmp_path))
+    first = write_artifact(workspace / "first.jsonl")
+    state = settle(runner, "first.jsonl", snapshot_of(first, "first.jsonl"), 30)
+    assert (state.status, state.reason) == ("failed", "internal")
+    detail = runner.document("first.jsonl", snapshot_of(first, "first.jsonl"))
+    assert "No such file or directory" in detail["detail"]
+    second = write_artifact(workspace / "second.jsonl")
+    later = settle(runner, "second.jsonl", snapshot_of(second, "second.jsonl"), 30)
+    assert (later.status, later.exit_code) == ("ready", 0)
+    assert list((state_dir / "analysis").iterdir()) == []
+
+
+def test_a_dead_worker_is_restarted_by_the_next_enqueue(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = make(runners, workspace, state_dir, command=fake_analyzer(tmp_path))
+    first = write_artifact(workspace / "first.jsonl")
+    # The first worker exits at once, as one that died would.
+    monkeypatch.setattr(runner, "_work", lambda: None)
+    runner.get("first.jsonl", snapshot_of(first, "first.jsonl"))
+    thread = runner._thread
+    assert thread is not None
+    thread.join(timeout=10)
+    monkeypatch.undo()
+    second = write_artifact(workspace / "second.jsonl")
+    later = settle(runner, "second.jsonl", snapshot_of(second, "second.jsonl"), 30)
+    assert later.status == "ready"
+    # The restarted worker also runs the entry the dead one left queued.
+    earlier = settle(runner, "first.jsonl", snapshot_of(first, "first.jsonl"), 30)
+    assert earlier.status == "ready"
+
+
 def test_a_newer_snapshot_replaces_queued_work_for_its_path(
     workspace: Path,
     state_dir: Path,
