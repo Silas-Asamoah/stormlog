@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from stormlog.infer import quantiles
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.latency_report import (
     elapsed_ms,
@@ -319,6 +320,24 @@ def test_stored_client_values_give_the_same_summary() -> None:
         requests, client_values_of=lambda r: stored[str(r["request_id"])]
     )
     assert json.dumps(summary) == json.dumps(latency_summary(requests))
+
+
+def test_each_metric_is_sorted_once_and_quantiles_never_sorts_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = [_streamed(i, ttft_ms=float(97 * i % 41)) for i in range(300)]
+    requests.append(_streamed(300, status="error"))
+    expected = json.dumps(latency_summary(requests))
+    calls: list[int] = []
+
+    def counting(values: list[float]) -> list[float]:
+        calls.append(len(values))
+        return sorted(values)
+
+    monkeypatch.setattr(quantiles, "sorted", counting, raising=False)
+    assert json.dumps(latency_summary(requests)) == expected
+    # Only the error's elapsed-time quantile sorts inside quantiles.
+    assert calls == [1]
 
 
 def test_elapsed_ms_is_the_e2e_time_or_send_to_end_for_an_abandoned_request() -> None:
