@@ -334,12 +334,21 @@ def _string(body: Mapping[str, Any], key: str, *, required: bool) -> str | None:
 
 
 def auth_routes(ctx: StudioContext) -> list[Route]:
-    """The four routes C3 owns: session, health, tickets and admin bootstrap."""
+    """The four routes C3 owns: session, health, tickets and admin bootstrap.
+
+    None takes a query parameter, so any is 400 ``unknown_parameter``, as
+    on every other route (§5.1; Fable's P3-5).
+    """
     return [
-        Route("POST", "/api/v1/session", "public", _session_handler(ctx)),
-        Route("GET", "/api/v1/health", "public", _health_handler(ctx)),
-        Route("POST", "/api/v1/tickets", "bearer", _tickets_handler(ctx)),
-        Route("POST", "/api/v1/admin/bootstrap", "admin", _bootstrap_handler(ctx)),
+        Route("POST", "/api/v1/session", "public", _no_query(_session_handler(ctx))),
+        Route("GET", "/api/v1/health", "public", _no_query(_health_handler(ctx))),
+        Route("POST", "/api/v1/tickets", "bearer", _no_query(_tickets_handler(ctx))),
+        Route(
+            "POST",
+            "/api/v1/admin/bootstrap",
+            "admin",
+            _no_query(_bootstrap_handler(ctx)),
+        ),
     ]
 
 
@@ -348,6 +357,22 @@ def _document(name: str, body: Mapping[str, Any]) -> HttpResponse:
 
 
 Handler = Callable[[HttpRequest], HttpResponse]
+
+
+def _no_query(handler: Handler) -> Handler:
+    """``handler`` behind a refusal of any query parameter."""
+
+    def handle(request: HttpRequest) -> HttpResponse:
+        for name in request.query:
+            raise UsageError(
+                "unknown_parameter",
+                f"{name[:64]}: not a parameter here",
+                field=name[:64],
+                details={"allowed": []},
+            )
+        return handler(request)
+
+    return handle
 
 
 def _session_handler(ctx: StudioContext) -> Handler:
