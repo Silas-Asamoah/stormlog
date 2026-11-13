@@ -91,6 +91,9 @@ class StubScanner:
     def scan(self) -> None:
         return None
 
+    def wait(self, timeout_s: float) -> bool:
+        return True
+
     def state(self) -> dict[str, Any]:
         return {}
 
