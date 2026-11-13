@@ -1,0 +1,558 @@
+{
+  "format": "stormlog.studio.sources",
+  "schema_version": 1,
+  "artifact": {
+    "path": "mixed.jsonl",
+    "index_id": "93e3498e668ecde315750ce3d31ed65a",
+    "generation": 1,
+    "status": "ready",
+    "size": 186541,
+    "bytes_read": 186541,
+    "sha256": "0a23851293dfa7df5cbd6b902e37d74ed4664b6175ce076b92dc804e9f6c94c7",
+    "growing": false,
+    "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1794557686590216755",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": [],
+    "cut": null
+  },
+  "inventory": [
+    {
+      "event_type": "infer.session",
+      "total": 2,
+      "by_version": {
+        "1": 2
+      }
+    },
+    {
+      "event_type": "infer.context",
+      "total": 1,
+      "by_version": {
+        "4": 1
+      }
+    },
+    {
+      "event_type": "infer.artifact",
+      "total": 1,
+      "by_version": {
+        "2": 1
+      }
+    },
+    {
+      "event_type": "infer.workload",
+      "total": 1,
+      "by_version": {
+        "1": 1
+      }
+    },
+    {
+      "event_type": "infer.cache_state",
+      "total": 4,
+      "by_version": {
+        "1": 4
+      }
+    },
+    {
+      "event_type": "infer.phase_start",
+      "total": 8,
+      "by_version": {
+        "1": 8
+      }
+    },
+    {
+      "event_type": "infer.dispatch",
+      "total": 56,
+      "by_version": {
+        "1": 56
+      }
+    },
+    {
+      "event_type": "infer.first_content",
+      "total": 49,
+      "by_version": {
+        "1": 49
+      }
+    },
+    {
+      "event_type": "infer.request",
+      "total": 56,
+      "by_version": {
+        "1": 56
+      }
+    },
+    {
+      "event_type": "infer.phase_window",
+      "total": 8,
+      "by_version": {
+        "1": 8
+      }
+    },
+    {
+      "event_type": "infer.summary",
+      "total": 1,
+      "by_version": {
+        "1": 1
+      }
+    }
+  ],
+  "kept": [
+    {
+      "event_type": "infer.artifact",
+      "written": 1,
+      "kept": 1,
+      "records": [
+        {
+          "artifact_kind": "inference_jsonl",
+          "created_at_ns": "1794557686590216755",
+          "event_id": "artifact",
+          "event_type": "infer.artifact",
+          "metadata": {
+            "boot_id": "387e3801-f527-4617-9c8e-6609c58fb043"
+          },
+          "schema_version": 2,
+          "context": {
+            "run_id": "3d43fc81-94cd-4625-9337-c99497b1f5f1",
+            "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+            "producer_id": "stormlog.infer.profile",
+            "source": "stormlog.infer.profile",
+            "clock_domain": "vm/387e3801-f527-4617-9c8e-6609c58fb043/unix_epoch_ns",
+            "clock_kind": "wall",
+            "collection_mode": "active",
+            "provenance": "observed",
+            "source_version": "0.0.1.dev1514",
+            "engine": null,
+            "engine_version": null,
+            "backend": null,
+            "backend_version": null,
+            "host": "vm",
+            "pid": 5376,
+            "device_uuid": null,
+            "rank": 0,
+            "local_rank": 0,
+            "world_size": 1
+          }
+        }
+      ]
+    },
+    {
+      "event_type": "infer.cache_state",
+      "written": 4,
+      "kept": 4,
+      "records": [
+        {
+          "acknowledged": false,
+          "attempted": false,
+          "case_id": "c2_in8_out4",
+          "event_type": "infer.cache_state",
+          "reason": "no cache state was requested; earlier traffic, including an earlier run with the same seed, decides what the cache holds",
+          "requested": "unspecified",
+          "reset": null,
+          "run_kind": "steady_state",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "verified": "unverified"
+        },
+        {
+          "acknowledged": false,
+          "attempted": false,
+          "case_id": "c2_in8_out16",
+          "event_type": "infer.cache_state",
+          "reason": "no cache state was requested; earlier traffic, including an earlier run with the same seed, decides what the cache holds",
+          "requested": "unspecified",
+          "reset": null,
+          "run_kind": "steady_state",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "verified": "unverified"
+        }
+      ]
+    },
+    {
+      "event_type": "infer.phase_start",
+      "written": 8,
+      "kept": 8,
+      "records": [
+        {
+          "arrival_mode": "closed",
+          "case_id": "c2_in8_out4",
+          "event_type": "infer.phase_start",
+          "phase": "warmup",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "started_at_ns": "1794557686597379199",
+          "timestamp_ns": "1794557686597379199"
+        },
+        {
+          "arrival_mode": "closed",
+          "case_id": "c2_in8_out4",
+          "event_type": "infer.phase_start",
+          "phase": "measured",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "started_at_ns": "1794557686636162764",
+          "timestamp_ns": "1794557686636162764"
+        }
+      ]
+    },
+    {
+      "event_type": "infer.phase_window",
+      "written": 8,
+      "kept": 8,
+      "records": [
+        {
+          "abandoned_requests": {
+            "running_at_start": 0,
+            "still_running": 0,
+            "waited_seconds": 0.0
+          },
+          "arrival_mode": "closed",
+          "case_id": "c2_in8_out4",
+          "drain_timeout_seconds": 60.0,
+          "drained_at_ns": "1794557686635983487",
+          "event_type": "infer.phase_window",
+          "phase": "warmup",
+          "prompts_digest": "f080d346bf1379d1",
+          "scheduled_arrivals": null,
+          "scheduled_endpoint_offset_ns": null,
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "started_at_ns": "1794557686597432001",
+          "stopped_early": false,
+          "window_ended_at_ns": "1794557686598406270"
+        },
+        {
+          "abandoned_requests": {
+            "running_at_start": 0,
+            "still_running": 0,
+            "waited_seconds": 0.0
+          },
+          "arrival_mode": "closed",
+          "case_id": "c2_in8_out4",
+          "drain_timeout_seconds": 60.0,
+          "drained_at_ns": "1794557686810313337",
+          "event_type": "infer.phase_window",
+          "phase": "measured",
+          "prompts_digest": "593b3d88f6a9d569",
+          "scheduled_arrivals": null,
+          "scheduled_endpoint_offset_ns": null,
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "started_at_ns": "1794557686636221207",
+          "stopped_early": false,
+          "window_ended_at_ns": "1794557686776627274"
+        }
+      ]
+    },
+    {
+      "event_type": "infer.session",
+      "written": 2,
+      "kept": 2,
+      "records": [
+        {
+          "config": {
+            "arrivals": [
+              {
+                "mode": "closed"
+              }
+            ],
+            "cache_reset_timeout_seconds": 10.0,
+            "cache_reset_url": null,
+            "cache_state": "unspecified",
+            "concurrency": [
+              2,
+              4
+            ],
+            "duration_seconds": null,
+            "endpoint": "http://127.0.0.1:43697/v1/chat/completions",
+            "engine_adapter": {
+              "adapter_version": 1,
+              "engine": "generic",
+              "kernel_attribution": "unavailable",
+              "native_memory_scope": "unavailable_without_server_evidence",
+              "prefill_decode_attribution": "unavailable",
+              "protocol": "openai_text",
+              "request_execution_attribution": "unavailable",
+              "scheduler_attribution": "unavailable",
+              "server_version": null,
+              "server_version_source": "unknown",
+              "source_revision": null,
+              "task": "chat"
+            },
+            "environment_proxies": {
+              "ignored": true,
+              "schemes": [
+                "docker_https",
+                "electron_get_use",
+                "global_agent_https",
+                "global_agent_no",
+                "https",
+                "no",
+                "npm_config_https",
+                "yarn_https"
+              ]
+            },
+            "input_tokens": [
+              8
+            ],
+            "labels": null,
+            "max_in_flight": 2,
+            "model": "fake-model",
+            "output_tokens": [
+              4,
+              16
+            ],
+            "overflow": "wait",
+            "prompts": {
+              "mode": "repeat"
+            },
+            "request_count": 12,
+            "sample_interval_seconds": 1.0,
+            "stream": true,
+            "stream_include_usage": true,
+            "system_sampler": "noop",
+            "tokenizer": "none",
+            "trace": null,
+            "trace_context": {
+              "policy": "off",
+              "sample_ratio": 1.0,
+              "server_trace_sampler": null
+            },
+            "vllm_execution_dir": null,
+            "vllm_metrics": null,
+            "vllm_spans": null
+          },
+          "event_type": "infer.session",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "status": "running",
+          "timestamp_ns": "1794557686590216755"
+        },
+        {
+          "event_type": "infer.session",
+          "schema_version": 1,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "status": "completed",
+          "summary": {
+            "ended_at_ns": "1794557687468459209",
+            "host": "vm",
+            "job_id": null,
+            "local_rank": 0,
+            "pid": 5376,
+            "rank": 0,
+            "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+            "source": "stormlog.infer.profile",
+            "started_at_ns": "1794557686590216755",
+            "status": "completed",
+            "world_size": 1
+          },
+          "timestamp_ns": "1794557687468459209"
+        }
+      ]
+    },
+    {
+      "event_type": "infer.workload",
+      "written": 1,
+      "kept": 1,
+      "records": [
+        {
+          "cache": {
+            "requested": "unspecified",
+            "reset_url": null
+          },
+          "cases": [
+            {
+              "arrival": {
+                "mode": "closed"
+              },
+              "case_id": "c2_in8_out4",
+              "concurrency": 2,
+              "input_tokens": 8,
+              "max_in_flight": null,
+              "output_tokens": 4
+            },
+            {
+              "arrival": {
+                "mode": "closed"
+              },
+              "case_id": "c2_in8_out16",
+              "concurrency": 2,
+              "input_tokens": 8,
+              "max_in_flight": null,
+              "output_tokens": 16
+            },
+            {
+              "arrival": {
+                "mode": "closed"
+              },
+              "case_id": "c4_in8_out4",
+              "concurrency": 4,
+              "input_tokens": 8,
+              "max_in_flight": null,
+              "output_tokens": 4
+            },
+            {
+              "arrival": {
+                "mode": "closed"
+              },
+              "case_id": "c4_in8_out16",
+              "concurrency": 4,
+              "input_tokens": 8,
+              "max_in_flight": null,
+              "output_tokens": 16
+            }
+          ],
+          "chat_template": {
+            "applied_by": "server",
+            "client_template_digest": null
+          },
+          "decoding": {
+            "extra_body": {},
+            "max_tokens_field": "max_tokens",
+            "other_settings": "server defaults",
+            "stream": true,
+            "stream_include_usage": true
+          },
+          "engine": "generic",
+          "event_type": "infer.workload",
+          "generator": {
+            "name": "stormlog.synthetic",
+            "version": 2
+          },
+          "measurement": {
+            "drain_timeout_seconds": null,
+            "duration_seconds": null,
+            "max_in_flight": 2,
+            "overflow": "wait",
+            "request_count": 12,
+            "request_deadline_seconds": null,
+            "timeout_seconds": 60.0
+          },
+          "prompts": {
+            "mode": "repeat"
+          },
+          "schema_version": 1,
+          "seed": 0,
+          "session_id": "0765144f-6d24-490f-8444-8c6ea528214c",
+          "spec_digest": "8c1fe6fd5936eb0ab6d2f8901dc006edde6e6474c056fd5a7287a76d70e339f6",
+          "task": "chat",
+          "tokenizer": {
+            "exact": false,
+            "name": "whitespace words",
+            "source": "estimated"
+          },
+          "warmup": {
+            "prompts": "measured",
+            "requests": 2
+          },
+          "workload_digest": "03efd3ae4785e77f3d63670abe16084468ab322e20c7a7023ebd9d13e884a39d"
+        }
+      ]
+    }
+  ],
+  "panels": {
+    "requests": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "rows": 56
+      }
+    },
+    "latency": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "failures": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "streaming": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "tokens": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "rates": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "cases": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "observed": 4,
+        "planned": 4
+      }
+    },
+    "client_memory": {
+      "state": "unavailable",
+      "reason": "no_system_samples",
+      "collector": "stormlog infer profile --system-sampler psutil (or nvml)",
+      "detail": null
+    },
+    "server_evidence": {
+      "state": "unavailable",
+      "reason": "no_server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution",
+      "detail": null
+    },
+    "vllm_metrics": {
+      "state": "unavailable",
+      "reason": "no_vllm_metrics",
+      "collector": "stormlog infer profile --vllm-metrics",
+      "detail": null
+    },
+    "trace": {
+      "state": "unavailable",
+      "reason": "no_trace",
+      "collector": "stormlog infer import-trace",
+      "detail": null
+    },
+    "execution": {
+      "state": "unavailable",
+      "reason": "no_execution",
+      "collector": "stormlog infer import-execution",
+      "detail": null
+    },
+    "server_probe": {
+      "state": "unavailable",
+      "reason": "no_server_probe",
+      "collector": "stormlog infer profile (probes the server before and after)",
+      "detail": null
+    },
+    "manifest": {
+      "state": "unavailable",
+      "reason": "no_manifest",
+      "collector": "stormlog infer attach-manifest",
+      "detail": null
+    },
+    "analysis": {
+      "state": "pending",
+      "reason": "analysis_running",
+      "collector": null,
+      "detail": null
+    }
+  },
+  "analysis": {
+    "status": "running",
+    "reason": null
+  },
+  "observers": null,
+  "observers_source": "infer analyze (out of process)"
+}

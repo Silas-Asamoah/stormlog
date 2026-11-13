@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_capabilities_v1.schema.json",
+  "title": "Stormlog Studio capabilities v1",
+  "description": "GET /api/v1/capabilities (design §5.4), written by api.py: what this Studio can do. Slice 1 runs no jobs (jobs unavailable, reason slice_2), runs the analyzer out of process within its bounds, exports original bytes only, and is never remote.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "jobs",
+    "analyzer",
+    "export_profiles",
+    "remote"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.capabilities"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "jobs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason"
+      ],
+      "properties": {
+        "state": {
+          "const": "unavailable"
+        },
+        "reason": {
+          "const": "slice_2"
+        }
+      }
+    },
+    "analyzer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "enabled",
+        "max_bytes",
+        "timeout_s"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timeout_s": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "export_profiles": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "original_bytes"
+        ]
+      }
+    },
+    "remote": {
+      "const": false
+    }
+  }
+}
