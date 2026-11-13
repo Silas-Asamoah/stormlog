@@ -463,11 +463,11 @@ class ColumnarTable(RequestTable, Protocol):
       :class:`GapPool`, and raises :class:`NotResident` when the gap pool
       is not resident (``gaps_resident`` false).
 
-    Immutability: each result is built once per table and cached, has one
-    element per row of the snapshot (``len(table)``), and is a copy, never
-    a view of the index's growing arrays, so ``numpy.frombuffer`` on an
-    ``array`` result is safe and later batches never change it. Callers
-    must not mutate it.
+    Immutability: each result has one element per row of the snapshot
+    (``len(table)``), never changes as later batches land, and is cached
+    per table. Every ``array`` in it is a copy, never a view of the
+    index's growing arrays, so ``numpy.frombuffer`` on it is safe.
+    Callers must not mutate it.
     """
 
     def client_values(self, metric: str) -> Sequence[float]: ...

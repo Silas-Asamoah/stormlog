@@ -61,6 +61,7 @@ from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio.contracts import (
     CLIENT_COLUMN_PREFIX,
     ConflictError,
+    GapPool,
     IndexFailure,
     IndexSnapshot,
     IndexStatus,
@@ -927,6 +928,33 @@ class _Rows(Sequence[RequestRow]):
         return ColumnRow(self._view, position)
 
 
+class _RefColumn(Sequence[LineRef]):
+    """``ColumnTable.line_refs``: the first ``n`` line references, each
+    made on access from the reference arrays (rows below ``n`` never
+    change, and nothing exports the arrays' buffers)."""
+
+    def __init__(self, refs: _Refs, n: int) -> None:
+        self._refs = refs
+        self._n = n
+
+    def __len__(self) -> int:
+        return self._n
+
+    @overload
+    def __getitem__(self, index: int) -> LineRef: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[LineRef]: ...
+
+    def __getitem__(self, index: int | slice) -> LineRef | Sequence[LineRef]:
+        if isinstance(index, slice):
+            return [self._refs.get(i) for i in range(*index.indices(self._n))]
+        position = index + self._n if index < 0 else index
+        if not 0 <= position < self._n:
+            raise IndexError("line reference index out of range")
+        return self._refs.get(position)
+
+
 class ColumnTable:
     """``IndexSnapshot.table``: whole columns of one snapshot (D-1).
 
@@ -934,14 +962,79 @@ class ColumnTable:
     value in every row is an ``array`` (compact; elements are Python
     numbers when read); any other column is a list with None where a row
     lacks a value. ``client.<metric>`` gives each row's ``value_ms``.
+
+    It is the contract's ``ColumnarTable`` too (Fable's F-2): the flat
+    arrays below are copies of the first ``n`` rows of the index's arrays,
+    built once per table and cached, so ``numpy.frombuffer`` on them never
+    blocks the builder's appends (an exported buffer would).
     """
 
     def __init__(self, view: _RequestView) -> None:
         self._view = view
         self._columns: dict[str, Sequence[Any]] = {}
+        self._arrays: dict[tuple[str, str], Any] = {}
 
     def __len__(self) -> int:
         return self._view.n
+
+    def _cached(self, key: tuple[str, str], make: Callable[[], Any]) -> Any:
+        value = self._arrays.get(key)
+        if value is None:
+            value = self._arrays[key] = make()
+        return value
+
+    def client_values(self, metric: str) -> Sequence[float]:
+        values = self._view.requests.client[metric]  # KeyError: unknown
+        result: Sequence[float] = self._cached(
+            ("client", metric), lambda: values[: self._view.n]
+        )
+        return result
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]:
+        requests = self._view.requests
+        codes = requests.reasons[metric]  # KeyError: unknown
+        result: tuple[Sequence[int], tuple[tuple[str | None, bool], ...]] = (
+            self._cached(
+                ("reasons", metric),
+                lambda: (codes[: self._view.n], tuple(requests.reason_table)),
+            )
+        )
+        return result
+
+    def line_refs(self) -> Sequence[LineRef]:
+        return _RefColumn(self._view.requests.refs, self._view.n)
+
+    def line_lengths(self) -> Sequence[int]:
+        lengths = self._view.requests.refs.length
+        result: Sequence[int] = self._cached(
+            ("refs", "length"), lambda: lengths[: self._view.n]
+        )
+        return result
+
+    def gap_counts(self) -> Sequence[int]:
+        counts = self._view.requests.gap_count
+        result: Sequence[int] = self._cached(
+            ("gaps", "count"),
+            lambda: array("i", [max(0, c) for c in counts[: self._view.n]]),
+        )
+        return result
+
+    def gap_pool(self) -> GapPool:
+        view = self._view
+        if view.gaps is None or view.gap_start is None:
+            raise NotResident(GAPS)
+        gaps, starts = view.gaps, view.gap_start
+        counts = self.gap_counts()
+
+        def make() -> GapPool:
+            n = view.n
+            end = starts[n - 1] + counts[n - 1] if n else 0
+            return GapPool(gaps[:end], starts[:n], counts)
+
+        pool: GapPool = self._cached(("gaps", "pool"), make)
+        return pool
 
     def column(self, name: str) -> Sequence[Any]:
         cached = self._columns.get(name)
