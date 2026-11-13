@@ -796,6 +796,26 @@
       "collector": "stormlog infer profile --system-sampler psutil (or nvml)"
     },
     {
+      "key": "samples.gaps",
+      "label": "where one series of system samples breaks",
+      "unit": "ns",
+      "scope": "client_local_host",
+      "sources": [
+        "infer.system_sample timestamp_ns"
+      ],
+      "computed_by": "sample_report.sample_gaps",
+      "formula": "consecutive samples more than SCRAPE_GAP_FACTOR (2) times the series' median interval apart",
+      "missing_rule": "none when the median interval is 0 or under two samples",
+      "applies_to": "one series of system samples, by (sampler, device_id)",
+      "aggregation_window": "the samples route's window",
+      "notes": [
+        "the series' own median interval stands in for a configured sampling interval, which the artifact does not record"
+      ],
+      "status": "indexed",
+      "reason": null,
+      "collector": "stormlog infer profile --system-sampler psutil (or nvml)"
+    },
+    {
       "key": "request.elapsed_ms",
       "label": "how long a request that did not succeed ran",
       "unit": "ms",
