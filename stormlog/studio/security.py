@@ -296,10 +296,14 @@ def without_ticket(request: HttpRequest) -> HttpRequest:
 
 
 def json_body(request: HttpRequest, allowed: Iterable[str]) -> dict[str, Any]:
-    """The body as a JSON object with only ``allowed`` keys; UsageError else."""
+    """The body as a JSON object with only ``allowed`` keys; UsageError else.
+
+    A body nested too deeply for the decoder (RecursionError) is
+    ``bad_parameter`` too, not a 500.
+    """
     try:
         body = json.loads(request.body.decode("utf-8") or "{}")
-    except (UnicodeDecodeError, ValueError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise UsageError("bad_parameter", "the body is not JSON") from None
     if not isinstance(body, dict):
         raise UsageError("bad_parameter", "the body is not a JSON object")
