@@ -636,6 +636,20 @@ def test_a_file_swapped_after_the_check_is_refused(
         workspace.open("runs/a.jsonl")
 
 
+def test_a_path_that_changes_under_realpath_is_not_found(
+    workspace: RootDirectory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before 3.13, realpath's lstat then readlink of a symlink that goes
+    # in between raises FileNotFoundError (a concurrent flipper hits it).
+    def vanishing(path: Any, *args: Any, **kwargs: Any) -> str:
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(os.path, "realpath", vanishing)
+    with pytest.raises(NotFoundError) as caught:
+        workspace.resolve("runs/a.jsonl")
+    assert caught.value.code == "artifact_not_found"
+
+
 def test_relative_gives_root_relative_posix_paths(
     workspace: RootDirectory, tmp_path: Path
 ) -> None:
