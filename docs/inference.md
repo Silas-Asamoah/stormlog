@@ -450,6 +450,14 @@ The report includes:
 - first streamed chunk latency
 - requests/sec, output tokens/sec and total tokens/sec of the successful
   requests, per second of the case's rate interval
+- a `tokens` block: `output_tokens` and `total_tokens`, the sums of the
+  successful requests' recorded counts (a missing count adds nothing),
+  `output_token_sources`, and `coverage`. For `output` and `prompt` counts,
+  `coverage` gives the successful requests (`eligible`), how many recorded
+  a numeric count (`known`) and how many of those were flagged exact
+  (`exact`), the eligible requests by recorded source (`by_source`), the
+  sum of the known counts (`known_sum`), and `partial` when some eligible
+  request has no count. A partial sum, and a rate made from it, reads low
 - a `latency` block for each latency metric (`client.ttft`, `client.e2e`,
   `client.tpot`, the `*_from_intended` variants, and `server.ttft`,
   `server.e2e` and `server.queue` when vLLM spans are joined), with p50, p90,
