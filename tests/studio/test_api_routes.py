@@ -12,6 +12,7 @@ artifact, summary and requests documents.
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import http.client
 import json
@@ -65,6 +66,9 @@ MIXED = "mixed.jsonl"
 # Telemetry JSONL: no workspace kind, so the scan does not list it.
 NOT_LISTED = "not_an_inference_artifact.jsonl"
 WAIT_S = 60.0
+# 11,000 "[": json.loads raises RecursionError on 3.10 to 3.13 (about 10,000
+# levels on 3.12), yet the request stays under the 16 KiB head limit.
+CURSOR_BOMB = base64.urlsafe_b64encode(b"[" * 11_000).decode("ascii").rstrip("=")
 
 # Every route Studio serves, with its auth (§5.4): C3's four, then C4's.
 ROUTE_TABLE: dict[tuple[str, str], str] = {
@@ -634,6 +638,18 @@ ERROR_CASES: dict[str, tuple[str, dict[str, Any], int, str]] = {
     ),
     "bad_sort": ("/api/v1/artifact/requests", {"sort": "speed"}, 400, "bad_parameter"),
     "bad_cursor": ("/api/v1/artifact/requests", {"cursor": "!!"}, 400, "bad_parameter"),
+    "requests_cursor_bomb": (
+        "/api/v1/artifact/requests",
+        {"cursor": CURSOR_BOMB},
+        400,
+        "bad_parameter",
+    ),
+    "items_cursor_bomb": (
+        "/api/v1/workspace/items",
+        {"cursor": CURSOR_BOMB},
+        400,
+        "bad_parameter",
+    ),
     "bins_and_edges": (
         "/api/v1/artifact/distribution",
         {"metric": "client.e2e", "bins": 3, "edges": "0,1"},
