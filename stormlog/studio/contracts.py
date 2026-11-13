@@ -996,17 +996,17 @@ def _wire_key(key: Any) -> str:
 _BYTE_FORMATS = frozenset({"B", "b", "c"})
 
 
-def _is_bytes(value: Any) -> bool:
-    if isinstance(value, (bytes, bytearray)):
-        return True
-    return isinstance(value, memoryview) and value.format in _BYTE_FORMATS
-
-
 def _is_finite_number(value: Any) -> bool:
     """``report_stats.is_number``, which the contract does not import."""
     if isinstance(value, float):
         return math.isfinite(value)
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_bytes(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray)):
+        return True
+    return isinstance(value, memoryview) and value.format in _BYTE_FORMATS
 
 
 def _is_list_like(value: Any) -> bool:
