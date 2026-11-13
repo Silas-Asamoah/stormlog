@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_distribution_v1.schema.json",
+  "title": "Stormlog Studio distribution v1",
+  "description": "GET /api/v1/artifact/distribution (design §5.4): counts of one client latency metric in half-open bins. The denominator is the selection without its latency condition. With bins the edges run equal-width from the smallest value to math.nextafter of the largest; with edges the caller picks them and values outside count in below and above. Bins whose edges would coincide are merged, so there may be fewer bins than asked.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "metric",
+    "mode",
+    "bins",
+    "below",
+    "above",
+    "denominator",
+    "bounds"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.distribution"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "$ref": "studio_selection_block_v1.schema.json"
+    },
+    "metric": {
+      "enum": [
+        "client.ttft",
+        "client.ttft_from_intended",
+        "client.e2e",
+        "client.e2e_from_intended",
+        "client.tpot"
+      ]
+    },
+    "mode": {
+      "enum": [
+        "bins",
+        "edges"
+      ]
+    },
+    "bins": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lower_ms",
+          "upper_ms",
+          "count",
+          "latency"
+        ],
+        "properties": {
+          "lower_ms": {
+            "description": "Inclusive.",
+            "type": "number"
+          },
+          "upper_ms": {
+            "description": "Exclusive.",
+            "type": "number"
+          },
+          "count": {
+            "$ref": "#/$defs/count"
+          },
+          "latency": {
+            "description": "The exact latency= parameter that selects this bin: METRIC:MIN:MAX with repr floats.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "below": {
+      "$ref": "#/$defs/count"
+    },
+    "above": {
+      "$ref": "#/$defs/count"
+    },
+    "denominator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "params",
+        "size",
+        "with_value",
+        "without_value"
+      ],
+      "properties": {
+        "params": {
+          "description": "Canonical params of the selection without its latency condition.",
+          "type": "string"
+        },
+        "size": {
+          "$ref": "#/$defs/count"
+        },
+        "with_value": {
+          "$ref": "#/$defs/count"
+        },
+        "without_value": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "bounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_bins",
+        "max_edges"
+      ],
+      "properties": {
+        "max_bins": {
+          "const": 200
+        },
+        "max_edges": {
+          "const": 201
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

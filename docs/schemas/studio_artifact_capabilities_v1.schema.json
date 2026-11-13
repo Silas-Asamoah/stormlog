@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_artifact_capabilities_v1.schema.json",
+  "title": "Stormlog Studio artifact capabilities v1",
+  "description": "GET /api/v1/artifact/capabilities (design §5.5): each panel's state and reason for this artifact. Server evidence the artifact holds is not_indexed: the index does not read it, and the analyzer report's values are shown, labelled, in Sources. observers is the analyzer report's observers block, passed through once the analysis is ready; *_ns integers in it are decimal strings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "panels",
+    "observers",
+    "observers_source"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.artifact_capabilities"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "panels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "latency",
+        "failures",
+        "streaming",
+        "tokens",
+        "rates",
+        "cases",
+        "client_memory",
+        "server_evidence",
+        "vllm_metrics",
+        "trace",
+        "execution",
+        "server_probe",
+        "manifest",
+        "analysis"
+      ],
+      "properties": {
+        "requests": {
+          "$ref": "#/$defs/panel"
+        },
+        "latency": {
+          "$ref": "#/$defs/panel"
+        },
+        "failures": {
+          "$ref": "#/$defs/panel"
+        },
+        "streaming": {
+          "$ref": "#/$defs/panel"
+        },
+        "tokens": {
+          "$ref": "#/$defs/panel"
+        },
+        "rates": {
+          "$ref": "#/$defs/panel"
+        },
+        "cases": {
+          "$ref": "#/$defs/panel"
+        },
+        "client_memory": {
+          "$ref": "#/$defs/panel"
+        },
+        "server_evidence": {
+          "$ref": "#/$defs/panel"
+        },
+        "vllm_metrics": {
+          "$ref": "#/$defs/panel"
+        },
+        "trace": {
+          "$ref": "#/$defs/panel"
+        },
+        "execution": {
+          "$ref": "#/$defs/panel"
+        },
+        "server_probe": {
+          "$ref": "#/$defs/panel"
+        },
+        "manifest": {
+          "$ref": "#/$defs/panel"
+        },
+        "analysis": {
+          "$ref": "#/$defs/panel"
+        }
+      }
+    },
+    "observers": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "observers_source": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "panel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "collector",
+        "detail"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "available",
+            "empty",
+            "pending",
+            "partial",
+            "unavailable",
+            "not_indexed",
+            "in_artifact_panel_later",
+            "unsupported"
+          ]
+        },
+        "reason": {
+          "description": "Why the panel is in this state, such as index_building, gaps_not_resident, no_system_samples or server_evidence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "collector": {
+          "description": "What produces the missing evidence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "description": "Counts behind the state, such as records the artifact holds.",
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

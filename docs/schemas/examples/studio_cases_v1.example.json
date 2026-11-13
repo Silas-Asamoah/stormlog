@@ -2,18 +2,18 @@
   "format": "stormlog.studio.cases",
   "schema_version": 1,
   "artifact": {
-    "path": "runs/042.jsonl",
-    "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
-    "generation": 7,
+    "path": "runs/tokens_mixed.jsonl",
+    "index_id": "0123456789abcdef0123456789abcdef",
+    "generation": 3,
     "status": "ready",
-    "size": 2457600,
-    "bytes_read": 2457600,
-    "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+    "size": 113467,
+    "bytes_read": 113467,
+    "sha256": "877f73b2321282360b792966250abb83edd4416fb1bb40141bd02edb6dc4f2f9",
     "growing": false,
-    "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+    "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
     "session_status": "completed",
     "terminal": true,
-    "origin_ns": "1788609595000000000",
+    "origin_ns": "1790000000000000000",
     "gaps_resident": true,
     "error_messages_resident": true,
     "limits_hit": []
@@ -21,7 +21,7 @@
   "comparison_scope": "full_measured_case",
   "cases": [
     {
-      "case_id": "c8_in4096_out128",
+      "case_id": "c8_in128_out64",
       "planned": true,
       "observed": true,
       "summary": {
@@ -29,7 +29,7 @@
           "filter": {
             "phase": "measured",
             "cases": [
-              "c8_in4096_out128"
+              "c8_in128_out64"
             ],
             "statuses": [],
             "stream": null,
@@ -39,11 +39,11 @@
             "completed_by_ns": null,
             "latency": null
           },
-          "params": "case=c8_in4096_out128&phase=measured",
-          "fingerprint": "sha256:9e0524673579ae6344f26a7d1c663f83215f35fbfc8785dde8fcb9e6c79dd93a",
-          "size": 120,
+          "params": "case=c8_in128_out64&phase=measured",
+          "fingerprint": "sha256:cfb96db314262a6265906d892925bbbb03e5156bafb09ad3484000739c3f8558",
+          "size": 60,
           "pooled_cases": 1,
-          "whole_case": "c8_in4096_out128",
+          "whole_case": "c8_in128_out64",
           "cohort": {
             "valid": true,
             "issues": [],
@@ -55,28 +55,28 @@
             "reason": null,
             "interval": {
               "kind": "measured_span",
-              "started_at_ns": "1788609600123456789",
-              "ended_at_ns": "1788609661323456789",
-              "seconds": 61.2,
+              "started_at_ns": "1790000000005000000",
+              "ended_at_ns": "1790000001765441000",
+              "seconds": 1.760441,
               "numerator_cohort": "all_measured"
             }
           },
           "searched_fields": []
         },
         "counts": {
-          "offered": 120,
+          "offered": 60,
           "scheduled": null,
           "dropped": 0,
-          "sent": 120,
+          "sent": 60,
           "unreachable": 0,
           "delivery_unknown": 0,
           "rejected": 0,
-          "accepted": 120,
-          "successful": 115,
-          "failed": 2,
-          "timed_out": 3,
+          "accepted": 60,
+          "successful": 54,
+          "failed": 6,
+          "timed_out": 0,
           "cancelled": 0,
-          "censored": 3,
+          "censored": 0,
           "other": {},
           "server_admitted": null,
           "server_evidence_coverage": null,
@@ -85,9 +85,9 @@
           "server_evidence": "not_indexed"
         },
         "failure": {
-          "share": 0.041666666666666664,
-          "numerator": 5,
-          "denominator": 120,
+          "share": 0.1,
+          "numerator": 6,
+          "denominator": 60,
           "reason": null
         },
         "latency": {
@@ -100,11 +100,11 @@
           "metrics": {
             "client.ttft": {
               "boundary": "client",
-              "successful_missing": 7,
+              "successful_missing": 0,
               "successful": {
                 "p50": {
-                  "value_ms": 518.45,
-                  "n": 108,
+                  "value_ms": 57.6075,
+                  "n": 54,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
@@ -112,17 +112,17 @@
                   "observed_lower_bound_ms": null,
                   "reason": null,
                   "interval": {
-                    "lower_rank": 44,
-                    "upper_rank": 65,
-                    "lower_ms": 495.8,
-                    "upper_ms": 541.0,
-                    "width_ms": 45.19999999999999,
-                    "coverage": 0.9571927792007744
+                    "lower_rank": 20,
+                    "upper_rank": 35,
+                    "lower_ms": 45.591,
+                    "upper_ms": 62.895,
+                    "width_ms": 17.304000000000002,
+                    "coverage": 0.9597764359042833
                   }
                 },
                 "p90": {
-                  "value_ms": 601.5699999999999,
-                  "n": 108,
+                  "value_ms": 82.7431,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
@@ -132,8 +132,8 @@
                   "interval": null
                 },
                 "p95": {
-                  "value_ms": 616.4,
-                  "n": 108,
+                  "value_ms": 88.96439999999998,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
@@ -143,8 +143,8 @@
                   "interval": null
                 },
                 "p99": {
-                  "value_ms": 632.8919999999999,
-                  "n": 108,
+                  "value_ms": 96.33418,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -156,69 +156,83 @@
               },
               "failure_penalized": {
                 "p50": {
-                  "value_ms": null,
-                  "n": 120,
+                  "value_ms": 60.409666666666666,
+                  "n": 60,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 22,
+                    "upper_rank": 39,
+                    "lower_ms": 52.006,
+                    "upper_ms": 65.43,
+                    "width_ms": 13.424000000000007,
+                    "coverage": 0.9726598661319221
+                  }
                 },
                 "p90": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": true,
+                  "value_ms": 97.444,
+                  "n": 60,
+                  "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": false,
+                  "penalized": true,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": false,
+                  "penalized": true,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 }
               }
             },
             "client.ttft_from_intended": {
               "boundary": "client",
-              "successful_missing": 115,
+              "successful_missing": 0,
               "successful": {
                 "p50": {
-                  "value_ms": null,
-                  "n": 0,
-                  "sufficient": false,
+                  "value_ms": 57.6375,
+                  "n": 54,
+                  "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
                   "reason": null,
-                  "interval": null
+                  "interval": {
+                    "lower_rank": 20,
+                    "upper_rank": 35,
+                    "lower_ms": 45.621,
+                    "upper_ms": 62.925000000000004,
+                    "width_ms": 17.304000000000002,
+                    "coverage": 0.9597764359042833
+                  }
                 },
                 "p90": {
-                  "value_ms": null,
-                  "n": 0,
+                  "value_ms": 82.7731,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
@@ -228,8 +242,8 @@
                   "interval": null
                 },
                 "p95": {
-                  "value_ms": null,
-                  "n": 0,
+                  "value_ms": 88.99439999999998,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
@@ -239,8 +253,8 @@
                   "interval": null
                 },
                 "p99": {
-                  "value_ms": null,
-                  "n": 0,
+                  "value_ms": 96.36418,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -252,47 +266,54 @@
               },
               "failure_penalized": {
                 "p50": {
-                  "value_ms": null,
-                  "n": 120,
+                  "value_ms": 60.43966666666667,
+                  "n": 60,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 22,
+                    "upper_rank": 39,
+                    "lower_ms": 52.036,
+                    "upper_ms": 65.46000000000001,
+                    "width_ms": 13.424000000000007,
+                    "coverage": 0.9726598661319221
+                  }
                 },
                 "p90": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": true,
+                  "value_ms": 97.474,
+                  "n": 60,
+                  "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": false,
+                  "penalized": true,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": false,
+                  "penalized": true,
                   "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
+                  "reason": null,
                   "interval": null
                 }
               }
@@ -302,8 +323,8 @@
               "successful_missing": 0,
               "successful": {
                 "p50": {
-                  "value_ms": 781.0,
-                  "n": 115,
+                  "value_ms": 216.9195,
+                  "n": 54,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
@@ -311,35 +332,28 @@
                   "observed_lower_bound_ms": null,
                   "reason": null,
                   "interval": {
-                    "lower_rank": 47,
-                    "upper_rank": 69,
-                    "lower_ms": 762.5,
-                    "upper_ms": 787.3,
-                    "width_ms": 24.799999999999955,
-                    "coverage": 0.9602494948734572
+                    "lower_rank": 20,
+                    "upper_rank": 35,
+                    "lower_ms": 204.635,
+                    "upper_ms": 235.894,
+                    "width_ms": 31.259000000000015,
+                    "coverage": 0.9597764359042833
                   }
                 },
                 "p90": {
-                  "value_ms": 866.06,
-                  "n": 115,
-                  "sufficient": true,
+                  "value_ms": 260.3193,
+                  "n": 54,
+                  "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
                   "reason": null,
-                  "interval": {
-                    "lower_rank": 97,
-                    "upper_rank": 110,
-                    "lower_ms": 838.7,
-                    "upper_ms": 880.4,
-                    "width_ms": 41.69999999999993,
-                    "coverage": 0.9577656535146152
-                  }
+                  "interval": null
                 },
                 "p95": {
-                  "value_ms": 880.4,
-                  "n": 115,
+                  "value_ms": 283.30994999999996,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
@@ -349,8 +363,8 @@
                   "interval": null
                 },
                 "p99": {
-                  "value_ms": 904.89,
-                  "n": 115,
+                  "value_ms": 294.21069,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -362,8 +376,8 @@
               },
               "failure_penalized": {
                 "p50": {
-                  "value_ms": 782.9869565217391,
-                  "n": 120,
+                  "value_ms": 224.85244444444444,
+                  "n": 60,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
@@ -371,46 +385,39 @@
                   "observed_lower_bound_ms": null,
                   "reason": null,
                   "interval": {
-                    "lower_rank": 49,
-                    "upper_rank": 72,
-                    "lower_ms": 765.7,
-                    "upper_ms": 793.2,
-                    "width_ms": 27.5,
-                    "coverage": 0.9646763174622304
+                    "lower_rank": 22,
+                    "upper_rank": 39,
+                    "lower_ms": 210.224,
+                    "upper_ms": 240.924,
+                    "width_ms": 30.700000000000017,
+                    "coverage": 0.9726598661319221
                   }
                 },
                 "p90": {
-                  "value_ms": 872.3234782608695,
-                  "n": 120,
-                  "sufficient": true,
+                  "value_ms": 294.914,
+                  "n": 60,
+                  "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
                   "penalized": false,
                   "observed_lower_bound_ms": null,
                   "reason": null,
-                  "interval": {
-                    "lower_rank": 101,
-                    "upper_rank": 115,
-                    "lower_ms": 858.9,
-                    "upper_ms": 912.5,
-                    "width_ms": 53.60000000000002,
-                    "coverage": 0.9681928936924331
-                  }
+                  "interval": null
                 },
                 "p95": {
-                  "value_ms": 905.8582608695651,
-                  "n": 120,
+                  "value_ms": null,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": false,
+                  "penalized": true,
                   "observed_lower_bound_ms": null,
                   "reason": null,
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -423,107 +430,11 @@
             },
             "client.e2e_from_intended": {
               "boundary": "client",
-              "successful_missing": 115,
+              "successful_missing": 0,
               "successful": {
                 "p50": {
-                  "value_ms": null,
-                  "n": 0,
-                  "sufficient": false,
-                  "n_min": 20,
-                  "n_min_exists": 6,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": null,
-                  "interval": null
-                },
-                "p90": {
-                  "value_ms": null,
-                  "n": 0,
-                  "sufficient": false,
-                  "n_min": 114,
-                  "n_min_exists": 29,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": null,
-                  "interval": null
-                },
-                "p95": {
-                  "value_ms": null,
-                  "n": 0,
-                  "sufficient": false,
-                  "n_min": 230,
-                  "n_min_exists": 59,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": null,
-                  "interval": null
-                },
-                "p99": {
-                  "value_ms": null,
-                  "n": 0,
-                  "sufficient": false,
-                  "n_min": 1164,
-                  "n_min_exists": 299,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": null,
-                  "interval": null
-                }
-              },
-              "failure_penalized": {
-                "p50": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": true,
-                  "n_min": 20,
-                  "n_min_exists": 6,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
-                },
-                "p90": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": true,
-                  "n_min": 114,
-                  "n_min_exists": 29,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
-                },
-                "p95": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": false,
-                  "n_min": 230,
-                  "n_min_exists": 59,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
-                },
-                "p99": {
-                  "value_ms": null,
-                  "n": 120,
-                  "sufficient": false,
-                  "n_min": 1164,
-                  "n_min_exists": 299,
-                  "penalized": false,
-                  "observed_lower_bound_ms": null,
-                  "reason": "successful_values_missing",
-                  "interval": null
-                }
-              }
-            },
-            "client.tpot": {
-              "boundary": "client",
-              "successful_missing": 7,
-              "successful": {
-                "p50": {
-                  "value_ms": 1.9822834645669296,
-                  "n": 108,
+                  "value_ms": 216.9495,
+                  "n": 54,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
@@ -531,17 +442,17 @@
                   "observed_lower_bound_ms": null,
                   "reason": null,
                   "interval": {
-                    "lower_rank": 44,
-                    "upper_rank": 65,
-                    "lower_ms": 1.8094488188976383,
-                    "upper_ms": 2.1527559055118113,
-                    "width_ms": 0.343307086614173,
-                    "coverage": 0.9571927792007744
+                    "lower_rank": 20,
+                    "upper_rank": 35,
+                    "lower_ms": 204.665,
+                    "upper_ms": 235.924,
+                    "width_ms": 31.259000000000015,
+                    "coverage": 0.9597764359042833
                   }
                 },
                 "p90": {
-                  "value_ms": 2.947874015748032,
-                  "n": 108,
+                  "value_ms": 260.34929999999997,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
@@ -551,8 +462,8 @@
                   "interval": null
                 },
                 "p95": {
-                  "value_ms": 3.2309055118110224,
-                  "n": 108,
+                  "value_ms": 283.33994999999993,
+                  "n": 54,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
@@ -562,8 +473,111 @@
                   "interval": null
                 },
                 "p99": {
-                  "value_ms": 3.503984251968504,
-                  "n": 108,
+                  "value_ms": 294.24069,
+                  "n": 54,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              },
+              "failure_penalized": {
+                "p50": {
+                  "value_ms": 224.88244444444445,
+                  "n": 60,
+                  "sufficient": true,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": {
+                    "lower_rank": 22,
+                    "upper_rank": 39,
+                    "lower_ms": 210.254,
+                    "upper_ms": 240.954,
+                    "width_ms": 30.700000000000017,
+                    "coverage": 0.9726598661319221
+                  }
+                },
+                "p90": {
+                  "value_ms": 294.944,
+                  "n": 60,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": null,
+                  "n": 60,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": null,
+                  "n": 60,
+                  "sufficient": false,
+                  "n_min": 1164,
+                  "n_min_exists": 299,
+                  "penalized": true,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                }
+              }
+            },
+            "client.tpot": {
+              "boundary": "client",
+              "successful_missing": 36,
+              "successful": {
+                "p50": {
+                  "value_ms": 11.051766666666666,
+                  "n": 18,
+                  "sufficient": false,
+                  "n_min": 20,
+                  "n_min_exists": 6,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p90": {
+                  "value_ms": 12.887979999999999,
+                  "n": 18,
+                  "sufficient": false,
+                  "n_min": 114,
+                  "n_min_exists": 29,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p95": {
+                  "value_ms": 13.189259999999999,
+                  "n": 18,
+                  "sufficient": false,
+                  "n_min": 230,
+                  "n_min_exists": 59,
+                  "penalized": false,
+                  "observed_lower_bound_ms": null,
+                  "reason": null,
+                  "interval": null
+                },
+                "p99": {
+                  "value_ms": 13.880412,
+                  "n": 18,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -576,7 +590,7 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": true,
                   "n_min": 20,
                   "n_min_exists": 6,
@@ -587,8 +601,8 @@
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 120,
-                  "sufficient": true,
+                  "n": 60,
+                  "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
                   "penalized": false,
@@ -598,7 +612,7 @@
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
@@ -609,7 +623,7 @@
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 120,
+                  "n": 60,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
@@ -623,20 +637,11 @@
           },
           "unsuccessful": {
             "error": {
-              "count": 2,
+              "count": 6,
               "elapsed_ms": {
-                "min": 12.4,
-                "p50": 12.4,
-                "max": 12.4
-              },
-              "elapsed_missing": 0
-            },
-            "timeout": {
-              "count": 3,
-              "elapsed_ms": {
-                "min": 30000.0,
-                "p50": 30000.0,
-                "max": 30000.0
+                "min": 3.0,
+                "p50": 5.5,
+                "max": 8.0
               },
               "elapsed_missing": 0
             }
@@ -644,71 +649,74 @@
         },
         "streaming": {
           "granularity": "chunk",
-          "responses": 108,
+          "responses": 54,
           "content_chunks_per_response": {
             "p50": 16.0,
             "p95": 16.0,
             "max": 16.0
           },
           "chunk_interarrival_ms": {
-            "p50": 17.0,
-            "p95": 30.6,
-            "max": 43.6,
-            "n": 1620
+            "p50": 11.193999999999999,
+            "p95": 19.05605,
+            "max": 19.996,
+            "n": 810
           },
-          "mean_tokens_per_chunk": 8.0,
+          "mean_tokens_per_chunk": 1.0,
           "note": "chunk-level timing: a streamed chunk can carry several tokens, so these are not inter-token latencies"
         },
         "tokens": {
           "output": {
-            "eligible": 115,
-            "known": 115,
-            "exact": 115,
+            "eligible": 54,
+            "known": 36,
+            "exact": 18,
             "by_source": {
-              "server_usage": 115
+              "estimated": 18,
+              "server_usage": 18,
+              "unknown": 18
             },
-            "known_sum": 14720,
-            "partial": false
+            "known_sum": 576,
+            "partial": true
           },
           "prompt": {
-            "eligible": 115,
-            "known": 115,
-            "exact": 115,
+            "eligible": 54,
+            "known": 54,
+            "exact": 18,
             "by_source": {
-              "server_usage": 115
+              "estimated": 36,
+              "server_usage": 18
             },
-            "known_sum": 471040,
+            "known_sum": 6912,
             "partial": false
           }
         },
         "intervals": {
           "rate": {
             "kind": "measured_span",
-            "started_at_ns": "1788609600123456789",
-            "ended_at_ns": "1788609661323456789",
-            "seconds": 61.2,
+            "started_at_ns": "1790000000005000000",
+            "ended_at_ns": "1790000001765441000",
+            "seconds": 1.760441,
             "numerator_cohort": "all_measured"
           },
           "scheduled_window": null,
           "dispatch_window": {
             "kind": "dispatch_window",
-            "started_at_ns": "1788609600157226987",
-            "ended_at_ns": "1788609659941439358",
-            "seconds": 59.784212371,
+            "started_at_ns": "1790000000005000000",
+            "ended_at_ns": "1790000001520926000",
+            "seconds": 1.515926,
             "numerator_cohort": "all_measured"
           },
           "drain": {
             "kind": "drain",
-            "started_at_ns": "1788609660423456789",
-            "ended_at_ns": "1788609661323456789",
-            "seconds": 0.9,
+            "started_at_ns": "1790000001520926000",
+            "ended_at_ns": "1790000001765441000",
+            "seconds": 0.244515,
             "numerator_cohort": "all_measured"
           },
           "measured_span": {
             "kind": "measured_span",
-            "started_at_ns": "1788609600123456789",
-            "ended_at_ns": "1788609661323456789",
-            "seconds": 61.2,
+            "started_at_ns": "1790000000005000000",
+            "ended_at_ns": "1790000001765441000",
+            "seconds": 1.760441,
             "numerator_cohort": "all_measured"
           },
           "configured_rate_per_second": null,
@@ -716,46 +724,46 @@
           "rate_reason": null
         },
         "throughput": {
-          "interval_seconds": 61.2,
+          "interval_seconds": 1.760441,
           "interval_kind": "measured_span",
           "numerator_cohort": "all_measured",
-          "requests_per_second": 1.8790849673202614,
-          "output_tokens_per_second": 240.52287581699346,
-          "total_tokens_per_second": 7937.254901960784
+          "requests_per_second": 30.674132220278896,
+          "output_tokens_per_second": 327.1907436829749,
+          "total_tokens_per_second": 2944.716693146774
         },
         "client_memory": {
           "observation_scope": "client_local",
           "window": {
-            "started_at_ns": "1788609600157226987",
-            "ended_at_ns": "1788609685436030076"
+            "started_at_ns": "1790000000005000000",
+            "ended_at_ns": "1790000001765441000"
           },
           "by_device": [
             {
               "sampler": "psutil",
               "device_id": null,
-              "peak_process_rss_bytes": 181403648,
+              "samples": 8,
               "peak_device_used_bytes": null,
-              "samples": 85
+              "peak_process_rss_bytes": 182359296
             }
           ]
         },
         "freshness": {
-          "generation": 7,
-          "last_record_ns": "1788609696600000000",
+          "generation": 3,
+          "last_record_ns": "1790000001468633000",
           "terminal": true
         }
       }
     },
     {
-      "case_id": "c8_in8192_out128",
+      "case_id": "c8_in64_out16_planned",
       "planned": true,
-      "observed": true,
+      "observed": false,
       "summary": {
         "selection": {
           "filter": {
             "phase": "measured",
             "cases": [
-              "c8_in8192_out128"
+              "c8_in64_out16_planned"
             ],
             "statuses": [],
             "stream": null,
@@ -765,56 +773,50 @@
             "completed_by_ns": null,
             "latency": null
           },
-          "params": "case=c8_in8192_out128&phase=measured",
-          "fingerprint": "sha256:a1d2e55f982c03cfcd8ea41bf4df98fa5b7923bed024f8aea0bae399eb8bd6ac",
-          "size": 8,
-          "pooled_cases": 1,
-          "whole_case": "c8_in8192_out128",
+          "params": "case=c8_in64_out16_planned&phase=measured",
+          "fingerprint": "sha256:7980e1ca59754415a4b76daa17069af00c7abc9112cb0438f51978b80deef834",
+          "size": 0,
+          "pooled_cases": 0,
+          "whole_case": null,
           "cohort": {
-            "valid": true,
+            "valid": null,
             "issues": [],
-            "reason": null
+            "reason": "not_a_cohort"
           },
           "rate": {
-            "eligible": true,
-            "rule": "case",
-            "reason": null,
-            "interval": {
-              "kind": "measured_span",
-              "started_at_ns": "1788609663000000000",
-              "ended_at_ns": "1788609696000000000",
-              "seconds": 33.0,
-              "numerator_cohort": "all_measured"
-            }
+            "eligible": false,
+            "rule": null,
+            "reason": "empty_selection",
+            "interval": null
           },
           "searched_fields": []
         },
         "counts": {
-          "offered": 8,
+          "offered": 0,
           "scheduled": null,
           "dropped": 0,
-          "sent": 8,
+          "sent": 0,
           "unreachable": 0,
           "delivery_unknown": 0,
           "rejected": 0,
-          "accepted": 8,
+          "accepted": 0,
           "successful": 0,
           "failed": 0,
-          "timed_out": 8,
+          "timed_out": 0,
           "cancelled": 0,
-          "censored": 8,
+          "censored": 0,
           "other": {},
           "server_admitted": null,
           "server_evidence_coverage": null,
-          "cohort_valid": true,
+          "cohort_valid": null,
           "issues": [],
           "server_evidence": "not_indexed"
         },
         "failure": {
-          "share": 1.0,
-          "numerator": 8,
-          "denominator": 8,
-          "reason": null
+          "share": null,
+          "numerator": 0,
+          "denominator": 0,
+          "reason": "empty_selection"
         },
         "latency": {
           "rule": {
@@ -876,46 +878,46 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 20,
                   "n_min_exists": 6,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 }
               }
@@ -972,46 +974,46 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 20,
                   "n_min_exists": 6,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 }
               }
@@ -1068,46 +1070,46 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 20,
                   "n_min_exists": 6,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 }
               }
@@ -1164,46 +1166,46 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 20,
                   "n_min_exists": 6,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 }
               }
@@ -1260,62 +1262,52 @@
               "failure_penalized": {
                 "p50": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 20,
                   "n_min_exists": 6,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p90": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 114,
                   "n_min_exists": 29,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p95": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 230,
                   "n_min_exists": 59,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 },
                 "p99": {
                   "value_ms": null,
-                  "n": 8,
+                  "n": 0,
                   "sufficient": false,
                   "n_min": 1164,
                   "n_min_exists": 299,
-                  "penalized": true,
+                  "penalized": false,
                   "observed_lower_bound_ms": null,
-                  "reason": null,
+                  "reason": "no_values",
                   "interval": null
                 }
               }
             }
           },
-          "unsuccessful": {
-            "timeout": {
-              "count": 8,
-              "elapsed_ms": {
-                "min": 30000.0,
-                "p50": 30000.0,
-                "max": 30000.0
-              },
-              "elapsed_missing": 0
-            }
-          }
+          "unsuccessful": {}
         },
         "streaming": {
           "granularity": "chunk",
@@ -1352,67 +1344,16 @@
             "partial": false
           }
         },
-        "intervals": {
-          "rate": {
-            "kind": "measured_span",
-            "started_at_ns": "1788609663000000000",
-            "ended_at_ns": "1788609696000000000",
-            "seconds": 33.0,
-            "numerator_cohort": "all_measured"
-          },
-          "scheduled_window": null,
-          "dispatch_window": {
-            "kind": "dispatch_window",
-            "started_at_ns": "1788609663000000000",
-            "ended_at_ns": "1788609665625000000",
-            "seconds": 2.625,
-            "numerator_cohort": "all_measured"
-          },
-          "drain": {
-            "kind": "drain",
-            "started_at_ns": "1788609666000000000",
-            "ended_at_ns": "1788609696000000000",
-            "seconds": 30.0,
-            "numerator_cohort": "all_measured"
-          },
-          "measured_span": {
-            "kind": "measured_span",
-            "started_at_ns": "1788609663000000000",
-            "ended_at_ns": "1788609696000000000",
-            "seconds": 33.0,
-            "numerator_cohort": "all_measured"
-          },
-          "configured_rate_per_second": null,
-          "realized_offered_rate_per_second": null,
-          "rate_reason": null
-        },
-        "throughput": {
-          "interval_seconds": 33.0,
-          "interval_kind": "measured_span",
-          "numerator_cohort": "all_measured",
-          "requests_per_second": 0.0,
-          "output_tokens_per_second": 0.0,
-          "total_tokens_per_second": 0.0
-        },
+        "intervals": null,
+        "throughput": null,
         "client_memory": {
           "observation_scope": "client_local",
-          "window": {
-            "started_at_ns": "1788609663000000000",
-            "ended_at_ns": "1788609695625000000"
-          },
-          "by_device": [
-            {
-              "sampler": "psutil",
-              "device_id": null,
-              "peak_process_rss_bytes": 181403648,
-              "peak_device_used_bytes": null,
-              "samples": 33
-            }
-          ]
+          "window": null,
+          "by_device": []
         },
         "freshness": {
-          "generation": 7,
-          "last_record_ns": "1788609696600000000",
+          "generation": 3,
+          "last_record_ns": "1790000001468633000",
           "terminal": true
         }
       }
