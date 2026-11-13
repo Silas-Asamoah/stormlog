@@ -338,7 +338,9 @@ its index holds a reference for: every client request row, the first 1,000
 lines of each event type, problem lines, dispatch and first-content lines,
 and the cut. Errors: `404 line_out_of_range` (`details.reason` `past_end`
 or `not_indexed`); `409 stale_line` when `sha256` differs or the file's
-bytes changed.
+bytes changed; `422 unreadable` (`details.reason` `oversized`, with the
+line's `length` and the `limit`) for a line longer than the line limit,
+which Studio never reads.
 
 ```bash
 curl -s -H "Authorization: Bearer $T" \
@@ -348,7 +350,7 @@ curl -s -H "Authorization: Bearer $T" \
 **`GET /api/v1/artifact/evidence`** (bearer). `artifact`, `line`, optional
 `record_id` and `sha256`. Answers `evidence`: `resolved`, or `unresolved`
 with `line_out_of_range`, `hash_mismatch` or `record_id_mismatch`, and the
-line found.
+line found. Errors: `422 unreadable` (`oversized`) as for the line route.
 
 **`GET /api/v1/artifact/export/preview`** (bearer). `artifact` and the
 filters. Answers `export_preview`: the count and byte size of the export,
