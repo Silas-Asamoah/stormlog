@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import math
 import numbers
@@ -795,6 +796,13 @@ def test_importing_contracts_loads_no_other_studio_module() -> None:
         "stormlog.studio",
         "stormlog.studio.contracts",
     ]
+
+
+def test_a_workspace_scanner_can_be_waited_on() -> None:
+    wait = vars(contracts.WorkspaceScanner)["wait"]
+    assert list(inspect.signature(wait).parameters) == ["self", "timeout_s"]
+    assert inspect.signature(wait).return_annotation in (bool, "bool")
+    assert "never raises on a timeout" in _doc(wait)
 
 
 def test_every_public_name_is_exported() -> None:
