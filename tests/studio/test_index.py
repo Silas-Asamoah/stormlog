@@ -18,6 +18,7 @@ import tracemalloc
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, ParamSpec, TypeVar
 
 import pytest
@@ -728,6 +729,128 @@ def test_odd_values_round_trip_exactly(tmp_path: Path) -> None:
     assert snapshot.column("x")[:3] == [True, "yes", [1, {"y": None}]]
     assert snapshot.requests[4].load_gaps() == ()
     assert snapshot.requests[4].load_error_message() is None
+
+
+# With their wrappers, 126 lists nest 128 deep (the limit) on line 0 and 127
+# on the others; 127 lists nest 129 on line 0. 900 and 5000 are past it.
+@pytest.mark.parametrize("depth", [126, 127, 900, 5000])
+def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
+    tmp_path: Path, depth: int
+) -> None:
+    """A line nested past MAX_NESTING is the reader's not_json problem on
+    every Python (json.loads takes 50,000 levels from 3.14). One within it
+    is kept whole, and its request's detail can be copied and written as a
+    route does (F-4: finite_copy recursed past Python's limit and the
+    request route answered 500). Either way the index is ready.
+    """
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+    from stormlog.studio.summaries import request_detail
+
+    nested = "[" * depth + "]" * depth
+    head = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1,'
+    lines = [
+        head + '"status":"running","config":{"d":' + nested + "}}",
+        '{"event_type":"infer.workload","schema_version":1,"w":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"q",'
+        '"status":"ok","weird":' + nested + "}",
+        '{"event_type":"infer.system_sample","t":1,"weird":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+    ]
+    path = tmp_path / f"deep{depth}.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    problems = {p.ref.line: p.code for p in snapshot.problems}
+    nesting = [depth + 2, depth + 1, depth + 1, depth + 1]
+    deep = {line for line, n in enumerate(nesting) if n > MAX_NESTING}
+    assert problems == dict.fromkeys(deep, "not_json")
+    assert snapshot.problem_count == len(problems)
+    ids = [row.request_id for row in snapshot.requests]
+    assert ids == (["r"] if 2 in deep else ["q", "r"])
+    for line, kind in ((0, "infer.session"), (1, "infer.workload")):
+        kept = snapshot.kept.get(kind, ())
+        assert len(kept) == (line not in deep), (depth, line)
+        encode_json({"kept": kept})
+    session = snapshot.session
+    assert (session is None) == (0 in deep)
+    assert session is None or session.config == json.loads('{"d":' + nested + "}")
+    if 2 not in deep:
+        assert snapshot.requests[0]["weird"] == json.loads(nested)
+    if 3 not in deep:
+        assert snapshot.samples[0]["weird"] == json.loads(nested)
+    for row in range(len(snapshot.requests)):
+        encode_json(request_detail(snapshot, row, None))
+    encode_json({"artifact": artifact_block(snapshot)})
+
+
+_SESSION = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1'
+_ROWS = [
+    '{"event_type":"infer.request","session_id":"s1","request_id":"q"}',
+    '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+]
+
+
+def _refuse(*args: Any, **kwargs: Any) -> Any:
+    raise RecursionError("maximum recursion depth exceeded")
+
+
+@pytest.mark.parametrize("what", ["the record", "the session's config"])
+def test_a_record_finite_copy_refuses_keeps_its_line_and_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, what: str
+) -> None:
+    """The reader refuses lines nested past MAX_NESTING, so no record through
+    it can make finite_copy raise; the guard stays, and this pins it."""
+    finite_copy = index_module.finite_copy
+
+    def copy(value: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(value, dict) and value.get("refuse"):
+            _refuse()
+        return finite_copy(value, *args, **kwargs)
+
+    monkeypatch.setattr(index_module, "finite_copy", copy)
+    if what == "the record":
+        workload = '{"event_type":"infer.workload","refuse":true}'
+        lines = [_SESSION + "}", workload, *_ROWS]
+    else:
+        lines = [_SESSION + ',"config":{"refuse":true}}', *_ROWS]
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    line = 1 if what == "the record" else 0
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (line, "undecodable", f"{what} is nested too deeply to keep; its line is kept")
+    ]
+    assert [row.request_id for row in snapshot.requests] == ["q", "r"]
+    assert "infer.workload" not in snapshot.kept
+    if what == "the record":
+        assert "kept_records" in snapshot.limits_hit
+    else:
+        assert snapshot.session is not None and snapshot.session.config == {}
+
+
+def test_a_value_json_dumps_refuses_reads_as_none_in_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The side table's own guard: a value json.dumps refuses is dropped, and
+    its line is one undecodable problem naming the field."""
+
+    def dumps(value: Any, *args: Any, **kwargs: Any) -> str:
+        if value == ["refused"]:
+            _refuse()
+        return json.dumps(value, *args, **kwargs)
+
+    stub = SimpleNamespace(dumps=dumps, loads=json.loads)
+    monkeypatch.setattr(index_module, "json", stub)
+    sample = '{"event_type":"infer.system_sample","timestamp_ns":2,"w":["refused"]}'
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join([_SESSION + "}", *_ROWS, sample]) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (3, "undecodable", "field w is nested too deeply to keep; its line is kept")
+    ]
+    assert snapshot.samples[0].get("w") is None
 
 
 def test_many_distinct_strings_move_to_a_byte_pool(tmp_path: Path) -> None:
