@@ -21,6 +21,7 @@ import json
 import math
 import random
 import signal
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -1198,3 +1199,85 @@ def large_artifact(directory: Path) -> Path:
         fail_every=100,
         tokens="mixed",
     )
+
+
+# --- What differs between two generations of one fixture -----------------
+
+# Keys whose values differ between two generations of the same synthetic
+# fixture, or between two Studio instances serving it (design §9.2). From
+# the process: ``pid`` (infer.context, the terminal infer.session summary),
+# ``context_id`` (a digest of the context, so it follows ``pid``), and
+# ``environment_proxies`` (the proxy variables set, recorded in the run
+# config). From the machine or the checkout: ``host``, ``clock_domain`` and
+# ``boot_id``, and ``source_version``. From Studio: ``instance_id`` and
+# ``index_id``. Synthetic timestamps are fixed; profiled fixtures also vary
+# in every timestamp, ID and measured value, so they need ``timestamps``
+# and more than this list.
+VARYING_FIELDS = frozenset(
+    {
+        "context_id",
+        "pid",
+        "host",
+        "clock_domain",
+        "boot_id",
+        "source_version",
+        "environment_proxies",
+        "instance_id",
+        "index_id",
+    }
+)
+VARYING = "<varying>"
+
+
+def is_timestamp(key: str) -> bool:
+    """A wall-clock key: ``*_ns``, ``*_at`` or ``timestamp``."""
+    return key.endswith(("_ns", "_at")) or key == "timestamp"
+
+
+def normalised(value: Any, *, timestamps: bool = False) -> Any:
+    """``value`` with every ``VARYING_FIELDS`` value, at any depth, replaced
+    by ``VARYING``; with ``timestamps``, every timestamp key's too."""
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                VARYING
+                if key in VARYING_FIELDS or (timestamps and is_timestamp(key))
+                else normalised(item, timestamps=timestamps)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [normalised(item, timestamps=timestamps) for item in value]
+    return value
+
+
+def varying_paths(first: Any, second: Any, path: str = "") -> set[str]:
+    """The dotted paths where ``first`` and ``second`` differ (``[]`` for a
+    list element), down to the first differing key."""
+    if isinstance(first, Mapping) and isinstance(second, Mapping):
+        found: set[str] = set()
+        for key in set(first) | set(second):
+            inner = f"{path}.{key}" if path else str(key)
+            found |= varying_paths(first.get(key), second.get(key), inner)
+        return found
+    if isinstance(first, list) and isinstance(second, list):
+        if len(first) == len(second):
+            found = set()
+            for one, other in zip(first, second):
+                found |= varying_paths(one, other, f"{path}[]")
+            return found
+    return set() if first == second else {path}
+
+
+def main(argv: Sequence[str]) -> int:
+    """``python -m tests.studio.artifacts NAME DIRECTORY``: build one standard
+    artifact into DIRECTORY and print its path, in a fresh process."""
+    name, directory = argv
+    target = Path(directory)
+    target.mkdir(parents=True, exist_ok=True)
+    print(STANDARD_ARTIFACTS[name](target))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
