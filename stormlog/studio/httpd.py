@@ -395,7 +395,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _request(self) -> HttpRequest:
         target = urlsplit(self.path)
-        if not self.path.startswith("/") or target.fragment:
+        # No Studio path starts with "//". http.server collapses leading
+        # slashes in self.path ("//evil/x" became "/evil/x", a misleading
+        # 404, and "///api/v1/health" was served), so read the target as
+        # the request line sent it.
+        sent = self.requestline.split(" ")
+        if (
+            not self.path.startswith("/")
+            or (len(sent) > 1 and sent[1].startswith("//"))
+            or target.fragment
+        ):
             raise MalformedRequest("malformed_request", "the request target is bad")
         try:
             path = unquote(target.path, errors="strict")
