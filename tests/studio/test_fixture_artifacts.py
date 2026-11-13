@@ -7,6 +7,9 @@ import contextlib
 import io
 import json
 import math
+import os
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -38,16 +41,20 @@ from tests.studio.artifacts import (
     PROBLEM_LINES,
     STANDARD_ARTIFACTS,
     UNSUPPORTED,
+    VARYING,
+    VARYING_FIELDS,
     CaseSpec,
     GrowingCopy,
     SamplePlan,
     decoded_records,
     last_line_start,
+    normalised,
     profile_artifact,
     profile_config,
     rewrite_in_place,
     synthetic_artifact,
     truncated_copy,
+    varying_paths,
     with_execution_import,
 )
 from tests.studio.conftest import StandardArtifacts
@@ -662,6 +669,64 @@ def test_the_fake_server_holds_every_nth_measured_request() -> None:
     assert delays == [0.0, 0.5, 0.0, 0.5]
     with pytest.raises(ValueError):
         CasePolicy(delay_seconds=-1.0)
+
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+
+
+def _generate(name: str, directory: Path, **env: str) -> list[dict[str, Any]]:
+    """``name``'s records, as a fresh Python process writes them."""
+    environment = {**os.environ, "PYTHONPATH": str(REPOSITORY), **env}
+    result = subprocess.run(
+        [sys.executable, "-m", "tests.studio.artifacts", name, str(directory)],
+        cwd=REPOSITORY,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    return _lines(Path(result.stdout.strip()))
+
+
+def test_two_generations_differ_only_in_the_varying_fields(tmp_path: Path) -> None:
+    # Two processes, one with an extra proxy variable, as two CI jobs would.
+    first = _generate("samples", tmp_path / "a")
+    second = _generate("samples", tmp_path / "b", studio_fixture_proxy="x.invalid")
+    differing = {
+        path for one, other in zip(first, second) for path in varying_paths(one, other)
+    }
+    keys = [{key.removesuffix("[]") for key in path.split(".")} for path in differing]
+
+    assert len(first) == len(second) and first != second
+    # Every difference is at or under a varying field, and these did vary.
+    assert all(path_keys & VARYING_FIELDS for path_keys in keys)
+    assert {"context_id", "pid", "environment_proxies"} <= set().union(*keys)
+    assert normalised(first) == normalised(second)
+
+
+def test_normalised_masks_varying_fields_at_any_depth() -> None:
+    record = {
+        "pid": 1,
+        "summary": {"host": "a", "pid": 2, "ended_at_ns": 5},
+        "items": [{"index_id": "x", "count": 3}],
+        "timestamp": 9,
+    }
+
+    assert normalised(record) == {
+        "pid": VARYING,
+        "summary": {"host": VARYING, "pid": VARYING, "ended_at_ns": 5},
+        "items": [{"index_id": VARYING, "count": 3}],
+        "timestamp": 9,
+    }
+    assert normalised(record, timestamps=True)["summary"]["ended_at_ns"] == VARYING
+    assert normalised(record, timestamps=True)["timestamp"] == VARYING
+    assert varying_paths(record, normalised(record)) == {
+        "pid",
+        "summary.host",
+        "summary.pid",
+        "items[].index_id",
+    }
 
 
 def _samples(path: Path) -> list[dict[str, Any]]:
