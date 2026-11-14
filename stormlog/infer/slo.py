@@ -24,6 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeGuard
 
 from .errors import InferInputError, InferUsageError
+from .report_stats import is_number
 
 if TYPE_CHECKING:
     from .populations import MeasuredInterval
@@ -763,7 +764,7 @@ def _client_tpot(
     if record.get("output_token_source") != "server_usage":
         return CriterionValue(None, reason="output_tokens_not_server_reported")
     tokens = record.get("output_tokens")
-    if not isinstance(tokens, int) or isinstance(tokens, bool):
+    if not isinstance(tokens, int) or not is_number(tokens):
         return CriterionValue(None, reason="no_output_tokens")
     if tokens <= 1:
         return CriterionValue(
@@ -898,7 +899,11 @@ def _reject_unknown(
 
 
 def _is_real(value: Any) -> TypeGuard[int | float]:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    """An int or float, but not a bool and not an int past a float's range;
+    NaN and infinities pass here and are refused by ``_plausible``."""
+    if isinstance(value, float):
+        return True
+    return is_number(value)
 
 
 def _finite(value: Any) -> TypeGuard[int | float]:
