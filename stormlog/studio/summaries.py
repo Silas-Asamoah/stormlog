@@ -504,7 +504,9 @@ def _ms_from_origin(ns: int | None, origin_ns: int | None) -> float | None:
 
 
 def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    """A JSON int that is a number: not a bool, and within a float's range
+    (an int past it is no number anywhere Stormlog reads one)."""
+    return isinstance(value, int) and is_number(value)
 
 
 def _ns(value: Any) -> int | None:

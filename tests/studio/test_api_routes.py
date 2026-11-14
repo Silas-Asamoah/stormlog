@@ -1108,7 +1108,7 @@ def test_a_partial_index_shows_its_cut(
     assert panels["panels"]["requests"]["reason"] == "index_budget"
 
 
-@pytest.mark.parametrize("field", HUGE_FIELDS)
+@pytest.mark.parametrize("field", [*HUGE_FIELDS, "http_status"])
 @pytest.mark.parametrize("huge", [10**400, -(10**400)], ids=["e400", "-e400"])
 def test_an_int_past_a_floats_range_is_analyzed_indexed_and_served(
     private: Callable[..., Served], tmp_path: Path, field: str, huge: int
@@ -1116,7 +1116,8 @@ def test_an_int_past_a_floats_range_is_analyzed_indexed_and_served(
     """Fable's P2-2: such an int in a token count or a latency field made
     ``infer analyze`` exit 1 and the summary a 500, or failed the index
     (``slo._number`` called ``float()`` on it). The summary served from
-    the index's columns is the one built from the records."""
+    the index's columns is the one built from the records; the rows,
+    points and request are served as no number (final-11's P2)."""
     timed: dict[str, Any] = {"intended_at_ns": ORIGIN, "dispatch_lag_ms": 1.0}
     records = closed_case(4, **timed)
     records[3] = request(1, **{**timed, field: huge})
@@ -1133,6 +1134,37 @@ def test_an_int_past_a_floats_range_is_analyzed_indexed_and_served(
     want = summaries.summary(rows, selection.select(rows, RequestFilter()))
     for key in ("counts", "latency", "streaming", "tokens", "throughput"):
         assert served[key] == json.loads(json.dumps(want[key])), key
+    _assert_rows_served_without(studio, str(huge))
+
+
+def _assert_rows_served_without(studio: Served, huge: str) -> None:
+    """Studio's row path kept such an int: a huge start or end made the
+    requests, points and request routes a 500 (the ms offset overflowed),
+    and a huge token count or HTTP status was served as a string where
+    the schema says integer or null. Each reply is 200, valid, and
+    carries the int nowhere but the request's verbatim ``record``; every
+    sorted page too."""
+
+    def get(name: str, **params: Any) -> dict[str, Any]:
+        reply = studio.get(f"/api/v1/artifact/{name}", artifact="run.jsonl", **params)
+        document = assert_document(reply, name)
+        read = {key: value for key, value in document.items() if key != "record"}
+        assert huge not in json.dumps(read), (name, params)
+        return document
+
+    assert len(get("requests")["rows"]) == 4
+    assert get("request", request_id="r1")["row"]["request_id"] == "r1"
+    for x in ("start", "end", "arrival"):
+        get("points", x=x, y="client.e2e")
+    for sort in ("started_at", "output_tokens"):
+        for order in ("asc", "desc"):
+            page = get("requests", sort=sort, order=order, limit=1)
+            ids = [row["request_id"] for row in page["rows"]]
+            while page.get("next_cursor") is not None and len(ids) < 10:
+                cursor = page["next_cursor"]
+                page = get("requests", sort=sort, order=order, limit=1, cursor=cursor)
+                ids += [row["request_id"] for row in page["rows"]]
+            assert sorted(ids) == ["r0", "r1", "r2", "r3"], (sort, order, ids)
 
 
 # --- End to end: `stormlog studio <fixture>` as a subprocess -----------------------------
