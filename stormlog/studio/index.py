@@ -26,8 +26,12 @@ stops reading at the first request it could not keep: the snapshot is
 ``partial`` with ``limits_hit`` naming ``rows``, ``bytes_read`` is where it
 stopped, and every number is about the lines before that cut. Past the
 sample budget it keeps reading but keeps no more samples (``partial``,
-``samples``). An oversized or over-budget kept record leaves its line
-reference only (``kept_records``).
+``samples``). Past the context budget the reader refuses new context
+definitions, so the lines that refer to them are problems (``partial``,
+``contexts``); the definitions it holds count in :meth:`memory`. An oversized or over-budget kept record leaves its line
+reference only (``kept_records``), and so does one nested too deep to
+copy, as an ``undecodable`` problem; a field nested too deep for the side
+table reads as None, with the same problem.
 
 Only one builder task runs per artifact at a time; request threads read
 snapshots, whose columns the builder only ever appends to.
@@ -35,6 +39,7 @@ snapshots, whose columns the builder only ever appends to.
 
 from __future__ import annotations
 
+import ctypes
 import json
 import logging
 import math
@@ -61,6 +66,7 @@ from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio.contracts import (
     CLIENT_COLUMN_PREFIX,
     ConflictError,
+    GapPool,
     IndexFailure,
     IndexSnapshot,
     IndexStatus,
@@ -73,10 +79,13 @@ from stormlog.studio.contracts import (
     SessionInfo,
     StudioError,
     WorkspaceRoot,
+    encode_json,
     finite_copy,
+    identity_text,
 )
 
 __all__ = [
+    "trim_heap",
     "CLIENT_METRICS",
     "GAPS",
     "ERROR_MESSAGE",
@@ -383,6 +392,9 @@ class _RecordStore:
         self.side: dict[str, dict[int, str]] = {}
         self.side_bytes = 0
         self.rows = 0
+        # keys whose value had no JSON text (nested too deep); the caller
+        # records the problem and clears the list
+        self.dropped: list[str] = []
 
     def add(self, record: Mapping[str, Any]) -> int:
         row = self.rows
@@ -421,7 +433,14 @@ class _RecordStore:
         self.put_side(key, row, value)
 
     def put_side(self, key: str, row: int, value: Any) -> None:
-        text = json.dumps(value)
+        """Keep ``value`` as JSON text; one ``json.loads`` accepted but
+        ``json.dumps`` refuses (nested too deep) reads as None, its key
+        noted in ``dropped``."""
+        try:
+            text = json.dumps(value)
+        except (RecursionError, ValueError):
+            self.dropped.append(key)
+            return
         self.side.setdefault(key, {})[row] = text
         self.side_bytes += len(text) + _ENTRY_BYTES
 
@@ -577,10 +596,6 @@ def _as_gaps(gaps: list[Any]) -> list[float]:
     return [_gap_value(gap) for gap in gaps]
 
 
-def _identity_text(value: Any, present: bool) -> str:
-    return str(value) if present else "unknown"
-
-
 class _Requests:
     """The client requests of one index: rows, client values, pools, IDs."""
 
@@ -598,6 +613,9 @@ class _Requests:
         self.non_numeric_gaps: dict[int, int] = {}
         self.gaps: array[float] | None = array("d")
         self.gap_start: array[int] | None = array("q")
+        # 1 where the row has no text message (null, absent or a side
+        # value); kept when the pool is dropped, as gap_count is for gaps
+        self.error_null = bytearray()
         self.errors: bytearray | None = bytearray()
         self.error_start: array[int] | None = array("q")
         self.error_length: array[int] | None = array("i")
@@ -613,9 +631,7 @@ class _Requests:
         self._add_client(client_values(record))
         self._add_gaps(row, record.get(GAPS))
         self._add_error(row, record.get(ERROR_MESSAGE))
-        self.ids.add(
-            _identity_text(record.get("request_id"), "request_id" in record), row
-        )
+        self.ids.add(identity_text(record.get("request_id")), row)
         self.count = row + 1
         return row
 
@@ -655,6 +671,7 @@ class _Requests:
         self.gaps.extend(_as_gaps(gaps))
 
     def _add_error(self, row: int, message: Any) -> None:
+        self.error_null.append(type(message) is not str)
         if type(message) is not str:
             if message is not None:
                 self.store.put_side(ERROR_MESSAGE, row, message)
@@ -678,7 +695,7 @@ class _Requests:
         """Bytes of the rows, without the gap and error-message pools."""
         client = sum(9 * len(values) for values in self.client.values())
         size = self.store.nbytes() + self.refs.nbytes() + client
-        size += 4 * len(self.gap_count) + self.ids.nbytes()
+        size += 4 * len(self.gap_count) + len(self.error_null) + self.ids.nbytes()
         size += sys.getsizeof(self.non_numeric_gaps)
         return size + 4 * (len(self.dispatch.data) + len(self.first_content.data))
 
@@ -730,7 +747,7 @@ class _RequestView:
 
     def request_id(self, row: int) -> str:
         _, keys = self.store.keys(row)
-        return _identity_text(self.store.value("request_id", row), "request_id" in keys)
+        return identity_text(self.store.value("request_id", row))
 
     def rows_of(self, request_id: str) -> tuple[int, ...]:
         return self.requests.ids.lookup(request_id, self.n, self.request_id)
@@ -745,6 +762,8 @@ class _RequestView:
         return list(self.gaps[start : start + count])
 
     def error_of(self, row: int) -> str | None:
+        if self.requests.error_null[row]:
+            return None  # no text: needs no pool, so no line read (F-11)
         if self.errors is None or self.error_start is None:
             raise NotResident(ERROR_MESSAGE)
         assert self.error_length is not None
@@ -800,7 +819,8 @@ class ColumnRow(RequestRow):
     ``error_message`` raises :class:`NotResident` when its pool is not
     resident; :meth:`load_gaps` and :meth:`load_error_message` then read
     the row's line, once, and raise ``ConflictError("stale_line")`` if its
-    bytes changed.
+    bytes changed. A null gaps list or error message is known without the
+    pool, so it reads as None and needs no line read.
     """
 
     __slots__ = ("_view", "_row")
@@ -819,9 +839,7 @@ class ColumnRow(RequestRow):
 
     def _identity(self, key: str) -> str:
         _, keys = self._view.store.keys(self._row)
-        if key not in keys:
-            return "unknown"
-        return str(self[key])
+        return identity_text(self[key]) if key in keys else "unknown"
 
     @property
     def session_id(self) -> str:
@@ -934,6 +952,33 @@ class _Rows(Sequence[RequestRow]):
         return ColumnRow(self._view, position)
 
 
+class _RefColumn(Sequence[LineRef]):
+    """``ColumnTable.line_refs``: the first ``n`` line references, each
+    made on access from the reference arrays (rows below ``n`` never
+    change, and nothing exports the arrays' buffers)."""
+
+    def __init__(self, refs: _Refs, n: int) -> None:
+        self._refs = refs
+        self._n = n
+
+    def __len__(self) -> int:
+        return self._n
+
+    @overload
+    def __getitem__(self, index: int) -> LineRef: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[LineRef]: ...
+
+    def __getitem__(self, index: int | slice) -> LineRef | Sequence[LineRef]:
+        if isinstance(index, slice):
+            return [self._refs.get(i) for i in range(*index.indices(self._n))]
+        position = index + self._n if index < 0 else index
+        if not 0 <= position < self._n:
+            raise IndexError("line reference index out of range")
+        return self._refs.get(position)
+
+
 class ColumnTable:
     """``IndexSnapshot.table``: whole columns of one snapshot (D-1).
 
@@ -941,14 +986,79 @@ class ColumnTable:
     value in every row is an ``array`` (compact; elements are Python
     numbers when read); any other column is a list with None where a row
     lacks a value. ``client.<metric>`` gives each row's ``value_ms``.
+
+    It is the contract's ``ColumnarTable`` too (Fable's F-2): the flat
+    arrays below are copies of the first ``n`` rows of the index's arrays,
+    built once per table and cached, so ``numpy.frombuffer`` on them never
+    blocks the builder's appends (an exported buffer would).
     """
 
     def __init__(self, view: _RequestView) -> None:
         self._view = view
         self._columns: dict[str, Sequence[Any]] = {}
+        self._arrays: dict[tuple[str, str], Any] = {}
 
     def __len__(self) -> int:
         return self._view.n
+
+    def _cached(self, key: tuple[str, str], make: Callable[[], Any]) -> Any:
+        value = self._arrays.get(key)
+        if value is None:
+            value = self._arrays[key] = make()
+        return value
+
+    def client_values(self, metric: str) -> Sequence[float]:
+        values = self._view.requests.client[metric]  # KeyError: unknown
+        result: Sequence[float] = self._cached(
+            ("client", metric), lambda: values[: self._view.n]
+        )
+        return result
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]:
+        requests = self._view.requests
+        codes = requests.reasons[metric]  # KeyError: unknown
+        result: tuple[Sequence[int], tuple[tuple[str | None, bool], ...]] = (
+            self._cached(
+                ("reasons", metric),
+                lambda: (codes[: self._view.n], tuple(requests.reason_table)),
+            )
+        )
+        return result
+
+    def line_refs(self) -> Sequence[LineRef]:
+        return _RefColumn(self._view.requests.refs, self._view.n)
+
+    def line_lengths(self) -> Sequence[int]:
+        lengths = self._view.requests.refs.length
+        result: Sequence[int] = self._cached(
+            ("refs", "length"), lambda: lengths[: self._view.n]
+        )
+        return result
+
+    def gap_counts(self) -> Sequence[int]:
+        counts = self._view.requests.gap_count
+        result: Sequence[int] = self._cached(
+            ("gaps", "count"),
+            lambda: array("i", [max(0, c) for c in counts[: self._view.n]]),
+        )
+        return result
+
+    def gap_pool(self) -> GapPool:
+        view = self._view
+        if view.gaps is None or view.gap_start is None:
+            raise NotResident(GAPS)
+        gaps, starts = view.gaps, view.gap_start
+        counts = self.gap_counts()
+
+        def make() -> GapPool:
+            n = view.n
+            end = starts[n - 1] + counts[n - 1] if n else 0
+            return GapPool(gaps[:end], starts[:n], counts)
+
+        pool: GapPool = self._cached(("gaps", "pool"), make)
+        return pool
 
     def column(self, name: str) -> Sequence[Any]:
         cached = self._columns.get(name)
@@ -1105,6 +1215,25 @@ class _StoreRows(Sequence[Mapping[str, Any]]):
 # --- One index -----------------------------------------------------------
 
 
+def trim_heap() -> bool:
+    """Hand the C allocator's free pages back to the OS; True if it ran.
+
+    A build grows many arrays by reallocation, and glibc keeps the freed
+    blocks: Fable measured 591 MiB RSS after a 500,000-row build against
+    275 MiB traced, and 416 MiB after ``malloc_trim(0)`` (F-12). Linux
+    only, through ctypes, best effort: it never raises.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+        trim.argtypes = [ctypes.c_size_t]
+        trim(0)
+    except Exception:  # no glibc (musl), no symbol, no ctypes: nothing to do
+        return False
+    return True
+
+
 def _event_name(record: Mapping[str, Any]) -> str:
     name = record.get("event_type")
     return name if isinstance(name, str) else "unknown"
@@ -1118,6 +1247,17 @@ def _version(record: Mapping[str, Any]) -> int:
 
 def _int_or_none(value: Any) -> int | None:
     return value if type(value) is int else None
+
+
+def _finite_record(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    """``finite_copy`` of a record to keep whole, or None when it is
+    nested too deep to copy or to write as JSON again (Fable's F-4)."""
+    try:
+        copied = finite_copy(record)[0]
+        encode_json(copied)  # what a route does with it
+    except (RecursionError, ValueError):
+        return None
+    return copied
 
 
 @dataclass
@@ -1159,11 +1299,14 @@ class _State:
     inventory: dict[str, dict[int, int]] = field(default_factory=dict)
     problems: list[LineProblem] = field(default_factory=list)
     problem_count: int = 0
+    problem_counts: dict[str, int] = field(default_factory=dict)
     limits_hit: set[LimitHit] = field(default_factory=set)
     sessions: set[str] = field(default_factory=set)
     session: _Session | None = None
     origin_ns: int | None = None
     failure: IndexFailure | None = None
+    cut: LineRef | None = None  # the first request a budget left out
+    deep_ref: LineRef | None = None  # the last line found too deep to keep
     stopped: bool = False  # no more lines are read (a cut, or a failure)
     built: bool = False  # the first build reached the end of the file
     row_bytes: int = 0
@@ -1175,7 +1318,14 @@ class _State:
         )
 
 
-_SNAPSHOT_REFRESH_KEYS = ("growing", "identity", "problems", "problem_count", "status")
+_SNAPSHOT_REFRESH_KEYS = (
+    "growing",
+    "identity",
+    "problems",
+    "problem_count",
+    "problem_counts",
+    "status",
+)
 
 
 class _Index:
@@ -1201,6 +1351,7 @@ class _Index:
         self.reader = ArtifactReader(
             opener,
             max_line_bytes=limits.line_bytes,
+            max_context_bytes=limits.context_bytes,
             tail_grace_s=options.tail_grace_s,
             clock=options.clock,
         )
@@ -1216,7 +1367,18 @@ class _Index:
     # --- Building -----------------------------------------------------
 
     def refresh(self) -> None:
-        """Take in whatever the file gained since the last refresh."""
+        """Take in whatever the file gained since the last refresh.
+
+        When a build (a first build, or a rebuild after ``changed``)
+        completes, :func:`trim_heap` returns the build's freed memory.
+        """
+        state, was_built = self.state, self.state.built
+        self._rounds()
+        self.complete = self.complete or self.state.built or bool(self.state.failure)
+        if self.state.built and (self.state is not state or not was_built):
+            trim_heap()
+
+    def _rounds(self) -> None:
         try:
             for _ in range(_REFRESH_ROUNDS):
                 if self.cancelled.is_set() or not self._round():
@@ -1225,8 +1387,7 @@ class _Index:
             self._unreadable(exc)
         except Exception:
             _LOG.exception("indexing %s failed", self.path)
-            self._unreadable(None)
-        self.complete = self.complete or self.state.built or bool(self.state.failure)
+            self._internal()
 
     def _round(self) -> bool:
         """One identity check and the reading it calls for; True if the
@@ -1243,6 +1404,8 @@ class _Index:
         if before is not None and after is not None and before.size != after.size:
             self.last_growth = self.last_stat
         progressed = self._read_all()
+        if self.cancelled.is_set():
+            return False  # a cancelled build is not built (F-14)
         self.state.built = True
         self._publish(new_lines=False)
         return change != "same" or progressed
@@ -1259,25 +1422,35 @@ class _Index:
             before = self.reader.offset
             items = self.reader.read_batch(max_bytes=self.options.batch_bytes)
             self._ingest(items)
+            if self.reader.contexts_limited:
+                self.state.limits_hit.add("contexts")
             if self.reader.offset == before:
                 break
             progressed = True
             self._publish(new_lines=True)
         return progressed
 
-    def _unreadable(self, exc: BaseException | None) -> None:
-        """The file could not be read, or indexing it failed unexpectedly.
+    def _unreadable(self, exc: BaseException) -> None:
+        """The file could not be read.
 
         A file never read (no identity) fails as ``unreadable``; one read
-        before keeps its snapshot, retried at the next refresh. An
-        unexpected error (``exc`` None) also fails as ``unreadable``, the
-        nearest contract code, so the index never stays ``building``.
+        before keeps its snapshot, retried at the next refresh.
         """
-        if exc is not None:
-            _LOG.info("cannot read %s: %s", self.path, type(exc).__name__)
-        if exc is None or self.reader.identity is None:
+        _LOG.info("cannot read %s: %s", self.path, type(exc).__name__)
+        if self.reader.identity is None:
             self.state.failure = "unreadable"
             self.state.built = True
+        self._publish(new_lines=False)
+
+    def _internal(self) -> None:
+        """Indexing raised an unexpected error (logged by the caller).
+
+        The index fails for good as ``internal``, so it never stays
+        ``building``; only a ``changed`` file rebuilds it, under a new
+        index ID.
+        """
+        self._fail("internal")
+        self.state.built = True
         self._publish(new_lines=False)
 
     # --- Taking in lines ----------------------------------------------
@@ -1296,9 +1469,13 @@ class _Index:
     def _problem(self, problem: LineProblem) -> None:
         if problem.code == "truncated_final_line":
             return  # the reader keeps it while the tail is pending
-        self.state.problem_count += 1
-        if len(self.state.problems) < PROBLEMS_KEPT:
-            self.state.problems.append(problem)
+        state = self.state
+        state.problem_count += 1
+        state.problem_counts[problem.code] = (
+            state.problem_counts.get(problem.code, 0) + 1
+        )
+        if len(state.problems) < PROBLEMS_KEPT:
+            state.problems.append(problem)
 
     def _record(self, record: dict[str, Any], ref: LineRef) -> None:
         name = _event_name(record)
@@ -1309,7 +1486,7 @@ class _Index:
         elif name == "infer.session":
             self._session(record, ref)
         elif name == "infer.system_sample":
-            self._sample(record)
+            self._sample(record, ref)
         elif name in _LINK_TYPES:
             self._link(name, record, ref)
         if name in KEPT_EVENT_TYPES:
@@ -1334,11 +1511,10 @@ class _Index:
         if self._rows_full():
             self.reader.rewind(ref)
             self.state.limits_hit.add("rows")
+            self.state.cut = ref
             self.state.stopped = True
             return False
-        self._note_session(
-            _identity_text(record.get("session_id"), "session_id" in record)
-        )
+        self._note_session(identity_text(record.get("session_id")))
         if self.state.failure is not None:
             return False
         self._add_request(record, ref)
@@ -1366,13 +1542,14 @@ class _Index:
         state = self.state
         requests = state.requests
         row = requests.add(record, ref)
+        self._dropped(requests.store, ref)
         if requests.gaps is None:
             state.limits_hit.add("gaps")
         if requests.errors is None:
             state.limits_hit.add("error_messages")
         if state.origin_ns is None:
             state.origin_ns = _int_or_none(record.get("started_at_ns"))
-        request_id = _identity_text(record.get("request_id"), "request_id" in record)
+        request_id = identity_text(record.get("request_id"))
         links = state.pending_links.pop(request_id, None)
         if links is not None:
             if links[0] >= 0:
@@ -1401,13 +1578,15 @@ class _Index:
 
     def _session(self, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
-        session_id = _identity_text(record.get("session_id"), "session_id" in record)
+        session_id = identity_text(record.get("session_id"))
         self._note_session(session_id)
         timestamp = _int_or_none(record.get("timestamp_ns"))
         if state.session is None:
             config = record.get("config")
-            copied = finite_copy(config)[0] if isinstance(config, Mapping) else {}
-            state.session = _Session(session_id, timestamp, copied)
+            copied = _finite_record(config) if isinstance(config, Mapping) else {}
+            if copied is None:
+                self._too_deep(ref, "the session's config")
+            state.session = _Session(session_id, timestamp, copied or {})
             if state.origin_ns is None:
                 state.origin_ns = timestamp
         status = record.get("status")
@@ -1416,7 +1595,20 @@ class _Index:
             state.session.terminal = True
             state.session.ended_at_ns = timestamp
 
-    def _sample(self, record: Mapping[str, Any]) -> None:
+    def _too_deep(self, ref: LineRef, what: str) -> None:
+        """One ``undecodable`` problem per line nested too deep to keep."""
+        if self.state.deep_ref == ref:
+            return
+        self.state.deep_ref = ref
+        detail = f"{what} is nested too deeply to keep; its line is kept"
+        self._problem(LineProblem(ref, "undecodable", detail))
+
+    def _dropped(self, store: _RecordStore, ref: LineRef) -> None:
+        if store.dropped:
+            self._too_deep(ref, "field " + ", ".join(sorted(set(store.dropped))))
+            store.dropped.clear()
+
+    def _sample(self, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
         if "samples" in state.limits_hit:
             return
@@ -1424,10 +1616,11 @@ class _Index:
             state.limits_hit.add("samples")
             return
         state.samples.add({k: v for k, v in record.items() if k != "metadata"})
+        self._dropped(state.samples, ref)
 
     def _link(self, name: str, record: Mapping[str, Any], ref: LineRef) -> None:
         state = self.state
-        request_id = _identity_text(record.get("request_id"), "request_id" in record)
+        request_id = identity_text(record.get("request_id"))
         pending = state.pending_links.setdefault(request_id, [-1, -1])
         slot = _LINK_TYPES[name]
         if pending[slot] < 0:
@@ -1439,7 +1632,12 @@ class _Index:
         if over_one or state.kept_bytes + ref.length > self.limits.kept_bytes:
             state.limits_hit.add("kept_records")
             return
-        state.kept.setdefault(name, []).append(finite_copy(record)[0])
+        copied = _finite_record(record)
+        if copied is None:
+            state.limits_hit.add("kept_records")  # its line reference only
+            self._too_deep(ref, "the record")
+            return
+        state.kept.setdefault(name, []).append(copied)
         state.kept_bytes += ref.length
 
     # --- Publishing ---------------------------------------------------
@@ -1457,7 +1655,7 @@ class _Index:
             return "failed", "audio"
         if "infer.session" not in inventory and "infer.request" not in inventory:
             return "failed", "not_an_inference_artifact"
-        if state.limits_hit & {"rows", "samples"}:
+        if state.limits_hit & {"rows", "samples", "contexts"}:
             return "partial", None
         return "ready", None
 
@@ -1466,20 +1664,23 @@ class _Index:
             return False
         return self.options.clock() - self.last_growth < self.options.growing_window_s
 
-    def _problems(self) -> tuple[tuple[LineProblem, ...], int]:
+    def _problems(self) -> tuple[tuple[LineProblem, ...], int, dict[str, int]]:
         problems = list(self.state.problems)
         count = self.state.problem_count
+        counts = dict(self.state.problem_counts)
         tail = self.reader.tail_problem
         if tail is not None:
             count += 1
+            counts[tail.code] = counts.get(tail.code, 0) + 1
             if len(problems) < PROBLEMS_KEPT:
                 problems.append(tail)
-        return tuple(problems), count
+        return tuple(problems), count, counts
 
     def memory(self) -> int:
         state = self.state
         requests = state.requests
         size = self._row_bytes() + requests.gap_bytes() + requests.error_bytes()
+        size += self.reader.context_bytes  # the decoder's definitions
         return size + state.samples.nbytes() + state.kept_bytes
 
     def _snapshot(self) -> IndexSnapshot:
@@ -1489,7 +1690,7 @@ class _Index:
         view = _RequestView(state.requests, state.link_refs, pending, self.read_line)
         status, failure = self._status()
         identity = reader.identity
-        problems, problem_count = self._problems()
+        problems, problem_count, problem_counts = self._problems()
         whole = identity is not None and reader.offset == identity.size
         return IndexSnapshot(
             path=self.path,
@@ -1518,9 +1719,16 @@ class _Index:
             limits_hit=frozenset(state.limits_hit),
             gaps_resident=view.gaps_resident,
             error_messages_resident=view.errors_resident,
+            cut=state.cut,
+            line_count=reader.next_line,
+            problem_counts=problem_counts,
         )
 
     def _publish(self, *, new_lines: bool) -> None:
+        """Make a new snapshot current; nothing once the index is cancelled
+        (evicted or closed), so a cancelled first build never says ready."""
+        if self.cancelled.is_set():
+            return
         if new_lines:
             self.state.generation += 1
         current = self.snapshot
@@ -1561,18 +1769,29 @@ class _Options:
 # --- The registry --------------------------------------------------------
 
 
+def _stale_reason(data: bytes, ref: LineRef) -> str | None:
+    """Why ``data`` (``ref.length + 1`` bytes read at ``ref.offset``) is not
+    ``ref``'s line and newline, in C4a's ``export`` terms; None if it is."""
+    if not data:
+        return "missing"  # the file now ends before the line
+    if len(data) != ref.length + 1:
+        return "length"
+    if data[-1:] != b"\n":
+        return "newline"
+    if line_digest(data[:-1]) != ref.sha256:
+        return "sha256"
+    return None
+
+
 def _read_ref(handle: BinaryIO, ref: LineRef) -> bytes:
     handle.seek(ref.offset)
     data = handle.read(ref.length + 1)
-    if (
-        len(data) != ref.length + 1
-        or data[-1:] != b"\n"
-        or line_digest(data[:-1]) != ref.sha256
-    ):
+    reason = _stale_reason(data, ref)
+    if reason is not None:
         raise ConflictError(
             "stale_line",
-            f"line {ref.line} no longer has the bytes the index read",
-            details={"line": ref.line},
+            f"line {ref.line} no longer has the bytes the index read ({reason})",
+            details={"line": ref.line, "reason": reason},
         )
     return data[:-1]
 
@@ -1613,6 +1832,7 @@ class ArtifactIndexes:
         self._cond = threading.Condition()
         self._entries: OrderedDict[str, _Index] = OrderedDict()
         self._futures: set[Future[None]] = set()
+        self._listeners: list[Callable[[IndexSnapshot], None]] = []
         self._closed = False
 
     # --- IndexRegistry ------------------------------------------------
@@ -1660,6 +1880,19 @@ class ArtifactIndexes:
         with handle:
             for ref in refs:
                 yield _read_ref(handle, ref) + b"\n"
+
+    def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:
+        """Call ``fn(snapshot)`` on the builder pool after each publish.
+
+        The contract's ``PublishingRegistry`` hook (Fable's F-7): after
+        every new generation and every ``replace`` republish of an open
+        index, once the snapshot is current. Not while a first build is
+        still ``building``, so a listener that warms a cache does not redo
+        it for every batch of a large file; its first call is the first
+        complete snapshot. A listener that raises is logged and skipped.
+        """
+        with self._cond:
+            self._listeners.append(fn)
 
     def close(self) -> None:
         """Cancel builds and drop every index."""
@@ -1731,11 +1964,21 @@ class ArtifactIndexes:
 
     def _published(self, entry: _Index) -> None:
         with self._cond:
-            if self._entries.get(entry.path) is entry:
+            current = self._entries.get(entry.path) is entry
+            if current:
                 # The count too: _open let building indexes exceed it, and
                 # only a publish can bring it back within the limit.
                 self._evict(keep=entry, count=self._limits.open_indexes)
             self._cond.notify_all()
+            listeners = tuple(self._listeners)
+        snapshot = entry.snapshot
+        if not current or snapshot.status == "building":
+            return
+        for listener in listeners:
+            try:
+                listener(snapshot)
+            except Exception:
+                _LOG.exception("a publish listener failed for %s", entry.path)
 
     def _evict(self, *, keep: _Index, count: int | None) -> None:
         """Evict least recently used indexes, never ``keep`` and never one

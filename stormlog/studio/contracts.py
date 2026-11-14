@@ -18,7 +18,8 @@ Units:
 - SHA-256 digests are 64 lower-case hex characters.
 - None means "no value", never zero.
 
-Imports: the standard library, :mod:`stormlog.infer.populations` and
+Imports: the standard library, :mod:`stormlog.infer.artifact_lines` (the
+line types, re-exported), :mod:`stormlog.infer.populations` and
 :mod:`stormlog.infer.slo` only, so every component can import this module
 and this module imports no component.
 """
@@ -37,8 +38,14 @@ from concurrent.futures import Executor
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, BinaryIO, ClassVar, Literal, Protocol
+from typing import Any, BinaryIO, ClassVar, Literal, Protocol, runtime_checkable
 
+from stormlog.infer.artifact_lines import (
+    FileIdentity,
+    LineProblem,
+    LineRef,
+    ProblemCode,
+)
 from stormlog.infer.populations import MeasuredInterval, Membership
 from stormlog.infer.slo import CriterionValue, client_values
 
@@ -54,7 +61,11 @@ __all__ = [
     "NotResident",
     "RequestRow",
     "DictRow",
+    "identity_text",
     "RequestTable",
+    "GapPool",
+    "ColumnarTable",
+    "columnar",
     "DictTable",
     "IndexStatus",
     "IndexFailure",
@@ -90,6 +101,8 @@ __all__ = [
     "artifact_block",
     "envelope",
     "IndexRegistry",
+    "PublishingRegistry",
+    "publish_hook",
     "WorkspaceRoot",
     "TokenStore",
     "WorkspaceScanner",
@@ -116,45 +129,10 @@ _ENVELOPE_KEYS = frozenset({"format", "schema_version", "artifact"})
 
 
 # --- Lines and files -------------------------------------------------- (C1 produces)
-
-
-@dataclass(frozen=True)
-class LineRef:
-    """Where one line of an artifact is, and what its bytes hash to."""
-
-    line: int  # 0-based
-    offset: int  # byte offset of the line's first byte
-    length: int  # bytes, without the b"\n"
-    sha256: str  # hex, of those bytes (diagnosis_inputs.line_digest)
-
-
-ProblemCode = Literal[
-    "not_json",
-    "not_object",
-    "undecodable",
-    "oversized",
-    "unsupported_version",
-    "truncated_final_line",
-]
-
-
-@dataclass(frozen=True)
-class LineProblem:
-    """A line the reader or the index could not use, and why."""
-
-    ref: LineRef
-    code: ProblemCode
-    detail: str  # scrubbed, at most 200 characters
-
-
-@dataclass(frozen=True)
-class FileIdentity:
-    """What ``os.fstat`` said about the artifact at the last read."""
-
-    device: int
-    inode: int
-    size: int
-    mtime_ns: int
+#
+# LineRef, ProblemCode, LineProblem and FileIdentity live in
+# stormlog.infer.artifact_lines, so the core reader that produces them never
+# imports Studio; they are re-exported here under the same names.
 
 
 # --- Rows ------------------------------------------------------ (C1 implements, C2 reads)
@@ -179,9 +157,13 @@ class RequestRow(Mapping[str, Any]):
     record whatever the pools hold (request detail) builds it from the other
     keys plus :meth:`load_gaps` and :meth:`load_error_message`.
 
-    The identity properties follow one rule for a record that lacks the
-    field: ``str(record.get(key, "unknown"))``, as the analyzer groups
-    ``case_id``. C1's ``index.ColumnRow`` and :class:`DictRow` implement it.
+    The identity properties follow one rule, :func:`identity_text`: a
+    record that lacks the field, or holds null in it, gives ``"unknown"``;
+    any other value gives ``str(value)``. A null means "unknown", never
+    ``"None"`` (Fable's F-5). C1's ``index.ColumnRow`` and :class:`DictRow`
+    implement it. The analyzer groups a null ``case_id`` as ``"None"``
+    today, so a null ``case_id`` is outside §3.4's parity until the v3
+    analyzer adopts the same rule.
 
     Every attribute is an abstract read-only property, so a subclass may
     read it from a column store on access (C1) or keep it in a field
@@ -208,17 +190,17 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def session_id(self) -> str:
-        """``str(record.get("session_id", "unknown"))``.
+        """``identity_text(record.get("session_id"))``.
 
-        ``"unknown"`` never counts as a second session in C1's
-        ``multiple_sessions`` check.
+        ``"unknown"`` (absent or null) never counts as a second session
+        in C1's ``multiple_sessions`` check.
         """
         raise NotImplementedError
 
     @property
     @abstractmethod
     def request_id(self) -> str:
-        """``str(record.get("request_id", "unknown"))``."""
+        """``identity_text(record.get("request_id"))``."""
         raise NotImplementedError
 
     @property
@@ -230,13 +212,13 @@ class RequestRow(Mapping[str, Any]):
     @property
     @abstractmethod
     def case_id(self) -> str:
-        """``str(record.get("case_id", "unknown"))``."""
+        """``identity_text(record.get("case_id"))``."""
         raise NotImplementedError
 
     @property
     @abstractmethod
     def phase(self) -> str:
-        """``str(record.get("phase", "unknown"))``."""
+        """``identity_text(record.get("phase"))``."""
         raise NotImplementedError
 
     @property
@@ -301,11 +283,11 @@ class DictRow(RequestRow):
         self._record: dict[str, Any] = dict(record)
         self._index = index
         self._ref = _synthetic_ref(self._record, line) if ref is None else ref
-        self._session_id = str(record.get("session_id", "unknown"))
-        self._request_id = str(record.get("request_id", "unknown"))
+        self._session_id = identity_text(record.get("session_id"))
+        self._request_id = identity_text(record.get("request_id"))
         self._record_id = _request_record_id(record)
-        self._case_id = str(record.get("case_id", "unknown"))
-        self._phase = str(record.get("phase", "unknown"))
+        self._case_id = identity_text(record.get("case_id"))
+        self._phase = identity_text(record.get("phase"))
         self._client = MappingProxyType(client_values(record))
         gaps = record.get("chunk_interarrival_ms")
         self._gap_count = len(gaps) if isinstance(gaps, list) else 0
@@ -373,6 +355,13 @@ class DictRow(RequestRow):
         return message if isinstance(message, str) else None
 
 
+def identity_text(value: Any) -> str:
+    """A row's identity value (``session_id``, ``request_id``, ``case_id``,
+    ``phase``) from the record's value: ``"unknown"`` for None (the field
+    is absent or null), else ``str(value)``."""
+    return "unknown" if value is None else str(value)
+
+
 def _synthetic_ref(record: Mapping[str, Any], line: int) -> LineRef:
     encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return LineRef(
@@ -432,16 +421,87 @@ class RequestTable(Protocol):
     def column(self, name: str) -> Sequence[Any]: ...
 
 
+@dataclass(frozen=True)
+class GapPool:
+    """Every row's chunk gaps as one flat float64 sequence (Fable's F-2).
+
+    Row ``i``'s gaps are ``values[starts[i] : starts[i] + counts[i]]``, in
+    written order, in float milliseconds, NaN where the element was not a
+    number (as :meth:`RequestRow.load_gaps`; ``report_stats.is_number``
+    drops it). ``counts[i]`` is ``RequestRow.gap_count``: 0 for a record
+    whose ``chunk_interarrival_ms`` is absent, null or not a list, and
+    ``starts[i]`` is then where its gaps would have started. ``values`` is
+    an ``array('d')`` (or another float sequence), ``starts`` and
+    ``counts`` int sequences, one element per row.
+    """
+
+    values: Sequence[float]
+    starts: Sequence[int]
+    counts: Sequence[int]
+
+
+@runtime_checkable
+class ColumnarTable(RequestTable, Protocol):
+    """A :class:`RequestTable` with flat arrays for columnar summaries (F-2).
+
+    C1's ``index.ColumnTable`` and :class:`DictTable` implement it; a
+    table that does not is still a valid :class:`RequestTable`, so a reader
+    asks :func:`columnar` and falls back on rows when it gives None.
+
+    Units and rules:
+
+    - :meth:`client_values` is float64 milliseconds, one per row, NaN where
+      ``requests[i].client[metric].value_ms`` is None.
+    - :meth:`client_reasons` gives per-row codes into a table of
+      ``(reason, not_applicable)`` pairs, ``requests[i].client[metric]``'s
+      fields; code 0 is always ``(None, False)``.
+    - The status column is ``column("status")`` (None where absent).
+    - :meth:`line_refs` is ``requests[i].ref`` for every row, built on
+      access without a row view; :meth:`line_lengths` is their
+      ``length`` (bytes without the newline).
+    - :meth:`gap_counts` is ``requests[i].gap_count``; :meth:`gap_pool` is
+      :class:`GapPool`, and raises :class:`NotResident` when the gap pool
+      is not resident (``gaps_resident`` false).
+
+    Immutability: each result has one element per row of the snapshot
+    (``len(table)``), never changes as later batches land, and is cached
+    per table. Every ``array`` in it is a copy, never a view of the
+    index's growing arrays, so ``numpy.frombuffer`` on it is safe.
+    Callers must not mutate it.
+    """
+
+    def client_values(self, metric: str) -> Sequence[float]: ...
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]: ...
+
+    def line_refs(self) -> Sequence[LineRef]: ...
+
+    def line_lengths(self) -> Sequence[int]: ...
+
+    def gap_counts(self) -> Sequence[int]: ...
+
+    def gap_pool(self) -> GapPool: ...
+
+
+def columnar(table: RequestTable) -> ColumnarTable | None:
+    """``table`` when it has :class:`ColumnarTable`'s arrays, else None."""
+    return table if isinstance(table, ColumnarTable) else None
+
+
 class DictTable:
-    """A :class:`RequestTable` over resident rows, for C2's tests and fixtures.
+    """A :class:`ColumnarTable` over resident rows, for C2's tests and fixtures.
 
     It reads the rows one by one, so it is as slow as row access; C1's index
-    keeps real columns.
+    keeps real columns. Its gap pool is the rows' :meth:`RequestRow.load_gaps`,
+    so it never raises :class:`NotResident`.
     """
 
     def __init__(self, rows: Sequence[RequestRow]) -> None:
         self._rows = tuple(rows)
         self._columns: dict[str, tuple[Any, ...]] = {}
+        self._pool: GapPool | None = None
 
     def __len__(self) -> int:
         return len(self._rows)
@@ -453,6 +513,41 @@ class DictTable:
             self._columns[name] = cached
         return cached
 
+    def client_values(self, metric: str) -> Sequence[float]:
+        return array(
+            "d", (_nan_if_none(row.client[metric].value_ms) for row in self._rows)
+        )
+
+    def client_reasons(
+        self, metric: str
+    ) -> tuple[Sequence[int], tuple[tuple[str | None, bool], ...]]:
+        table: dict[tuple[str | None, bool], int] = {(None, False): 0}
+        codes = array("H")
+        for row in self._rows:
+            value = row.client[metric]
+            key = (value.reason, value.not_applicable)
+            codes.append(table.setdefault(key, len(table)))
+        return codes, tuple(table)
+
+    def line_refs(self) -> Sequence[LineRef]:
+        return tuple(row.ref for row in self._rows)
+
+    def line_lengths(self) -> Sequence[int]:
+        return array("q", (row.ref.length for row in self._rows))
+
+    def gap_counts(self) -> Sequence[int]:
+        return array("q", (row.gap_count for row in self._rows))
+
+    def gap_pool(self) -> GapPool:
+        if self._pool is None:
+            values, starts, counts = array("d"), array("q"), array("q")
+            for row in self._rows:
+                starts.append(len(values))
+                values.extend(row.load_gaps())
+                counts.append(len(values) - starts[-1])
+            self._pool = GapPool(values, starts, counts)
+        return self._pool
+
 
 def _cell(row: RequestRow, name: str) -> Any:
     if name.startswith(CLIENT_COLUMN_PREFIX):
@@ -460,13 +555,21 @@ def _cell(row: RequestRow, name: str) -> Any:
     return row.get(name)
 
 
+def _nan_if_none(value: float | None) -> float:
+    return math.nan if value is None else value
+
+
 # --- Index snapshots --------------------------------------------------- (C1 produces)
 
 IndexStatus = Literal["building", "ready", "partial", "failed"]
+# "internal": indexing raised an unexpected error (logged); the index
+# stops for good, so it never stays "building".
 IndexFailure = Literal[
-    "unreadable", "not_an_inference_artifact", "audio", "multiple_sessions"
+    "unreadable", "not_an_inference_artifact", "audio", "multiple_sessions", "internal"
 ]
-LimitHit = Literal["rows", "gaps", "error_messages", "samples", "kept_records"]
+LimitHit = Literal[
+    "rows", "gaps", "error_messages", "samples", "kept_records", "contexts"
+]
 
 
 @dataclass(frozen=True)
@@ -497,8 +600,8 @@ class IndexSnapshot:
     ``failure == "multiple_sessions"`` means the file's client requests or
     session records name two or more distinct ``session_id`` values other
     than ``"unknown"``. A ``session_id`` of ``"unknown"`` (a record that
-    lacks the field, :class:`RequestRow`'s identity rule) never counts as a
-    second session.
+    lacks the field or holds null in it, :class:`RequestRow`'s identity
+    rule) never counts as a second session.
     """
 
     path: str  # root-relative POSIX path
@@ -531,6 +634,18 @@ class IndexSnapshot:
     limits_hit: frozenset[LimitHit]
     gaps_resident: bool
     error_messages_resident: bool
+    # the first line not indexed when a budget stopped the build
+    # ("rows" in limits_hit): bytes_read is cut.offset. None otherwise.
+    cut: LineRef | None = None
+    # complete lines consumed, blank and problem lines included (the next
+    # line's number); None from a producer that does not count lines (a
+    # test stand-in). C1 always sets it.
+    line_count: int | None = None
+    # problem_count by LineProblem.code; its values sum to problem_count.
+    # "unsupported_version" counts client infer.request lines at another
+    # version, which are never rows (§4.4), apart from server-view
+    # requests, which inventory counts. Empty from a stand-in.
+    problem_counts: Mapping[str, int] = field(default_factory=dict)
 
     def column(self, name: str) -> Sequence[Any]:
         """One request field for every row, in file order (D-1).
@@ -790,12 +905,19 @@ class NotReady(Exception):
     and enveloped by C4 (``envelope("analysis", body, snapshot)``). C3
     serves it verbatim, through :func:`encode_json`, with status 202 and
     ``Retry-After: retry_after_s``, and adds nothing to it. A ``state``
-    whose ``format`` is not ``stormlog.studio.analysis`` raises ValueError.
+    whose ``format`` is not ``stormlog.studio.analysis``, or that has no
+    ``artifact`` block (the analysis document is artifact-scoped), raises
+    ValueError; so does a ``retry_after_s`` that is not an int ≥ 0 (C3
+    writes it into a header; a bool is not an int here).
     """
 
     def __init__(self, state: Mapping[str, Any], retry_after_s: int = 1) -> None:
         if state.get("format") != FORMAT_PREFIX + "analysis":
             raise ValueError("NotReady.state is a stormlog.studio.analysis document")
+        if "artifact" not in state:
+            raise ValueError("NotReady.state carries the snapshot's artifact block")
+        if type(retry_after_s) is not int or retry_after_s < 0:
+            raise ValueError("NotReady.retry_after_s is an int of at least 0")
         super().__init__("not ready")
         self.state: dict[str, Any] = dict(state)
         self.retry_after_s = retry_after_s
@@ -819,7 +941,10 @@ def to_wire(value: Any) -> Any:
     check: a ``numbers.Integral`` becomes an ``int`` (and then follows the
     integer rules), a ``numbers.Real`` a ``float``. Any other object with a
     callable ``tolist`` (a numpy array or scalar, ``numpy.bool_`` included)
-    becomes ``tolist()``, wired in turn. Any other type raises TypeError.
+    becomes ``tolist()``, wired in turn. Any other type raises TypeError,
+    and so do ``bytes``, ``bytearray`` and a ``memoryview`` of bytes
+    (format ``B``, ``b`` or ``c``): bytes have no JSON form. A memoryview of
+    numbers (``d``, ``q``, ...) is a list.
     """
     return _wire(value, ns=False)
 
@@ -838,6 +963,8 @@ def _wire(value: Any, *, ns: bool) -> Any:
 
 def _wire_foreign(value: Any, *, ns: bool) -> Any:
     """Numbers and arrays of other libraries, by the numbers ABCs or tolist."""
+    if _is_bytes(value):
+        raise TypeError(f"no wire form for {type(value).__name__} of bytes")
     if isinstance(value, numbers.Integral):
         return _wire(int(value), ns=ns)
     if isinstance(value, numbers.Real):
@@ -866,6 +993,9 @@ def _wire_key(key: Any) -> str:
     raise TypeError(f"no wire form for a {type(key).__name__} key")
 
 
+_BYTE_FORMATS = frozenset({"B", "b", "c"})
+
+
 def _is_finite_number(value: Any) -> bool:
     """``report_stats.is_number``, which the contract does not import."""
     if isinstance(value, float):
@@ -873,11 +1003,19 @@ def _is_finite_number(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _is_bytes(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray)):
+        return True
+    return isinstance(value, memoryview) and value.format in _BYTE_FORMATS
+
+
 def _is_list_like(value: Any) -> bool:
     if isinstance(value, (list, tuple, array)):
         return True
-    return isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, str)
+        and not _is_bytes(value)
     )
 
 
@@ -943,7 +1081,9 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
 
     ``terminal`` is False for a file with no session record: no terminal
     record exists. ``size`` is None when the file was never statted
-    (``identity`` is None). ``limits_hit`` is sorted.
+    (``identity`` is None). ``limits_hit`` is sorted. ``cut`` is the first
+    line not indexed (``line``, ``offset``, ``length``, ``sha256``) when a
+    budget stopped the build, so the partial banner can name it; else None.
     """
     session = snapshot.session
     return {
@@ -962,6 +1102,16 @@ def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
         "gaps_resident": snapshot.gaps_resident,
         "error_messages_resident": snapshot.error_messages_resident,
         "limits_hit": sorted(snapshot.limits_hit),
+        "cut": None if snapshot.cut is None else _ref_block(snapshot.cut),
+    }
+
+
+def _ref_block(ref: LineRef) -> dict[str, Any]:
+    return {
+        "line": ref.line,
+        "offset": ref.offset,
+        "length": ref.length,
+        "sha256": ref.sha256,
     }
 
 
@@ -1036,6 +1186,41 @@ class IndexRegistry(Protocol):
         ...
 
 
+@runtime_checkable
+class PublishingRegistry(IndexRegistry, Protocol):
+    """An :class:`IndexRegistry` with a publish hook (Fable's F-7).
+
+    C1's ``index.ArtifactIndexes`` implements it. It is a protocol of its
+    own so that a test stand-in for :class:`IndexRegistry` stays one; C4
+    asks :func:`publish_hook` for it and warms nothing when it gives None.
+    """
+
+    def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:
+        """Call ``fn(snapshot)`` after each snapshot an index publishes.
+
+        Called on the builder pool, on the thread that built the snapshot,
+        after the snapshot is current, for each new generation and for each
+        ``dataclasses.replace`` republish (same rows; ``growing``,
+        ``identity``, ``status`` or the problems changed). Not called for a
+        snapshot whose status is ``building`` (the zero-row one of a new
+        index, or a batch of its first build), so a warm-up does not run
+        per batch of a large file. Listeners run in
+        the order added; one that raises is logged and the others still
+        run. C4 warms caches with it, such as C2's ``case_facts``.
+
+        A replace shares the earlier snapshot's ``table`` (and its rows),
+        so a cache keyed on ``id(snapshot.table)`` survives a replace and
+        misses only on new rows or a new index; hold the snapshot (or the
+        table) beside the key, so the id is not reused.
+        """
+        ...
+
+
+def publish_hook(registry: IndexRegistry) -> PublishingRegistry | None:
+    """``registry`` when it takes publish listeners, else None."""
+    return registry if isinstance(registry, PublishingRegistry) else None
+
+
 class WorkspaceRoot(Protocol):
     """C3: ``security.RootDirectory`` (§7.4)."""
 
@@ -1088,6 +1273,11 @@ class WorkspaceScanner(Protocol):
 
     def scan(self) -> None:
         """Queue a scan on the builder pool; BusyError while one runs."""
+        ...
+
+    def wait(self, timeout_s: float) -> bool:
+        """Whether no scan is running, waiting up to ``timeout_s`` for one
+        to finish; never raises on a timeout (C4a's gap 7)."""
         ...
 
     def state(self) -> dict[str, Any]:
@@ -1165,6 +1355,7 @@ class Limits:
     sample_bytes: int = 32 * 2**20
     kept_bytes: int = 16 * 2**20
     kept_record_bytes: int = 64 * 2**10
+    context_bytes: int = 16 * 2**20  # infer.context definitions the decoder holds
     line_bytes: int = 64 * 2**20
     scan_depth: int = 8
     scan_entries: int = 50_000

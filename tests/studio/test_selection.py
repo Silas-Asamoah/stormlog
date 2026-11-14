@@ -10,6 +10,7 @@ for the 500,000-request timings. ``tests/studio/test_summaries.py`` and
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -1167,6 +1168,18 @@ def test_a_cursor_this_server_did_not_issue_is_a_400(cursor: str) -> None:
             snapshot, sel, sort="artifact", order="asc", cursor=cursor or "AA", limit=5
         )
     assert raised.value.field == "cursor"
+
+
+@pytest.mark.parametrize("bomb", [b"[" * 12_000, b'{"a":' * 12_000])
+def test_a_cursor_nesting_bomb_is_a_400(bomb: bytes) -> None:
+    """Fable's P3: json.loads raised RecursionError on 3.10 to 3.13, which
+    _decode_cursor did not catch, so the requests route answered 500."""
+    cursor = base64.urlsafe_b64encode(bomb).decode("ascii").rstrip("=")
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    with pytest.raises(UsageError) as raised:
+        page(snapshot, sel, sort="artifact", order="asc", cursor=cursor, limit=5)
+    assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
 
 
 @pytest.mark.parametrize("limit", [0, -1, 1001])

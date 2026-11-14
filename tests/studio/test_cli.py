@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import io
 import json
@@ -236,6 +237,29 @@ def test_state_directory_defaults_to_local_state(
 # --- Serving ------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("stale", ["file", "symlink"])
+def test_private_writes_recover_from_a_stale_temporary(
+    tmp_path: Path, stale: str
+) -> None:
+    # Fable's nit: a crash left .<name>.<pid>.tmp; a later launcher with
+    # the same PID failed its O_EXCL open with a traceback.
+    directory = tmp_path / "state"
+    directory.mkdir(mode=0o700)
+    target = directory / "8790.json"
+    temporary = directory / f".8790.json.{os.getpid()}.tmp"
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep\n")
+    if stale == "file":
+        temporary.write_text("half a record")
+    else:
+        temporary.symlink_to(outside)
+    assert cli._write_private(target, '{"pid": 1}') == target
+    assert target.read_text() == '{"pid": 1}'
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not temporary.exists() and not temporary.is_symlink()
+    assert outside.read_text() == "keep\n"
+
+
 def test_serve_prints_a_one_time_url_and_writes_private_state(
     root: Path, state: Path, serve: Callable[[list[str]], Running]
 ) -> None:
@@ -336,6 +360,97 @@ def test_studio_url_ignores_stale_state_files(state: Path) -> None:
     code, _, err = run_main(["url"])
     assert code == 2
     assert "no Studio instance" in err
+
+
+class Squatter:
+    """Another server on a recorded port: answers health with ``instance``
+    and the bootstrap route with ``url`` (``{base}`` is its own base URL);
+    notes every Authorization header it receives."""
+
+    def __init__(self, instance: str, url: str) -> None:
+        self.authorizations: list[str] = []
+        squatter = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                self._answer({"format": "x", "ok": True, "instance_id": instance})
+
+            def do_POST(self) -> None:
+                squatter.authorizations.append(self.headers.get("Authorization", ""))
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self._answer({"url": url.format(base=squatter.base_url)})
+
+            def _answer(self, document: dict[str, Any]) -> None:
+                body = json.dumps(document).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                pass
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.base_url = f"http://127.0.0.1:{self.port}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+
+STALE_ID = "5a1e5a1e5a1e5a1e5a1e5a1e5a1e5a1e"
+
+
+def write_stale_record(state: Path, squatter: Squatter) -> None:
+    # A state file whose PID is live (PID reuse) but whose Studio is gone.
+    state.mkdir(parents=True)
+    record = {
+        "pid": os.getpid(),
+        "host": "127.0.0.1",
+        "port": squatter.port,
+        "base_url": squatter.base_url,
+        "root": "/nowhere",
+        "instance_id": STALE_ID,
+        "admin_token": "STALE-ADMIN-TOKEN",
+    }
+    (state / f"{squatter.port}.json").write_text(json.dumps(record))
+
+
+def test_studio_url_sends_no_token_to_a_squatter(state: Path) -> None:
+    squatter = Squatter("0" * 32, "http://evil.example/#/auth?t=phish")
+    try:
+        write_stale_record(state, squatter)
+        code, out, err = run_main(["url"])
+    finally:
+        squatter.close()
+    assert squatter.authorizations == []
+    assert (code, out) == (2, "")
+    assert "not the Studio instance" in err
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://evil.example/#/auth?t=phish",
+        "{base}.evil.example/#/auth?t=phish",
+        "{base}/elsewhere#/auth?t=phish",
+        "{base}",
+    ],
+)
+def test_studio_url_prints_no_url_off_its_own_base(state: Path, url: str) -> None:
+    # Even a server that echoes the right instance_id gets no say in the link.
+    squatter = Squatter(STALE_ID, url)
+    try:
+        write_stale_record(state, squatter)
+        code, out, err = run_main(["url"])
+    finally:
+        squatter.close()
+    assert (code, out) == (2, "")
+    assert "not its own" in err
 
 
 def test_the_default_port_falls_back_to_the_next_nine(

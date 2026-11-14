@@ -12,12 +12,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 import threading
 import time
 import tracemalloc
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Executor, Future, ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, BinaryIO, ParamSpec, TypeVar
 
 import pytest
@@ -28,6 +30,7 @@ from stormlog.studio import index as index_module
 from stormlog.studio.contracts import (
     ConflictError,
     DictRow,
+    DictTable,
     ForbiddenError,
     IndexRegistry,
     IndexSnapshot,
@@ -36,7 +39,9 @@ from stormlog.studio.contracts import (
     NotResident,
     RequestRow,
     artifact_block,
+    columnar,
     encode_json,
+    publish_hook,
 )
 from stormlog.studio.index import (
     CLIENT_METRICS,
@@ -277,6 +282,21 @@ def test_each_standard_artifact_keeps_its_records_and_counts(
     encode_json({"artifact": artifact_block(snapshot), "kept": snapshot.kept})
 
 
+def test_the_line_count_is_every_complete_line_consumed(tmp_path: Path) -> None:
+    lines = [
+        json.dumps({"event_type": "infer.session", "session_id": "s"}),
+        "",
+        "not json",
+        json.dumps({"event_type": "infer.request", "request_id": "a"}),
+    ]
+    path = tmp_path / "count.jsonl"
+    path.write_text("\n".join(lines) + "\n" + '{"tail": ')
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    assert snapshot.line_count == 4 and snapshot.cut is None
+    assert harness.indexes.wait(path.name, 0).line_count == 4
+
+
 @pytest.mark.parametrize("name", SINGLE_SESSION)
 def test_each_complete_artifact_hashes_as_the_file_does(
     studio_artifacts: StandardArtifacts, name: str
@@ -372,6 +392,30 @@ def test_an_unknown_session_never_counts_as_a_second_one(
     check_rows(snapshot, path)
 
 
+def test_a_null_identity_is_unknown_never_none(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: a null session_id, request_id, case_id and phase (F-5)."""
+
+    def null_identity(records: list[dict[str, Any]]) -> None:
+        requests = [r for r in records if r.get("event_type") == "infer.request"]
+        requests[0].update(session_id=None, request_id=None, case_id=None)
+        requests[1]["phase"] = None
+        records[:] = [r for r in records if r.get("event_type") != "infer.session"]
+
+    for source in ("mixed", "warmup_measured"):
+        target = tmp_path / f"{source}.null.jsonl"
+        path = edited_copy(studio_artifacts[source], target, null_identity)
+        snapshot = harness_for(path).build(path.name)
+        assert (snapshot.status, snapshot.failure) == ("ready", None), source
+        first, second = snapshot.requests[0], snapshot.requests[1]
+        assert (first.session_id, first.request_id) == ("unknown", "unknown")
+        assert (first.case_id, second.phase) == ("unknown", "unknown")
+        assert "None" not in snapshot.by_request_id
+        assert snapshot.by_request_id["unknown"] == (0,)
+        check_rows(snapshot, path)
+
+
 def test_a_second_session_record_alone_fails_the_index(tmp_path: Path) -> None:
     path = write_records(
         tmp_path / "s.jsonl",
@@ -462,6 +506,37 @@ def test_a_growing_file_refreshes_under_the_same_index_id(
     assert still.requests is done.requests  # republished, same rows and caches
 
 
+def test_publish_listeners_see_each_complete_snapshot_once_current(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    source = studio_artifacts["mixed"]
+    growing = GrowingCopy(source, tmp_path / "g.jsonl", lines=40)
+    harness = harness_for(growing.target, batch_bytes=2_000)
+    indexes = harness.indexes
+    assert publish_hook(indexes) is indexes
+    seen: list[IndexSnapshot] = []
+
+    def listen(snapshot: IndexSnapshot) -> None:
+        assert indexes.snapshot("g.jsonl") is snapshot  # current when called
+        seen.append(snapshot)
+
+    def broken(snapshot: IndexSnapshot) -> None:
+        raise RuntimeError("a listener bug")
+
+    indexes.add_publish_listener(broken)
+    indexes.add_publish_listener(listen)
+    first = harness.build("g.jsonl")
+    assert seen == [first] and first.status == "ready"  # no per-batch calls
+    growing.append(30)
+    grown = harness.refresh("g.jsonl")
+    assert seen[-1] is grown and grown.generation > first.generation
+    assert all(s.status != "building" for s in seen)
+    count = len(seen)
+    still = harness.refresh("g.jsonl", seconds=6)  # growing flips: a replace
+    assert len(seen) == count + 1 and seen[-1] is still
+    assert not still.growing and still.table is grown.table  # id(table) survives
+
+
 def test_the_growing_fixture_is_ready_and_growing_after_an_append(
     studio_artifacts: StandardArtifacts, tmp_path: Path
 ) -> None:
@@ -491,6 +566,69 @@ def test_a_rewrite_in_place_rebuilds_under_a_new_index_id(
     assert second.session is not None and first.session is not None
     assert second.session.session_id != first.session.session_id
     assert len(first.requests) == 10  # the old snapshot is untouched
+
+
+def test_a_cancelled_first_build_publishes_nothing(
+    studio_artifacts: StandardArtifacts, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = studio_artifacts["mixed"]
+    harness = harness_for(path, batch_bytes=2_000)
+    published: list[IndexSnapshot] = []
+    harness.indexes.add_publish_listener(published.append)
+    building = harness.indexes.snapshot(path.name)
+    entry = harness.indexes._entries[path.name]
+    real = entry.reader.read_batch
+    batches = 0
+
+    def cancel_after_two(**kwargs: Any) -> Any:
+        nonlocal batches
+        batches += 1
+        if batches == 3:
+            entry.cancelled.set()  # as eviction or close() does mid-build
+        return real(**kwargs)
+
+    monkeypatch.setattr(entry.reader, "read_batch", cancel_after_two)
+    harness.pool.run()
+    after = entry.snapshot
+    assert entry.cancelled.is_set() and batches == 3
+    assert after.status == "building" and not entry.state.built
+    assert after.generation == 2 and after is not building  # two batches, no more
+    assert not entry.complete and published == []
+
+
+def test_a_completed_build_trims_the_heap_once(
+    fresh_artifact: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def trim() -> bool:
+        calls.append(1)
+        return True
+
+    monkeypatch.setattr(index_module, "trim_heap", trim)
+    path = fresh_artifact("tokens_exact")
+    harness = harness_for(path, batch_bytes=1_000)
+    harness.build(path.name)
+    assert len(calls) == 1  # once per build, not per batch
+    with path.open("ab") as handle:
+        handle.write(complete_lines(path)[-1] + b"\n")
+    harness.refresh(path.name)
+    assert len(calls) == 1  # growth is not a build
+    rewrite_in_place(path, cases=MIXED_CASES[:1])
+    harness.refresh(path.name)
+    assert len(calls) == 2  # a rebuild under a new index ID is
+
+
+def test_trim_heap_is_best_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert index_module.trim_heap() is sys.platform.startswith("linux")
+
+    def no_libc(name: Any) -> Any:
+        raise OSError("no C library")
+
+    monkeypatch.setattr(index_module.ctypes, "CDLL", no_libc)
+    assert index_module.trim_heap() is False
+    monkeypatch.setattr(index_module.sys, "platform", "darwin")
+    assert index_module.trim_heap() is False
 
 
 def test_an_import_replace_keeps_the_index_and_adds_its_lines(
@@ -584,6 +722,34 @@ def test_newer_types_versions_and_bad_lines_never_fail_an_index(
     assert "v2" not in snapshot.by_request_id
 
 
+def test_problems_are_counted_by_code_apart_from_server_view_requests(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: an execution import (server-view requests at version 2)
+    with one client request at version 2 and bad lines (Fable's F-9)."""
+    source = studio_artifacts["execution_import"]
+    extra = [
+        b'{"event_type": "infer.request", "schema_version": 2, "request_id": "v2"}',
+        b"not json at all",
+        b"also not json",
+        b"[1]",
+    ]
+    path = tmp_path / "counts.jsonl"
+    path.write_bytes(source.read_bytes() + b"\n".join(extra) + b"\n" + b'{"t')
+    harness = harness_for(path, tail_grace_s=0.0)
+    snapshot = harness.build(path.name)
+    assert snapshot.inventory["infer.request"] == {1: 10, 2: 7}  # 6 server view
+    assert dict(snapshot.problem_counts) == {
+        "unsupported_version": 1,
+        "not_json": 2,
+        "not_object": 1,
+        "truncated_final_line": 1,
+    }
+    assert sum(snapshot.problem_counts.values()) == snapshot.problem_count == 5
+    clean = harness_for(source).build(source.name)
+    assert dict(clean.problem_counts) == {} and clean.problem_count == 0
+
+
 def test_kept_records_are_finite(tmp_path: Path) -> None:
     path = tmp_path / "nan.jsonl"
     path.write_text(
@@ -649,12 +815,134 @@ def test_odd_values_round_trip_exactly(tmp_path: Path) -> None:
     rows[3].pop("ttft_ms")
     rows[5][GAPS] = [1.0, math.nan, math.nan, math.nan, 2.5]
     assert repr(got) == repr(json.loads(json.dumps(rows)))
-    assert snapshot.requests[6].request_id == "None"
+    assert snapshot.requests[6].request_id == "unknown"  # F-5
     assert snapshot.requests[4].gap_count == 0 and snapshot.requests[5].gap_count == 5
     assert snapshot.column("big") == [2**70, 3, -1, None, None, None, None]
     assert snapshot.column("x")[:3] == [True, "yes", [1, {"y": None}]]
     assert snapshot.requests[4].load_gaps() == ()
     assert snapshot.requests[4].load_error_message() is None
+
+
+# With their wrappers, 126 lists nest 128 deep (the limit) on line 0 and 127
+# on the others; 127 lists nest 129 on line 0. 900 and 5000 are past it.
+@pytest.mark.parametrize("depth", [126, 127, 900, 5000])
+def test_a_deeply_nested_record_is_a_problem_never_a_failed_index(
+    tmp_path: Path, depth: int
+) -> None:
+    """A line nested past MAX_NESTING is the reader's not_json problem on
+    every Python (json.loads takes 50,000 levels from 3.14). One within it
+    is kept whole, and its request's detail can be copied and written as a
+    route does (F-4: finite_copy recursed past Python's limit and the
+    request route answered 500). Either way the index is ready.
+    """
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+    from stormlog.studio.summaries import request_detail
+
+    nested = "[" * depth + "]" * depth
+    head = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1,'
+    lines = [
+        head + '"status":"running","config":{"d":' + nested + "}}",
+        '{"event_type":"infer.workload","schema_version":1,"w":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"q",'
+        '"status":"ok","weird":' + nested + "}",
+        '{"event_type":"infer.system_sample","t":1,"weird":' + nested + "}",
+        '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+    ]
+    path = tmp_path / f"deep{depth}.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    problems = {p.ref.line: p.code for p in snapshot.problems}
+    nesting = [depth + 2, depth + 1, depth + 1, depth + 1]
+    deep = {line for line, n in enumerate(nesting) if n > MAX_NESTING}
+    assert problems == dict.fromkeys(deep, "not_json")
+    assert snapshot.problem_count == len(problems)
+    ids = [row.request_id for row in snapshot.requests]
+    assert ids == (["r"] if 2 in deep else ["q", "r"])
+    for line, kind in ((0, "infer.session"), (1, "infer.workload")):
+        kept = snapshot.kept.get(kind, ())
+        assert len(kept) == (line not in deep), (depth, line)
+        encode_json({"kept": kept})
+    session = snapshot.session
+    assert (session is None) == (0 in deep)
+    assert session is None or session.config == json.loads('{"d":' + nested + "}")
+    if 2 not in deep:
+        assert snapshot.requests[0]["weird"] == json.loads(nested)
+    if 3 not in deep:
+        assert snapshot.samples[0]["weird"] == json.loads(nested)
+    for row in range(len(snapshot.requests)):
+        encode_json(request_detail(snapshot, row, None))
+    encode_json({"artifact": artifact_block(snapshot)})
+
+
+_SESSION = '{"event_type":"infer.session","session_id":"s1","timestamp_ns":1'
+_ROWS = [
+    '{"event_type":"infer.request","session_id":"s1","request_id":"q"}',
+    '{"event_type":"infer.request","session_id":"s1","request_id":"r"}',
+]
+
+
+def _refuse(*args: Any, **kwargs: Any) -> Any:
+    raise RecursionError("maximum recursion depth exceeded")
+
+
+@pytest.mark.parametrize("what", ["the record", "the session's config"])
+def test_a_record_finite_copy_refuses_keeps_its_line_and_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, what: str
+) -> None:
+    """The reader refuses lines nested past MAX_NESTING, so no record through
+    it can make finite_copy raise; the guard stays, and this pins it."""
+    finite_copy = index_module.finite_copy
+
+    def copy(value: Any, *args: Any, **kwargs: Any) -> Any:
+        if isinstance(value, dict) and value.get("refuse"):
+            _refuse()
+        return finite_copy(value, *args, **kwargs)
+
+    monkeypatch.setattr(index_module, "finite_copy", copy)
+    if what == "the record":
+        workload = '{"event_type":"infer.workload","refuse":true}'
+        lines = [_SESSION + "}", workload, *_ROWS]
+    else:
+        lines = [_SESSION + ',"config":{"refuse":true}}', *_ROWS]
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    line = 1 if what == "the record" else 0
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (line, "undecodable", f"{what} is nested too deeply to keep; its line is kept")
+    ]
+    assert [row.request_id for row in snapshot.requests] == ["q", "r"]
+    assert "infer.workload" not in snapshot.kept
+    if what == "the record":
+        assert "kept_records" in snapshot.limits_hit
+    else:
+        assert snapshot.session is not None and snapshot.session.config == {}
+
+
+def test_a_value_json_dumps_refuses_reads_as_none_in_a_ready_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The side table's own guard: a value json.dumps refuses is dropped, and
+    its line is one undecodable problem naming the field."""
+
+    def dumps(value: Any, *args: Any, **kwargs: Any) -> str:
+        if value == ["refused"]:
+            _refuse()
+        return json.dumps(value, *args, **kwargs)
+
+    stub = SimpleNamespace(dumps=dumps, loads=json.loads)
+    monkeypatch.setattr(index_module, "json", stub)
+    sample = '{"event_type":"infer.system_sample","timestamp_ns":2,"w":["refused"]}'
+    path = tmp_path / "refused.jsonl"
+    path.write_text("\n".join([_SESSION + "}", *_ROWS, sample]) + "\n")
+    snapshot = harness_for(path).build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("ready", None)
+    assert [(p.ref.line, p.code, p.detail) for p in snapshot.problems] == [
+        (3, "undecodable", "field w is nested too deeply to keep; its line is kept")
+    ]
+    assert snapshot.samples[0].get("w") is None
 
 
 def test_many_distinct_strings_move_to_a_byte_pool(tmp_path: Path) -> None:
@@ -684,6 +972,15 @@ def test_past_the_row_budget_the_index_stops_at_a_named_cut(
     assert 0 < kept < len(whole.requests)
     first_missing = whole.requests[kept].ref
     assert cut.bytes_read == first_missing.offset
+    assert cut.cut == first_missing and whole.cut is None
+    assert cut.line_count == first_missing.line
+    assert whole.line_count == len(complete_lines(path))
+    assert artifact_block(cut)["cut"] == {
+        "line": first_missing.line,
+        "offset": first_missing.offset,
+        "length": first_missing.length,
+        "sha256": first_missing.sha256,
+    }
     data = path.read_bytes()
     assert cut.prefix_sha256 == hashlib.sha256(data[: cut.bytes_read]).hexdigest()
     assert cut.sha256 is None
@@ -696,7 +993,116 @@ def test_past_the_row_budget_the_index_stops_at_a_named_cut(
         handle.write(complete_lines(path)[-1] + b"\n")
     later = harness.refresh(path.name)
     assert len(later.requests) == kept and later.bytes_read == cut.bytes_read
-    assert later.growing
+    assert later.growing and later.cut == first_missing
+
+
+COLUMNAR = ("mixed", "synthetic", "warmup_measured", "non_streaming", "tokens_mixed")
+
+
+def _same_floats(a: Sequence[float], b: Sequence[float]) -> bool:
+    return len(a) == len(b) and all(
+        x == y or (math.isnan(x) and math.isnan(y)) for x, y in zip(a, b)
+    )
+
+
+@pytest.mark.parametrize("name", COLUMNAR)
+def test_the_columnar_arrays_equal_the_rows(
+    studio_artifacts: StandardArtifacts, name: str
+) -> None:
+    path = studio_artifacts[name]
+    snapshot = harness_for(path).build(path.name)
+    table = columnar(snapshot.table)
+    assert table is not None
+    twin = DictTable(
+        [DictRow(dict(row), index=row.index, ref=row.ref) for row in snapshot.requests]
+    )
+    for metric in CLIENT_METRICS:
+        assert _same_floats(table.client_values(metric), twin.client_values(metric))
+        codes, reasons = table.client_reasons(metric)
+        twin_codes, twin_reasons = twin.client_reasons(metric)
+        assert [reasons[c] for c in codes] == [twin_reasons[c] for c in twin_codes]
+        assert reasons[0] == (None, False)
+    assert list(table.line_refs()) == list(twin.line_refs())
+    assert table.line_refs()[-1] == snapshot.requests[-1].ref
+    assert list(table.line_lengths()) == list(twin.line_lengths())
+    assert list(table.gap_counts()) == list(twin.gap_counts())
+    pool, twin_pool = table.gap_pool(), twin.gap_pool()
+    assert list(pool.counts) == list(twin_pool.counts)
+    for i in range(len(snapshot.requests)):
+        mine = pool.values[pool.starts[i] : pool.starts[i] + pool.counts[i]]
+        theirs = twin_pool.values[
+            twin_pool.starts[i] : twin_pool.starts[i] + twin_pool.counts[i]
+        ]
+        assert _same_floats(mine, theirs), i
+    assert table.gap_pool() is pool  # cached per table
+    with pytest.raises(KeyError):
+        table.client_values("client.no_such_metric")
+
+
+def test_columnar_arrays_are_copies_the_builder_never_changes(
+    fresh_artifact: Callable[[str], Path],
+) -> None:
+    np = pytest.importorskip("numpy")
+    path = fresh_artifact("mixed")
+    lines = complete_lines(path)
+    harness = harness_for(path)
+    first = harness.build(path.name)
+    table = columnar(first.table)
+    assert table is not None
+    pool = table.gap_pool()
+    values = np.frombuffer(pool.values, dtype=np.float64)
+    ttft = np.frombuffer(table.client_values(CLIENT_METRICS[0]), dtype=np.float64)
+    before = (values.copy(), ttft.copy(), list(table.gap_counts()))
+    with path.open("ab") as handle:  # the builder appends to its arrays
+        handle.write(b"\n".join(lines) + b"\n")
+    later = harness.refresh(path.name)
+    assert len(later.requests) == 2 * len(first.requests)
+    assert np.array_equal(values, before[0], equal_nan=True)
+    assert np.array_equal(ttft, before[1], equal_nan=True)
+    assert list(table.gap_counts()) == before[2]
+    assert len(table.line_refs()) == len(first.requests)
+
+
+def test_a_dropped_gap_pool_is_not_resident_in_the_columnar_view(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["synthetic"]
+    snapshot = harness_for(path, Limits(gap_bytes=60_000)).build(path.name)
+    table = columnar(snapshot.table)
+    assert table is not None and not snapshot.gaps_resident
+    with pytest.raises(NotResident):
+        table.gap_pool()
+    counts = table.gap_counts()
+    assert list(counts) == [row.gap_count for row in snapshot.requests]
+
+
+def test_context_definitions_are_bounded_and_counted_in_memory(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Made here: many distinct context definitions (Fable's F-3)."""
+    from tests.studio.test_artifact_reader import context_lines
+
+    session = complete_lines(studio_artifacts["mixed"])[0]
+    lines = [session, *context_lines(studio_artifacts["execution_import"], 300)]
+    path = tmp_path / "contexts.jsonl"
+    path.write_bytes(b"\n".join(lines) + b"\n")
+    whole = harness_for(path)
+    ready = whole.build(path.name)
+    assert ready.status == "ready" and ready.limits_hit == frozenset()
+    entry = whole.indexes._entries[path.name]
+    assert entry.reader.context_bytes > 300 * len(lines[1])
+    assert whole.indexes.stats()[path.name]["memory_bytes"] >= (
+        entry.reader.context_bytes
+    )
+    harness = harness_for(path, Limits(context_bytes=50_000))
+    cut = harness.build(path.name)
+    assert (cut.status, cut.failure) == ("partial", None)
+    assert cut.limits_hit == {"contexts"}
+    assert cut.problem_count > 0
+    assert {p.code for p in cut.problems} == {"undecodable"}
+    assert artifact_block(cut)["limits_hit"] == ["contexts"]
+    limited = harness.indexes._entries[path.name].reader
+    assert limited.context_bytes <= 50_000
 
 
 def test_past_the_gap_budget_gaps_are_read_from_the_file(
@@ -735,6 +1141,29 @@ def test_past_the_error_budget_messages_are_read_from_the_file(
         assert row.load_error_message() == record[ERROR_MESSAGE]
     with pytest.raises(NotResident):
         snapshot.column(ERROR_MESSAGE)
+
+
+def test_a_null_error_message_needs_no_line_once_the_pool_is_dropped(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["mixed"]
+    harness = harness_for(path, Limits(error_message_bytes=100))
+    snapshot = harness.build(path.name)
+    assert not snapshot.error_messages_resident
+    expected = [record for _, _, record in client_lines(path)]
+    nulls = [i for i, r in enumerate(expected) if r.get(ERROR_MESSAGE) is None]
+    texts = [i for i, r in enumerate(expected) if isinstance(r.get(ERROR_MESSAGE), str)]
+    assert nulls and texts
+    opened = harness.root.opened
+    for i in nulls:  # known without the pool (F-11)
+        row = snapshot.requests[i]
+        assert row.get(ERROR_MESSAGE) is None and row.load_error_message() is None
+    assert harness.root.opened == opened
+    for i in texts:
+        with pytest.raises(NotResident):
+            snapshot.requests[i].get(ERROR_MESSAGE)
+        assert snapshot.requests[i].load_error_message() == expected[i][ERROR_MESSAGE]
+    assert harness.root.opened == opened + len(texts)
 
 
 def with_samples(source: Path, target: Path, count: int) -> Path:
@@ -800,8 +1229,11 @@ def test_an_unexpected_error_fails_the_index_instead_of_building_forever(
 
     monkeypatch.setattr(index_module._Requests, "add", broken)
     path = studio_artifacts["mixed"]
-    snapshot = harness_for(path).build(path.name)
-    assert (snapshot.status, snapshot.failure) == ("failed", "unreadable")
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    assert (snapshot.status, snapshot.failure) == ("failed", "internal")
+    assert len(snapshot.requests) == 0 and snapshot.identity is not None
+    assert harness.refresh(path.name).failure == "internal"  # not retried
 
 
 def test_past_the_kept_budget_later_records_leave_references(
@@ -865,6 +1297,37 @@ def test_a_changed_line_is_a_stale_line_conflict(
 
 
 # --- Lifecycle and concurrency ---------------------------------------------
+
+
+def test_a_stale_line_says_why(fresh_artifact: Callable[[str], Path]) -> None:
+    """C4a's export promises details.reason on stale_line (Fable's P3-7)."""
+    path = fresh_artifact("synthetic")
+    harness = harness_for(path)
+    snapshot = harness.build(path.name)
+    ref = snapshot.requests[3].ref
+    original = path.read_bytes()
+
+    def reason(data: bytes) -> Any:
+        path.write_bytes(data)
+        with pytest.raises(ConflictError) as raised:
+            harness.indexes.read_line(path.name, ref)
+        assert raised.value.details["line"] == ref.line
+        return raised.value.details["reason"]
+
+    flipped = bytearray(original)
+    flipped[ref.offset + 2] ^= 0x01
+    assert reason(bytes(flipped)) == "sha256"
+    end = ref.offset + ref.length
+    assert reason(original[:end] + b"X" + original[end + 1 :]) == "newline"
+    assert reason(original[: ref.offset + 5]) == "length"
+    assert reason(original[: ref.offset]) == "missing"
+    path.write_bytes(original)
+    assert harness.indexes.read_line(path.name, ref) == original[ref.offset : end]
+    stream = harness.indexes.read_lines(path.name, [ref])
+    path.write_bytes(bytes(flipped))
+    with pytest.raises(ConflictError) as raised:
+        next(stream)
+    assert raised.value.details == {"line": ref.line, "reason": "sha256"}
 
 
 def test_snapshot_never_waits_and_never_raises_not_ready(

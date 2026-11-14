@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from concurrent.futures import Executor, ThreadPoolExecutor
 from dataclasses import replace
@@ -90,6 +91,9 @@ class StubIndexes:
 class StubScanner:
     def scan(self) -> None:
         return None
+
+    def wait(self, timeout_s: float) -> bool:
+        return True
 
     def state(self) -> dict[str, Any]:
         return {}
@@ -482,6 +486,24 @@ def test_repeated_ticket_parameters_are_refused() -> None:
     )
 
 
+def test_repeated_ticket_parameters_spend_every_ticket() -> None:
+    # Fable's nit: ?ticket=a&ticket=b was refused but spent neither.
+    tokens = SessionTokens()
+    first = tokens.issue_ticket(route=LINE, query="")
+    second = tokens.issue_ticket(route=LINE, query="")
+    both = request(LINE, query={"ticket": (first, second)})
+    assert code_of(lambda: check_request(both, ticket_route(), tokens)) == (
+        401,
+        "ticket_invalid",
+    )
+    for ticket in (first, second):
+        alone = ticket_request(ticket)
+        assert code_of(lambda: check_request(alone, ticket_route(), tokens)) == (
+            401,
+            "ticket_invalid",
+        )
+
+
 def test_canonical_query_sorts_encodes_and_drops_the_ticket() -> None:
     pairs = [("b", "2"), ("a", "x/y z"), ("ticket", "t"), ("a", "1")]
     assert canonical_query(pairs) == "a=1&a=x%2Fy%20z&b=2"
@@ -633,6 +655,96 @@ def test_a_file_swapped_after_the_check_is_refused(
         workspace.open("runs/a.jsonl")
 
 
+def test_a_symlinked_directory_inside_the_root_opens(
+    workspace: RootDirectory,
+) -> None:
+    (workspace.path / "alias").symlink_to(workspace.path / "runs")
+    with workspace.open("alias/a.jsonl") as handle:
+        assert handle.read() == b"{}\n"
+
+
+def outside_twin(workspace: RootDirectory, tmp_path: Path) -> Path:
+    """``mid/f.jsonl`` under the root and an ``f.jsonl`` outside it."""
+    (workspace.path / "mid").mkdir()
+    (workspace.path / "mid" / "f.jsonl").write_bytes(b"inside\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "f.jsonl").write_bytes(b"OUTSIDE\n")
+    return outside
+
+
+def test_a_directory_swapped_for_a_symlink_after_realpath_is_refused(
+    workspace: RootDirectory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The probe's case 4: realpath sees the real directory, then "mid" is
+    # replaced by a symlink out of the root before the open.
+    outside = outside_twin(workspace, tmp_path)
+    mid = workspace.path / "mid"
+    real_realpath = os.path.realpath
+
+    def swapping_realpath(path: Any, *args: Any, **kwargs: Any) -> str:
+        resolved: str = real_realpath(path, *args, **kwargs)
+        if str(path).endswith("mid/f.jsonl") and mid.is_dir():
+            mid.rename(workspace.path / "mid.old")
+            mid.symlink_to(outside)
+        return resolved
+
+    monkeypatch.setattr(os.path, "realpath", swapping_realpath)
+    with pytest.raises(ForbiddenError) as caught:
+        workspace.open("mid/f.jsonl").close()
+    assert caught.value.code == "path_not_allowed"
+
+
+def test_a_path_that_changes_under_realpath_is_not_found(
+    workspace: RootDirectory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Before 3.13, realpath's lstat then readlink of a symlink that goes
+    # in between raises FileNotFoundError (a concurrent flipper hits it).
+    def vanishing(path: Any, *args: Any, **kwargs: Any) -> str:
+        raise FileNotFoundError(2, "No such file or directory", str(path))
+
+    monkeypatch.setattr(os.path, "realpath", vanishing)
+    with pytest.raises(NotFoundError) as caught:
+        workspace.resolve("runs/a.jsonl")
+    assert caught.value.code == "artifact_not_found"
+
+
+def test_a_concurrent_directory_flipper_never_escapes_the_root(
+    workspace: RootDirectory, tmp_path: Path
+) -> None:
+    # The probe's case 5, bounded: a thread swaps "mid" for a symlink out
+    # of the root and back while the test opens "mid/f.jsonl".
+    outside = outside_twin(workspace, tmp_path)
+    mid, old = workspace.path / "mid", workspace.path / "mid.old"
+    stop = threading.Event()
+
+    def flip() -> None:
+        while not stop.is_set():
+            try:
+                mid.rename(old)
+                mid.symlink_to(outside)
+                mid.unlink()
+                old.rename(mid)
+            except OSError:
+                pass
+
+    flipper = threading.Thread(target=flip, daemon=True)
+    flipper.start()
+    escapes = opened = 0
+    try:
+        for _ in range(2000):
+            try:
+                with workspace.open("mid/f.jsonl") as handle:
+                    opened += 1
+                    escapes += b"OUTSIDE" in handle.read()
+            except StudioError:
+                pass
+    finally:
+        stop.set()
+        flipper.join(timeout=10)
+    assert escapes == 0, f"{escapes} of {opened} opens read outside the root"
+
+
 def test_relative_gives_root_relative_posix_paths(
     workspace: RootDirectory, tmp_path: Path
 ) -> None:
@@ -724,6 +836,20 @@ def test_documents_validate_against_their_schemas(ctx: StudioContext) -> None:
             json_request("/api/v1/admin/bootstrap", body)
         )
         validate(body_json(made), "bootstrap")
+
+
+@pytest.mark.parametrize(
+    "bomb", [b"[" * 60_000, b'{"a":' * 30_000], ids=["array", "object"]
+)
+def test_a_json_nesting_bomb_is_a_bad_parameter(
+    ctx: StudioContext, bomb: bytes
+) -> None:
+    # Fable's probe: 60 KB of "[" raised RecursionError, which became 500.
+    tickets = handlers(ctx)["/api/v1/tickets"].handler
+    assert code_of(lambda: tickets(json_request("/api/v1/tickets", bomb))) == (
+        400,
+        "bad_parameter",
+    )
 
 
 def test_ticket_issue_refuses_bad_routes_and_queries(ctx: StudioContext) -> None:

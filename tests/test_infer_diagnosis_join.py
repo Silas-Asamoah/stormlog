@@ -51,6 +51,55 @@ def test_lines_are_numbered_from_zero_counting_blank_ones(tmp_path: Path) -> Non
     assert [problem.split(":")[0] for problem in source.problems] == ["line 2"]
 
 
+def test_a_line_nested_too_deep_is_a_problem_not_a_crash(tmp_path: Path) -> None:
+    deep = b"[" * 100_000 + b"]" * 100_000
+    lines = [
+        b'{"schema_version": 1, "event_type": "infer.request", "request_id": "r0"}',
+        deep,
+        b'{"schema_version": 1, "event_type": "infer.request", "request_id": "r1"}',
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_bytes(b"\n".join(lines) + b"\n")
+
+    source = read_input(path)
+
+    assert [line.record_id for line in source.lines] == [
+        "infer.request/r0",
+        None,
+        "infer.request/r1",
+    ]
+    assert source.lines[1].sha256 == hashlib.sha256(deep).hexdigest()
+    assert [problem.split(":")[0] for problem in source.problems] == ["line 1"]
+    assert "not JSON" in source.problems[0]
+
+
+def test_nesting_past_the_limit_is_not_json_on_any_python(tmp_path: Path) -> None:
+    """json.loads takes 50,000 levels on 3.14 with an 8 MiB stack and
+    refuses them on 3.13; read_input refuses them on both, as Studio does."""
+    from stormlog.infer.diagnosis_inputs import MAX_NESTING
+
+    def request(rid: str, depth: int) -> bytes:
+        inner = b"[" * (depth - 1) + b"]" * (depth - 1)
+        head = b'{"schema_version": 1, "event_type": "infer.request", "request_id": '
+        return head + b'"' + rid.encode() + b'", "deep": ' + inner + b"}"
+
+    lines = [
+        request("r0", MAX_NESTING),
+        request("r1", MAX_NESTING + 1),
+        request("r2", 50_000),
+    ]
+    path = tmp_path / "infer.jsonl"
+    path.write_bytes(b"\n".join(lines) + b"\n")
+
+    source = read_input(path)
+
+    assert [line.record_id for line in source.lines] == ["infer.request/r0", None, None]
+    assert source.problems == (
+        f"line 1: not JSON (nested deeper than {MAX_NESTING})",
+        f"line 2: not JSON (nested deeper than {MAX_NESTING})",
+    )
+
+
 def test_each_record_type_has_its_own_id() -> None:
     def v1(event_type: str, **fields: object) -> dict[str, object]:
         return {"schema_version": 1, "event_type": event_type, **fields}

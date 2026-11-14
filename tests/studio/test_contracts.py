@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
+import inspect
 import json
 import math
 import numbers
@@ -14,13 +16,15 @@ from array import array
 from collections.abc import Iterator, Mapping
 from fractions import Fraction
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 from referencing import Registry, Resource
 
+from stormlog.infer import artifact_lines
 from stormlog.infer.diagnosis_inputs import record_id
+from stormlog.infer.latency_report import CLIENT_METRICS
 from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.studio import contracts
 from stormlog.studio.contracts import (
@@ -53,7 +57,12 @@ from stormlog.studio.contracts import (
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = REPO_ROOT / "stormlog" / "studio" / "contracts.py"
-ALLOWED_STORMLOG_IMPORTS = {"stormlog.infer.populations", "stormlog.infer.slo"}
+ARTIFACT_LINES = REPO_ROOT / "stormlog" / "infer" / "artifact_lines.py"
+ALLOWED_STORMLOG_IMPORTS = {
+    "stormlog.infer.artifact_lines",
+    "stormlog.infer.populations",
+    "stormlog.infer.slo",
+}
 SCHEMA_DIR = REPO_ROOT / "docs" / "schemas"
 EXAMPLE_DIR = SCHEMA_DIR / "examples"
 SCHEMA_BASE = "https://github.com/Silas-Asamoah/stormlog/docs/schemas/"
@@ -256,6 +265,29 @@ def test_to_wire_refuses_values_json_cannot_carry_exactly(value: Any) -> None:
         to_wire(value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"ab",
+        bytearray(b"ab"),
+        memoryview(b"ab"),
+        memoryview(bytearray(b"ab")),
+        memoryview(array("b", [1, 2])),
+        memoryview(b"ab").cast("c"),
+    ],
+)
+def test_bytes_and_byte_memoryviews_have_no_wire_form(value: Any) -> None:
+    with pytest.raises(TypeError):
+        to_wire(value)
+    with pytest.raises(TypeError):
+        to_wire({"payload": [value]})
+
+
+def test_a_memoryview_of_numbers_is_a_list() -> None:
+    assert to_wire(memoryview(array("q", [1, 2]))) == [1, 2]
+    assert to_wire({"t_ns": memoryview(array("q", [3]))}) == {"t_ns": ["3"]}
+
+
 # --- finite_copy and encode_json ---------------------------------------------
 
 
@@ -379,8 +411,52 @@ def test_artifact_block_lists_the_section_5_1_fields() -> None:
         "gaps_resident": True,
         "error_messages_resident": True,
         "limits_hit": ["gaps", "samples"],
+        "cut": None,
     }
     assert to_wire(block)["origin_ns"] == "1788609600000000000"
+
+
+def test_a_snapshot_names_its_cut_and_line_count() -> None:
+    plain = snapshot()
+    assert (plain.cut, plain.line_count) == (None, None)
+    ref = LineRef(line=7, offset=512, length=90, sha256="b" * 64)
+    cut = snapshot(cut=ref, line_count=7, status="partial", limits_hit={"rows"})
+    assert artifact_block(cut)["cut"] == {
+        "line": 7,
+        "offset": 512,
+        "length": 90,
+        "sha256": "b" * 64,
+    }
+    block = to_wire(artifact_block(cut))
+    assert _errors("studio_artifact_block_v1.schema.json", block) == []
+    bad = dict(block, cut={"line": 7})
+    assert _errors("studio_artifact_block_v1.schema.json", bad)
+
+
+def test_a_snapshot_counts_its_problems_by_code() -> None:
+    assert dict(snapshot().problem_counts) == {}
+    counted = snapshot(problem_count=3, problem_counts={"not_json": 2, "oversized": 1})
+    assert sum(counted.problem_counts.values()) == counted.problem_count
+    fields = {f.name for f in dataclasses.fields(IndexSnapshot)}
+    assert {"problem_counts", "cut", "line_count"} <= fields
+
+
+def test_contexts_is_a_limit_of_the_contract_and_the_schema() -> None:
+    assert contracts.Limits().context_bytes == 16 * 2**20
+    hits = set(get_args(contracts.LimitHit))
+    assert "contexts" in hits
+    schema = _load(SCHEMA_DIR / "studio_artifact_block_v1.schema.json")
+    assert set(schema["properties"]["limits_hit"]["items"]["enum"]) == hits
+    block = to_wire(artifact_block(snapshot(limits_hit=frozenset({"contexts"}))))
+    assert _errors("studio_artifact_block_v1.schema.json", block) == []
+
+
+def test_internal_is_a_failure_of_the_contract_and_the_schema() -> None:
+    failures = set(get_args(contracts.IndexFailure))
+    assert "internal" in failures
+    schema = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")
+    enum = schema["properties"]["index"]["properties"]["failure"]["enum"]
+    assert set(enum) == failures | {None}
 
 
 def test_artifact_block_without_a_session() -> None:
@@ -415,6 +491,15 @@ def test_dict_row_identity_rule_for_missing_fields() -> None:
     assert (row.case_id, row.phase) == ("unknown", "unknown")
     assert row.record_id is None and row.gap_count == 0
     assert row.load_gaps() == () and row.load_error_message() == "boom"
+
+
+def test_dict_row_reads_a_null_identity_as_unknown() -> None:
+    nulls = {"session_id": None, "request_id": None, "case_id": None, "phase": None}
+    row = DictRow(request_record(**nulls))
+    assert (row.session_id, row.request_id) == ("unknown", "unknown")
+    assert (row.case_id, row.phase) == ("unknown", "unknown")
+    assert contracts.identity_text(None) == "unknown"
+    assert contracts.identity_text(0) == "0" and contracts.identity_text("") == ""
 
 
 def test_dict_row_record_id_matches_diagnosis_inputs_for_v2_records() -> None:
@@ -458,6 +543,71 @@ def test_columns_equal_row_access() -> None:
     assert list(snap.column("client.ttft")) == [10.0, None, None]
     with pytest.raises(KeyError):
         snap.column("client.no_such_metric")
+
+
+def test_a_dict_table_gives_the_columnar_arrays_of_its_rows() -> None:
+    rows = [
+        DictRow(request_record(request_id="a", chunk_interarrival_ms=[1.0, "x"])),
+        DictRow(request_record(request_id="b", ttft_ms=None, status="timeout")),
+        DictRow({"request_id": "c", "chunk_interarrival_ms": None}, line=2),
+        DictRow(request_record(request_id="d", chunk_interarrival_ms=[3]), line=3),
+    ]
+    table = contracts.columnar(DictTable(rows))
+    assert table is not None and isinstance(table, contracts.ColumnarTable)
+    for metric in CLIENT_METRICS:
+        values = table.client_values(metric)
+        assert len(values) == len(rows)
+        for value, row in zip(values, rows):
+            expected = row.client[metric].value_ms
+            assert math.isnan(value) if expected is None else value == expected
+        codes, reasons = table.client_reasons(metric)
+        assert reasons[0] == (None, False)
+        assert [reasons[code] for code in codes] == [
+            (row.client[metric].reason, row.client[metric].not_applicable)
+            for row in rows
+        ]
+    assert list(table.line_refs()) == [row.ref for row in rows]
+    assert list(table.line_lengths()) == [row.ref.length for row in rows]
+    assert list(table.gap_counts()) == [row.gap_count for row in rows] == [2, 15, 0, 1]
+    pool = table.gap_pool()
+    for i, row in enumerate(rows):
+        start, count = pool.starts[i], pool.counts[i]
+        gaps = list(pool.values[start : start + count])
+        assert repr(gaps) == repr(list(row.load_gaps()))
+    assert list(table.column("status")) == [row.get("status") for row in rows]
+
+
+def test_a_table_without_the_arrays_is_not_columnar() -> None:
+    class Bare:
+        def __len__(self) -> int:
+            return 0
+
+        def column(self, name: str) -> list[Any]:
+            return []
+
+    assert contracts.columnar(Bare()) is None
+    doc = _doc(contracts.ColumnarTable)
+    for token in ("NaN", "milliseconds", "NotResident", "copy", "must not mutate"):
+        assert token in doc, token
+
+
+def test_the_registry_has_a_publish_listener_that_survives_replace() -> None:
+    doc = _doc(contracts.PublishingRegistry.add_publish_listener)
+    assert "builder pool" in doc and "id(snapshot.table)" in doc
+
+    class Bare:
+        def snapshot(self, rel: str) -> IndexSnapshot:
+            return snapshot()
+
+    class Hooked(Bare):
+        def add_publish_listener(self, fn: Any) -> None:
+            pass
+
+    assert contracts.publish_hook(Bare()) is None  # type: ignore[arg-type]
+    hooked: Any = Hooked()
+    for name in ("wait", "read_line", "read_lines", "close"):
+        setattr(hooked, name, lambda *args: None)
+    assert contracts.publish_hook(hooked) is hooked
 
 
 def test_not_resident_is_not_a_key_error() -> None:
@@ -532,25 +682,37 @@ def test_not_ready_refuses_anything_but_an_analysis_document(
         NotReady(state)
 
 
+def test_not_ready_needs_the_artifact_block_and_a_header_safe_retry() -> None:
+    bare = envelope("analysis", {"status": "running"})
+    with pytest.raises(ValueError, match="artifact block"):
+        NotReady(bare)
+    state = envelope("analysis", {"status": "running"}, snapshot())
+    assert NotReady(state, retry_after_s=0).retry_after_s == 0
+    for bad in (-1, 1.5, True, "2"):
+        with pytest.raises(ValueError, match="retry_after_s"):
+            NotReady(state, retry_after_s=bad)  # type: ignore[arg-type]
+
+
 def _doc(item: Any) -> str:
     return " ".join((item.__doc__ or "").split())
 
 
+def _says(item: Any, *tokens: str) -> None:
+    """Each decision's docstring names it; short tokens, so a reword passes."""
+    doc = _doc(item).casefold()
+    for token in tokens:
+        assert token.casefold() in doc, token
+
+
 def test_the_contract_states_who_raises_not_ready() -> None:
-    assert "Only C4's analysis routes raise it" in _doc(NotReady)
-    assert "Never raises :class:`NotReady`" in _doc(IndexRegistry.snapshot)
-    assert 'zero-row snapshot with ``status="building"``' in _doc(
-        IndexRegistry.snapshot
-    )
-    wait = _doc(IndexRegistry.wait)
-    assert "it never raises on a timeout" in wait
-    assert 'may still be ``"building"``' in wait
-    assert "raise :class:`NotReady`" in _doc(AnalysisCache)
+    _says(NotReady, "C4", "202")
+    _says(IndexRegistry.snapshot, "Never raises", "NotReady", "building")
+    _says(IndexRegistry.wait, "never raises", "timeout", "building")
+    _says(AnalysisCache, "NotReady", "202")
 
 
 def test_the_contract_states_kept_records_are_finite_at_index_time() -> None:
-    doc = _doc(IndexSnapshot)
-    assert "through :func:`finite_copy` once, at index time" in doc
+    _says(IndexSnapshot, "finite_copy", "index time")
     nan_config = finite_copy({"config": {"temperature": math.nan}})[0]["config"]
     session = SessionInfo(SESSION, "completed", None, None, True, nan_config)
     assert json.loads(encode_json({"config": session.config})) == {
@@ -559,10 +721,8 @@ def test_the_contract_states_kept_records_are_finite_at_index_time() -> None:
 
 
 def test_the_contract_states_unknown_is_never_a_second_session() -> None:
-    assert 'A ``session_id`` of ``"unknown"``' in _doc(IndexSnapshot)
-    assert "never counts as a second session" in _doc(IndexSnapshot)
-    session_id = vars(contracts.RequestRow)["session_id"]
-    assert "never counts as a second session" in _doc(session_id)
+    _says(IndexSnapshot, "unknown", "second session")
+    _says(vars(contracts.RequestRow)["session_id"], "unknown", "second session")
 
 
 def test_the_artifact_document_leaves_sample_sufficiency_to_the_summary() -> None:
@@ -577,9 +737,8 @@ def test_the_artifact_document_leaves_sample_sufficiency_to_the_summary() -> Non
 
 def test_a_planned_unobserved_case_still_has_a_summary_body() -> None:
     schema = _load(SCHEMA_DIR / "studio_cases_v1.schema.json")
-    description = " ".join(schema["description"].split())
-    assert "A planned case with no observations" in description
-    assert "the empty-selection summary body" in description
+    description = " ".join(schema["description"].split()).casefold()
+    assert "planned" in description and "empty-selection" in description
     entry = schema["properties"]["cases"]["items"]
     assert "summary" in entry["required"]
     document = _load(EXAMPLE_DIR / "studio_cases_v1.example.json")
@@ -590,7 +749,7 @@ def test_a_planned_unobserved_case_still_has_a_summary_body() -> None:
 def test_the_artifact_document_is_never_a_202_body() -> None:
     description = _load(SCHEMA_DIR / "studio_artifact_v1.schema.json")["description"]
     assert "also the 202 body" not in description.lower()
-    assert "Always answered with 200" in description
+    assert "200" in description
 
 
 def test_a_zero_row_building_snapshot_gives_a_valid_artifact_document() -> None:
@@ -662,6 +821,15 @@ def test_contracts_imports_only_stdlib_populations_and_slo() -> None:
         assert allowed, f"contracts imports {name}"
 
 
+def test_the_line_types_live_in_infer_and_import_only_the_stdlib() -> None:
+    stdlib = sys.stdlib_module_names
+    for name in _imported_modules(ARTIFACT_LINES):
+        assert name.split(".")[0] in stdlib, f"artifact_lines imports {name}"
+    for name in ("LineRef", "ProblemCode", "LineProblem", "FileIdentity"):
+        assert getattr(contracts, name) is getattr(artifact_lines, name), name
+        assert name in contracts.__all__ and name in artifact_lines.__all__
+
+
 def test_importing_contracts_loads_no_other_studio_module() -> None:
     probe = (
         "import sys, stormlog.studio.contracts; "
@@ -679,6 +847,13 @@ def test_importing_contracts_loads_no_other_studio_module() -> None:
         "stormlog.studio",
         "stormlog.studio.contracts",
     ]
+
+
+def test_a_workspace_scanner_can_be_waited_on() -> None:
+    wait = vars(contracts.WorkspaceScanner)["wait"]
+    assert list(inspect.signature(wait).parameters) == ["self", "timeout_s"]
+    assert inspect.signature(wait).return_annotation in (bool, "bool")
+    assert "never raises on a timeout" in _doc(wait)
 
 
 def test_every_public_name_is_exported() -> None:
@@ -806,6 +981,16 @@ def test_error_schema_names_the_route_and_media_type_codes() -> None:
     assert examples["unsupported_media_type"]["error"]["http_status"] == 415
     for document in schema["examples"]:
         assert _errors("studio_error_v1.schema.json", document) == []
+
+
+def test_error_schema_names_c3s_malformed_request() -> None:
+    schema = _load(SCHEMA_DIR / "studio_error_v1.schema.json")
+    codes = schema["properties"]["error"]["properties"]["code"]["description"]
+    assert "malformed_request (400)" in codes
+    assert "malformed_request" in schema["description"]
+    examples = {doc["error"]["code"]: doc for doc in schema["examples"]}
+    document = UsageError("malformed_request", "the Host header is repeated")
+    assert examples["malformed_request"] == document.document()
 
 
 class UnsupportedMediaTypeError(StudioError):

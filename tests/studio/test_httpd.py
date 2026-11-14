@@ -8,6 +8,7 @@ tickets), over the stub context of ``test_security.py``.
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import io
 import json
@@ -23,15 +24,19 @@ from urllib.parse import quote
 import pytest
 
 from stormlog.studio.contracts import (
+    DictTable,
     HttpRequest,
     HttpResponse,
+    IndexSnapshot,
     LaunchOptions,
     Limits,
     NotReady,
     Route,
     StudioContext,
     UsageError,
+    artifact_block,
     envelope,
+    to_wire,
 )
 from stormlog.studio.httpd import MESSAGE_MAX_BYTES, StudioServer
 from stormlog.studio.security import JSON_TYPE, SessionTokens, auth_routes
@@ -44,6 +49,36 @@ from tests.studio.test_security import (
 )
 
 ARTIFACT_TEXT = b'{"event_type": "infer.session"}\n{"event_type": "infer.request"}\n'
+# The zero-row snapshot of an index still building: the analysis document
+# is artifact-scoped, so NotReady's state carries this one's block (F-19).
+BUILDING = IndexSnapshot(
+    path="run.jsonl",
+    index_id="0" * 32,
+    generation=0,
+    status="building",
+    failure=None,
+    identity=None,
+    bytes_read=0,
+    pending_tail_bytes=0,
+    prefix_sha256=hashlib.sha256(b"").hexdigest(),
+    sha256=None,
+    growing=False,
+    origin_ns=None,
+    session=None,
+    requests=(),
+    table=DictTable(()),
+    by_request_id={},
+    samples=(),
+    kept={},
+    request_links={},
+    refs={},
+    inventory={},
+    problems=(),
+    problem_count=0,
+    limits_hit=frozenset(),
+    gaps_resident=True,
+    error_messages_resident=True,
+)
 
 
 def _json(name: str, body: Mapping[str, Any], status: int = 200) -> HttpResponse:
@@ -66,7 +101,8 @@ def stub_routes(ctx: StudioContext) -> list[Route]:
         return HttpResponse(200, "text/plain; charset=utf-8", first, headers)
 
     def analysis(request: HttpRequest) -> HttpResponse:
-        state = envelope("analysis", {"status": "running", "reason": None})
+        body = {"status": "running", "reason": None}
+        state = envelope("analysis", body, BUILDING)
         raise NotReady(state, retry_after_s=3)
 
     def error(request: HttpRequest) -> HttpResponse:
@@ -557,6 +593,7 @@ def test_not_ready_is_202_with_its_state_verbatim(studio: Studio) -> None:
     assert reply.json() == {
         "format": "stormlog.studio.analysis",
         "schema_version": 1,
+        "artifact": to_wire(artifact_block(BUILDING)),
         "status": "running",
         "reason": None,
     }
@@ -578,6 +615,16 @@ def test_bad_query_strings_are_400(studio: Studio) -> None:
     token = studio.session()
     reply = studio.get("/api/v1/server?%ff=1", token=token)
     assert_error(reply, 400, "malformed_request")
+
+
+@pytest.mark.parametrize("target", ["//evil/api/v1/health", "//", "///api/v1/health"])
+def test_a_target_starting_with_two_slashes_is_malformed(
+    studio: Studio, target: str
+) -> None:
+    # Fable's nit: "//evil/api/v1/health" got a misleading 404 (http.server
+    # collapses the slashes to "/evil/..."), and "///api/v1/health" and "//"
+    # were served as "/api/v1/health" and "/".
+    assert_error(studio.get(target), 400, "malformed_request")
 
 
 def test_static_index_etag_and_revalidation(studio: Studio) -> None:
