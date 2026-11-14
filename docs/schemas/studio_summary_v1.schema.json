@@ -283,44 +283,7 @@
             "by_device": {
               "type": "array",
               "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "sampler",
-                  "device_id",
-                  "peak_process_rss_bytes",
-                  "peak_device_used_bytes",
-                  "samples"
-                ],
-                "properties": {
-                  "sampler": {
-                    "type": "string"
-                  },
-                  "device_id": {
-                    "type": [
-                      "string",
-                      "integer",
-                      "null"
-                    ]
-                  },
-                  "peak_process_rss_bytes": {
-                    "type": [
-                      "integer",
-                      "null"
-                    ],
-                    "minimum": 0
-                  },
-                  "peak_device_used_bytes": {
-                    "type": [
-                      "integer",
-                      "null"
-                    ],
-                    "minimum": 0
-                  },
-                  "samples": {
-                    "$ref": "#/$defs/count"
-                  }
-                }
+                "$ref": "#/$defs/peak"
               }
             }
           }
@@ -376,22 +339,15 @@
           "$ref": "#/$defs/count"
         },
         "by_source": {
+          "description": "Eligible requests by recorded source, str() of it; unknown when none is recorded.",
           "type": "object",
-          "propertyNames": {
-            "enum": [
-              "server_usage",
-              "tiktoken",
-              "transformers",
-              "estimated",
-              "unknown"
-            ]
-          },
           "additionalProperties": {
             "$ref": "#/$defs/count"
           }
         },
         "known_sum": {
-          "$ref": "#/$defs/count"
+          "description": "As the analyzer sums known counts (int_value).",
+          "type": "integer"
         },
         "partial": {
           "description": "known < eligible.",
@@ -935,7 +891,7 @@
       ]
     },
     "throughput": {
-      "description": "token_report.throughput; null when the selection is not rate-eligible.",
+      "description": "token_report.successful_throughput over the rate scope's interval; for a whole case without a rate interval, the analyzer's block with every rate null (design §3.4); null for any other selection that is not rate-eligible.",
       "type": [
         "object",
         "null"
@@ -994,6 +950,53 @@
           ]
         }
       }
+    },
+    "peak": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sampler",
+        "device_id",
+        "peak_process_rss_bytes",
+        "peak_device_used_bytes",
+        "samples"
+      ],
+      "properties": {
+        "sampler": {
+          "description": "As sample_report groups it: a string, number, boolean or null; any other value as its repr.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "device_id": {
+          "description": "As sample_report groups it: a string, number, boolean or null; any other value as its repr.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "peak_process_rss_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "peak_device_used_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "samples": {
+          "$ref": "#/$defs/count"
+        }
+      },
+      "description": "One sample_report.sample_peaks entry."
     }
   }
 }

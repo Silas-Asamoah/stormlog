@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_chunks_v1.schema.json",
+  "title": "Stormlog Studio chunks v1",
+  "description": "GET /api/v1/artifact/request/chunks (design §5.4): one page of a request's chunk gaps in written order, never truncated. Gaps are chunk-level: a chunk can carry several tokens, so they are not inter-token latencies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "request_id",
+    "line",
+    "offset",
+    "limit",
+    "total",
+    "gaps_ms",
+    "note"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.chunks"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "line": {
+      "description": "0-based line of the record.",
+      "$ref": "#/$defs/count"
+    },
+    "offset": {
+      "$ref": "#/$defs/count"
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "total": {
+      "description": "Gaps as written.",
+      "$ref": "#/$defs/count"
+    },
+    "gaps_ms": {
+      "description": "Gaps offset to offset + limit; null for a value that is not a finite number.",
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": [
+          "number",
+          "null"
+        ]
+      }
+    },
+    "note": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "format": "stormlog.studio.artifact_capabilities",
+  "schema_version": 1,
+  "artifact": {
+    "path": "runs/tokens_mixed.jsonl",
+    "index_id": "0123456789abcdef0123456789abcdef",
+    "generation": 3,
+    "status": "ready",
+    "size": 113467,
+    "bytes_read": 113467,
+    "sha256": "877f73b2321282360b792966250abb83edd4416fb1bb40141bd02edb6dc4f2f9",
+    "growing": false,
+    "session_id": "d23f0824-128b-4f33-8c5c-7fd0a6a3a450",
+    "session_status": "completed",
+    "terminal": true,
+    "origin_ns": "1790000000000000000",
+    "gaps_resident": true,
+    "error_messages_resident": true,
+    "limits_hit": []
+  },
+  "panels": {
+    "requests": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "rows": 60
+      }
+    },
+    "latency": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "failures": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "streaming": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "tokens": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "rates": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": null
+    },
+    "cases": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "observed": 1,
+        "planned": 2
+      }
+    },
+    "client_memory": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "samples": 39
+      }
+    },
+    "server_evidence": {
+      "state": "unavailable",
+      "reason": "no_server_evidence",
+      "collector": "stormlog infer profile --vllm-spans-listen, or stormlog infer import-execution",
+      "detail": null
+    },
+    "vllm_metrics": {
+      "state": "unavailable",
+      "reason": "no_vllm_metrics",
+      "collector": "stormlog infer profile --vllm-metrics",
+      "detail": null
+    },
+    "trace": {
+      "state": "unavailable",
+      "reason": "no_trace",
+      "collector": "stormlog infer import-trace",
+      "detail": null
+    },
+    "execution": {
+      "state": "unavailable",
+      "reason": "no_execution",
+      "collector": "stormlog infer import-execution",
+      "detail": null
+    },
+    "server_probe": {
+      "state": "unavailable",
+      "reason": "no_server_probe",
+      "collector": "stormlog infer profile (probes the server before and after)",
+      "detail": null
+    },
+    "manifest": {
+      "state": "unavailable",
+      "reason": "no_manifest",
+      "collector": "stormlog infer attach-manifest",
+      "detail": null
+    },
+    "analysis": {
+      "state": "available",
+      "reason": null,
+      "collector": null,
+      "detail": {
+        "analysed_bytes": 113467
+      }
+    }
+  },
+  "observers": {
+    "compared_phases": [
+      "c8_in128_out64"
+    ],
+    "observers": {
+      "system_sampler": {
+        "requested": false,
+        "configured": null,
+        "active": null,
+        "healthy": null,
+        "settings": {
+          "sampler": "noop",
+          "interval_seconds": 1.0
+        },
+        "phases": {},
+        "unjudged": []
+      },
+      "vllm_metrics": {
+        "requested": false,
+        "configured": null,
+        "active": null,
+        "healthy": null,
+        "settings": null,
+        "phases": {},
+        "unjudged": []
+      },
+      "vllm_spans": {
+        "requested": false,
+        "configured": null,
+        "active": null,
+        "healthy": null,
+        "settings": null,
+        "phases": {},
+        "unjudged": []
+      },
+      "trace": {
+        "requested": false,
+        "configured": null,
+        "active": null,
+        "healthy": null,
+        "settings": null,
+        "phases": {},
+        "unjudged": []
+      },
+      "execution": {
+        "requested": false,
+        "configured": null,
+        "active": null,
+        "healthy": null,
+        "settings": null,
+        "phases": {},
+        "unjudged": []
+      }
+    }
+  },
+  "observers_source": "infer analyze (out of process)"
+}

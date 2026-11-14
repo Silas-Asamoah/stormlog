@@ -4,15 +4,23 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from stormlog.infer import quantiles
 from stormlog.infer.analysis import analyze_inference_events
-from stormlog.infer.latency_report import latency_summary, streaming_summary
+from stormlog.infer.latency_report import (
+    elapsed_ms,
+    failure_share,
+    latency_summary,
+    spread,
+    streaming_summary,
+)
 from stormlog.infer.quantiles import quantile
+from stormlog.infer.slo import CriterionValue, client_values
 from stormlog.infer.vllm_analysis import JoinedSpans
 
 SECOND = 1_000_000_000
@@ -284,3 +292,125 @@ def test_the_rule_states_what_the_intervals_assume() -> None:
 
 def test_a_case_where_everything_succeeded_has_no_unsuccessful_entries() -> None:
     assert latency_summary([_streamed(0), _streamed(1)])["unsuccessful"] == {}
+
+
+def test_client_values_are_read_once_per_successful_request() -> None:
+    requests = [_streamed(i, ttft_ms=100.0 + i) for i in range(30)]
+    requests += [_streamed(30, status="timeout"), _streamed(31, status="error")]
+    calls: list[str] = []
+
+    def counted(record: Mapping[str, Any]) -> Mapping[str, CriterionValue]:
+        calls.append(str(record["request_id"]))
+        return client_values(record)
+
+    summary = latency_summary(requests, client_values_of=counted)
+    assert sorted(calls) == sorted(f"r{i}" for i in range(30))
+    assert json.dumps(summary) == json.dumps(latency_summary(requests))
+
+
+def test_stored_client_values_give_the_same_summary() -> None:
+    requests = [
+        _streamed(
+            i, ttft_ms=float(97 * i % 41), e2e_latency_ms=float(31 * i % 53 + 200)
+        )
+        for i in range(40)
+    ]
+    requests += [_streamed(40, ttft_ms=None), _streamed(41, status="timeout")]
+    stored = {str(r["request_id"]): client_values(r) for r in requests}
+    summary = latency_summary(
+        requests, client_values_of=lambda r: stored[str(r["request_id"])]
+    )
+    assert json.dumps(summary) == json.dumps(latency_summary(requests))
+
+
+def test_each_metric_is_sorted_once_and_quantiles_never_sorts_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests = [_streamed(i, ttft_ms=float(97 * i % 41)) for i in range(300)]
+    requests.append(_streamed(300, status="error"))
+    expected = json.dumps(latency_summary(requests))
+    calls: list[int] = []
+
+    def counting(values: list[float]) -> list[float]:
+        calls.append(len(values))
+        return sorted(values)
+
+    monkeypatch.setattr(quantiles, "sorted", counting, raising=False)
+    assert json.dumps(latency_summary(requests)) == expected
+    # Only the error's elapsed-time quantile sorts inside quantiles.
+    assert calls == [1]
+
+
+def test_failure_share_is_null_for_nothing_offered_never_zero() -> None:
+    assert failure_share(120, 115) == {
+        "share": 5 / 120,
+        "numerator": 5,
+        "denominator": 120,
+        "reason": None,
+    }
+    assert failure_share(4, 0)["share"] == 1.0
+    assert failure_share(0, 0) == {
+        "share": None,
+        "numerator": 0,
+        "denominator": 0,
+        "reason": "empty_selection",
+    }
+
+
+def test_elapsed_ms_is_the_e2e_time_or_send_to_end_for_an_abandoned_request() -> None:
+    assert elapsed_ms({"e2e_latency_ms": 250}) == 250.0
+    cancelled = {
+        "status": "cancelled",
+        "started_at_ns": SECOND,
+        "ended_at_ns": 2 * SECOND,
+    }
+    assert elapsed_ms(cancelled) == 1_000.0
+    assert elapsed_ms({**cancelled, "status": "dropped"}) is None
+    assert elapsed_ms({**cancelled, "ended_at_ns": SECOND // 2}) is None
+    assert elapsed_ms({"status": "error", "e2e_latency_ms": None}) is None
+
+
+def test_spread_is_the_median_95th_percentile_and_maximum() -> None:
+    values = [5.0, 1.0, 3.0, 2.0, 4.0]
+    assert spread(values) == {
+        "p50": quantile(values, 0.5),
+        "p95": quantile(values, 0.95),
+        "max": 5.0,
+    }
+    assert spread([]) == {"p50": None, "p95": None, "max": None}
+
+
+def _pooled_by_list(requests: list[dict[str, Any]]) -> dict[str, Any]:
+    """The pooled gap spread as streaming_summary computed it with a list."""
+    gaps = [
+        float(gap)
+        for r in requests
+        if r["status"] == "ok" and r["stream"] and r.get("ttft_ms") is not None
+        for gap in r.get("chunk_interarrival_ms") or []
+        if isinstance(gap, (int, float)) and not isinstance(gap, bool)
+    ]
+    return {
+        "p50": quantile(gaps, 0.5),
+        "p95": quantile(gaps, 0.95),
+        "max": max(gaps, default=None),
+        "n": len(gaps),
+    }
+
+
+@pytest.mark.parametrize(
+    "gap_lists",
+    [
+        [[]],
+        [[3]],
+        [[0.0], [-0.0]],
+        [[-0.0], [0.0, -0.0]],
+        [[5.0, 1, 3.25], [], [2.5, "x", None, True, 7.75], [1e300, 5e-324]],
+        [[float(17 * i % 101) for i in range(j, j + 15)] for j in range(40)],
+    ],
+)
+def test_pooled_gaps_give_the_floats_a_pooled_list_gave(gap_lists: list[Any]) -> None:
+    requests = [_streamed(i, chunk_interarrival_ms=g) for i, g in enumerate(gap_lists)]
+    requests.append(_streamed(99, status="error", chunk_interarrival_ms=[1e6]))
+    got = streaming_summary(requests)["chunk_interarrival_ms"]
+    # repr tells -0.0 from 0.0, which == does not.
+    assert repr(got) == repr(_pooled_by_list(requests))
