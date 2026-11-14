@@ -1998,7 +1998,9 @@ class ArtifactIndexes:
         with self._cond:
             current = self._entries.get(entry.path) is entry
             if current:
-                self._evict(keep=entry, count=None)
+                # The count too: _open let building indexes exceed it, and
+                # only a publish can bring it back within the limit.
+                self._evict(keep=entry, count=self._limits.open_indexes)
             self._cond.notify_all()
             listeners = tuple(self._listeners)
         snapshot = entry.snapshot

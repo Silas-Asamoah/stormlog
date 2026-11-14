@@ -1616,6 +1616,24 @@ def test_a_building_index_is_never_evicted(
     assert sorted(harness.indexes.stats()) == ["mixed.jsonl", "synthetic.jsonl"]
 
 
+def test_builds_that_finish_restore_the_open_index_limit(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    """Indexes opened while others build may exceed ``open_indexes``; once
+    they publish, the least recently used are evicted down to it (Codex:
+    a publish evicted for memory only, so three stayed open for good)."""
+    names = [f"a{i}.jsonl" for i in range(3)]
+    for name in names:
+        (tmp_path / name).write_bytes(studio_artifacts["synthetic"].read_bytes())
+    harness = Harness(tmp_path, Limits(open_indexes=1))
+    for name in names:
+        harness.indexes.snapshot(name)
+    assert sorted(harness.indexes.stats()) == names  # all three building
+    harness.pool.run()
+    stats = harness.indexes.stats()
+    assert list(stats) == ["a2.jsonl"] and stats["a2.jsonl"]["status"] == "ready"
+
+
 def test_close_cancels_builds_and_drops_every_index(
     studio_artifacts: StandardArtifacts,
 ) -> None:
