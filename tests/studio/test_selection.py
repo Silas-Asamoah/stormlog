@@ -11,12 +11,15 @@ for the 500,000-request timings. ``tests/studio/test_summaries.py`` and
 from __future__ import annotations
 
 import base64
+import gc
 import hashlib
 import json
 import math
 import random
+import threading
 import time
-from collections import Counter
+import weakref
+from collections import Counter, deque
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -51,6 +54,7 @@ from stormlog.studio.contracts import (
     SessionInfo,
     TimeWindow,
     UsageError,
+    publish_hook,
     selection_fingerprint,
 )
 from stormlog.studio.selection import (
@@ -1056,6 +1060,192 @@ def test_case_facts_are_computed_once_per_snapshot() -> None:
     assert case_facts(other) is not case_facts(snapshot)
 
 
+def test_a_case_name_is_the_rows_case_id_by_the_contracts_rule(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's F-5: a null case_id read "unknown" here, "None" in DictRow.
+    # Selection now reads a case cell by the contract's identity_text, the
+    # rule every row uses, so the two cannot drift apart again.
+    records = [request(i) for i in range(6)]
+    records[0]["case_id"] = None
+    del records[1]["case_id"]
+    records[2]["case_id"] = 5
+    records[3]["case_id"] = True
+    snapshot = snapshot_from_records(records)
+    sel = select(snapshot, RequestFilter())
+    named = sorted({row.case_id for row in snapshot.requests})
+    assert list(sel.cases) == named == ["5", "True", "c1", "unknown"]
+    assert sorted(case_facts(snapshot).by_case) == named
+    unknown = select(snapshot, RequestFilter(cases=("unknown",)))
+    assert list(unknown.rows) == [0, 1]
+
+    monkeypatch.setattr(selection, "identity_text", lambda value: "one rule")
+    assert select(snapshot, RequestFilter()).cases == ("one rule",)
+
+
+def test_case_facts_survive_a_republish_that_shares_the_table() -> None:
+    # Fable's F-7: C1 republishes a touch or a growing flip with replace(),
+    # a new snapshot over the same table; keyed on the snapshot, the facts
+    # were computed again with no new row.
+    snapshot = snapshot_from_records(closed_case())
+    facts = case_facts(snapshot)
+    for changes in ({"growing": True}, {"status": "partial"}, {"generation": 1}):
+        assert case_facts(replace(snapshot, **changes)) is facts
+    # Other kept records, another inventory or a new table are new facts.
+    other_kept = replace(snapshot, kept={})
+    assert case_facts(other_kept) is not facts
+    assert case_facts(other_kept).planned == ()
+    assert case_facts(replace(snapshot, inventory={})) is not facts
+    assert case_facts(replace(snapshot, table=DictTable(snapshot.requests))) is not (
+        facts
+    )
+
+
+@pytest.fixture
+def fresh_facts(monkeypatch: pytest.MonkeyPatch) -> dict[int, Any]:
+    """An empty facts cache, queue and lock of this test's own: a test that
+    fails by deadlocking leaves only its own lock held."""
+    facts: dict[int, Any] = {}
+    monkeypatch.setattr(selection, "_FACTS", facts)
+    monkeypatch.setattr(selection, "_DEAD", deque(), raising=False)
+    monkeypatch.setattr(selection, "_FACTS_LOCK", threading.Lock())
+    return facts
+
+
+def test_a_table_that_dies_inside_the_facts_lock_does_not_deadlock(
+    fresh_facts: dict[int, Any],
+) -> None:
+    # Fable's P1: an index snapshot's table sits in a reference cycle, so
+    # it dies in the cyclic collector, which runs on whichever thread
+    # allocates; case_facts allocates while it holds _FACTS_LOCK. The
+    # table's weakref callback took that Lock, so on the holding thread it
+    # waited on itself for good, and so did every later select. Here the
+    # table dies inside the lock on purpose, on a thread of its own.
+    snapshots = [snapshot_from_records(closed_case())]
+    case_facts(snapshots[0])
+    table = weakref.ref(snapshots[0].table)
+    returned = threading.Event()
+
+    def die_inside_the_lock() -> None:
+        with selection._FACTS_LOCK:
+            snapshots.clear()
+            gc.collect()
+        returned.set()
+
+    worker = threading.Thread(target=die_inside_the_lock, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert returned.is_set(), "the weakref callback blocked on _FACTS_LOCK"
+    assert table() is None
+    # The next select on any thread takes the lock and forgets the facts.
+    later = snapshot_from_records(closed_case())
+    case_facts(later)
+    assert list(fresh_facts) == [id(later.table)]
+    assert not selection._DEAD
+
+
+def test_a_dead_tables_facts_are_forgotten(fresh_facts: dict[int, Any]) -> None:
+    snapshots = [snapshot_from_records(closed_case())]
+    other = snapshot_from_records(closed_case())
+    case_facts(snapshots[0])
+    key = id(snapshots[0].table)
+    assert key in fresh_facts
+    snapshots.clear()
+    gc.collect()
+    # The callback only queues the key; it leaves the cache to the lock.
+    assert [entry[0] for entry in selection._DEAD] == [key]
+    assert key in fresh_facts
+    case_facts(other)
+    assert key not in fresh_facts
+    assert list(fresh_facts) == [id(other.table)]
+    assert not selection._DEAD
+
+
+def test_the_facts_cache_keeps_eight_and_drains_the_dead_before_evicting(
+    fresh_facts: dict[int, Any],
+) -> None:
+    kept = selection._FACTS_KEPT
+    snapshots = [snapshot_from_records(closed_case()) for _ in range(kept + 2)]
+    for snapshot in snapshots:
+        case_facts(snapshot)
+    # Full: each new table evicts the oldest.
+    assert list(fresh_facts) == [id(s.table) for s in snapshots[2:]]
+    # A dead table frees its slot, so a new one evicts no live table.
+    dead = snapshots.pop(5)
+    del dead
+    gc.collect()
+    newcomer = snapshot_from_records(closed_case())
+    case_facts(newcomer)
+    assert list(fresh_facts) == [id(s.table) for s in [*snapshots[2:], newcomer]]
+    assert len(fresh_facts) == kept
+    assert not selection._DEAD
+
+
+class _AskedTable(DictTable):
+    """A DictTable that records every column asked of it."""
+
+    def __init__(self, rows: Sequence[RequestRow]) -> None:
+        super().__init__(rows)
+        self.asked: set[str] = set()
+
+    def column(self, name: str) -> Sequence[Any]:
+        self.asked.add(name)
+        return super().column(name)
+
+
+def test_warm_leaves_nothing_for_the_first_select_and_summary_to_compute(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from stormlog.studio import summaries
+
+    snapshot = snapshot_from_records(closed_case())
+    table = _AskedTable(snapshot.requests)
+    snapshot = replace(snapshot, table=table)
+    selection.warm(snapshot)
+    warmed = set(table.asked)
+    assert warmed >= set(selection.WARM_COLUMNS) | set(selection.POPULATION_FIELDS)
+
+    def not_again(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("case_facts computed again")
+
+    monkeypatch.setattr(selection, "_compute_facts", not_again)
+    table.asked.clear()
+    sel = select(snapshot, RequestFilter())
+    summaries.summary(snapshot, sel)
+    assert table.asked <= warmed, sorted(table.asked - warmed)
+
+
+def test_warm_is_a_publish_listener_of_the_real_index(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.studio.test_index import Harness
+
+    path = tmp_path / "run.jsonl"
+    path.write_text(
+        "".join(json.dumps(r) + "\n" for r in [session_record(), *closed_case()])
+    )
+    harness = Harness(tmp_path)
+    registry = publish_hook(harness.indexes)
+    assert registry is not None
+    registry.add_publish_listener(selection.warm)
+    snapshot = harness.build(path.name)
+    assert snapshot.status == "ready"
+
+    def not_again(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("case_facts not warmed")
+
+    monkeypatch.setattr(selection, "_compute_facts", not_again)
+    assert sorted(case_facts(snapshot).by_case) == ["c1"]
+
+
+def test_warm_does_nothing_without_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    def never(snapshot: IndexSnapshot) -> Any:
+        raise AssertionError("warmed an empty snapshot")
+
+    monkeypatch.setattr(selection, "_compute_facts", never)
+    selection.warm(snapshot_from_records([session_record()]))
+
+
 # --- paging -------------------------------------------------------------------------
 
 
@@ -1180,6 +1370,65 @@ def test_a_cursor_nesting_bomb_is_a_400(bomb: bytes) -> None:
     with pytest.raises(UsageError) as raised:
         page(snapshot, sel, sort="artifact", order="asc", cursor=cursor, limit=5)
     assert (raised.value.code, raised.value.field) == ("bad_parameter", "cursor")
+
+
+def _forged(cursor: str, **changes: Any) -> str:
+    padded = cursor + "=" * (-len(cursor) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded))
+    payload.update(changes)
+    text = json.dumps(payload, separators=(",", ":"))
+    return base64.urlsafe_b64encode(text.encode()).decode().rstrip("=")
+
+
+# Fable's F-6 probe: keys that typed only by shape reached a comparison
+# and raised TypeError (a 500). Each is (sort, key).
+FORGED_KEYS: list[tuple[str, list[Any]]] = [
+    ("client.e2e", [0, {"a": 1}, 3]),
+    ("client.e2e", [0, [1, 2], 3]),
+    ("client.e2e", [0, "abc", 3]),
+    ("client.e2e", [0, None, 3]),
+    ("client.e2e", [0, True, 3]),
+    ("client.e2e", [0, float("inf"), 3]),
+    ("client.e2e", [1, 12.5, 3]),
+    ("client.e2e", [0, 12.5, -7]),
+    ("client.e2e", [0, 12.5, 10**30]),
+    ("client.e2e", [0, 12.5, 137]),
+    ("client.e2e", [True, 12.5, 3]),
+    ("status", [0, 12.5, 3]),
+    ("status", [0, ["ok"], 3]),
+    ("artifact", [0, "3", 3]),
+    ("artifact", [0, 4, 3]),
+    ("artifact", [1, None, 3]),
+]
+
+
+@pytest.mark.parametrize(("sort", "key"), FORGED_KEYS)
+def test_a_forged_cursor_key_is_a_400_never_a_crash(sort: str, key: list[Any]) -> None:
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    issued = page(snapshot, sel, sort=sort, order="asc", cursor=None, limit=5)  # type: ignore[arg-type]
+    assert issued.next_cursor is not None
+    with pytest.raises(UsageError) as raised:
+        page(
+            snapshot,
+            sel,
+            sort=sort,  # type: ignore[arg-type]
+            order="asc",
+            cursor=_forged(issued.next_cursor, key=key),
+            limit=5,
+        )
+    assert raised.value.code == "bad_parameter"
+    assert raised.value.field == "cursor"
+
+
+@pytest.mark.parametrize("sort", sorted(selection.SORT_KEYS))
+def test_every_issued_cursor_key_still_fits_its_sort(sort: str) -> None:
+    snapshot = _paging_snapshot()
+    sel = select(snapshot, RequestFilter())
+    for order in ("asc", "desc"):
+        assert _all_pages(snapshot, sel, sort, order, 3) == _expected_order(
+            snapshot, sel.rows, sort, order
+        )
 
 
 @pytest.mark.parametrize("limit", [0, -1, 1001])

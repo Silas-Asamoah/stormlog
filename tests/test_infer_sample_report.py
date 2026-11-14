@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Any
 
@@ -9,6 +10,7 @@ from stormlog.infer import analysis
 from stormlog.infer.sample_report import (
     group_samples,
     request_window,
+    sample_gaps,
     sample_peaks,
     samples_in_window,
 )
@@ -149,3 +151,36 @@ def test_the_helpers_follow_the_analyzers_rules() -> None:
             pooled = analysis._peak_sample_value([dict(s) for s in kept], field)
             peaks = [p[f"peak_{field}"] for p in sample_peaks(kept)]
             assert peaks == ([] if not kept else [pooled])
+
+
+def test_a_series_breaks_where_samples_are_over_twice_its_median_apart() -> None:
+    times = [0, 10, 20, 30, 51, 61, 81, 82]
+    # Intervals 10, 10, 10, 21, 10, 20, 1: median 10, so 21 breaks, 20 not.
+    assert sample_gaps(times) == [(30, 51)]
+    assert sample_gaps(times, factor=1.5) == [(30, 51), (61, 81)]
+
+
+def test_a_series_without_a_median_interval_has_no_gaps() -> None:
+    assert sample_gaps([]) == []
+    assert sample_gaps([5]) == []
+    assert sample_gaps([5, 5, 5, 9]) == []
+
+
+def test_a_malformed_device_id_keeps_its_own_value() -> None:
+    # Fable's c2-core P3-2: an id that is not hashable or not equal to
+    # itself was grouped by its repr and written as that repr, so a NaN id
+    # and the text "nan" both read "nan".
+    nan = float("nan")
+    samples = [
+        _sample(1, sampler="nvml", device_id=nan, device_used_bytes=5),
+        _sample(2, sampler="nvml", device_id="nan", device_used_bytes=7),
+        _sample(3, sampler="nvml", device_id=[0], device_used_bytes=9),
+        _sample(4, sampler="nvml", device_id=nan, device_used_bytes=6),
+        _sample(5, sampler="nvml", device_id=[0], device_used_bytes=1),
+    ]
+    peaks = sample_peaks(samples)
+    ids = [entry["device_id"] for entry in peaks]
+    assert [type(i).__name__ for i in ids] == ["list", "float", "str"]
+    assert ids[0] == [0] and math.isnan(ids[1]) and ids[2] == "nan"
+    assert [entry["samples"] for entry in peaks] == [2, 2, 1]
+    assert [entry["peak_device_used_bytes"] for entry in peaks] == [9, 6, 7]

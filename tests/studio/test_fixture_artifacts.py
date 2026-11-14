@@ -4,8 +4,13 @@ reads it as the rest of the Studio suite assumes."""
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import json
+import math
+import os
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -13,33 +18,49 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import fields
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 
 from stormlog.exit_codes import ExitCode
+from stormlog.infer.audio_events import AudioRequestEvent
 from stormlog.infer.cli import main as infer_main
-from stormlog.infer.events import InferenceRequestEvent
+from stormlog.infer.events import (
+    InferenceRequestEvent,
+    InferenceSystemSample,
+    JsonlEventWriter,
+)
+from stormlog.infer.populations import case_populations
+from stormlog.studio.contracts import ProblemCode
+from stormlog.telemetry import validate_telemetry_record
+from tests import test_infer_profile
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     LARGE_GAPS,
     LARGE_REQUESTS,
     MULTI_SESSION,
     NO_TERMINAL_RECORD,
+    PROBLEM_LINES,
     STANDARD_ARTIFACTS,
+    UNSUPPORTED,
+    VARYING,
+    VARYING_FIELDS,
     CaseSpec,
     GrowingCopy,
+    SamplePlan,
     decoded_records,
     last_line_start,
+    normalised,
     profile_artifact,
     profile_config,
     rewrite_in_place,
     synthetic_artifact,
     truncated_copy,
+    varying_paths,
     with_execution_import,
 )
 from tests.studio.conftest import StandardArtifacts
-from tests.studio.fake_openai import CasePolicy, fake_openai
+from tests.studio.fake_openai import Answer, CasePolicy, ServerState, fake_openai
 
 NAMES = sorted(STANDARD_ARTIFACTS)
 
@@ -109,8 +130,9 @@ def test_only_the_multi_session_artifact_holds_two_sessions(
     name: str, studio_artifacts: StandardArtifacts
 ) -> None:
     path = studio_artifacts[name]
+    expected = 2 if name in MULTI_SESSION else 1
 
-    assert len(_sessions(path)) == (2 if name in MULTI_SESSION else 1)
+    assert len(_sessions(path)) == (0 if name in UNSUPPORTED else expected)
 
 
 def test_the_multi_session_artifact_is_two_whole_runs_end_to_end(
@@ -137,7 +159,7 @@ def test_a_terminal_session_record_ends_only_the_finished_artifacts(
 ) -> None:
     terminal = [r for r in _lines(studio_artifacts[name]) if _is_terminal(r)]
 
-    assert bool(terminal) == (name not in NO_TERMINAL_RECORD)
+    assert bool(terminal) == (name not in NO_TERMINAL_RECORD | set(UNSUPPORTED))
 
 
 @pytest.mark.parametrize("cut", ["mid_line", "after_newline"])
@@ -354,6 +376,35 @@ def _post(endpoint: str, request_id: str, body: dict[str, Any]) -> Any:
         return response.read()
 
 
+# What fake_openai.py takes from tests/test_infer_profile.py, by name.
+BASE_FAKE = {
+    "_send_json": ["self", "body", "status"],
+    "_send_stream": ["self", "include_usage"],
+    "do_POST": ["self"],
+}
+
+
+def test_the_base_fake_keeps_the_private_names_this_fake_uses() -> None:
+    message = (
+        "tests/studio/fake_openai.py subclasses _FakeOpenAIHandler from "
+        "tests/test_infer_profile.py and calls its _send_json(body, *, status) "
+        "and _send_stream(*, include_usage). {problem}. Keep those names and "
+        "signatures in test_infer_profile.py, or copy the base fake into "
+        "tests/studio/fake_openai.py (Fable F-23)."
+    )
+    handler = getattr(test_infer_profile, "_FakeOpenAIHandler", None)
+    if not isinstance(handler, type):
+        pytest.fail(message.format(problem="_FakeOpenAIHandler is gone"))
+    for name, parameters in BASE_FAKE.items():
+        method = getattr(handler, name, None)
+        if not callable(method):
+            pytest.fail(message.format(problem=f"{name} is gone"))
+        found = list(inspect.signature(method).parameters)
+        if found != parameters:
+            problem = f"{name} now takes {found}, not {parameters}"
+            pytest.fail(message.format(problem=problem))
+
+
 def test_the_fake_server_answers_by_case_and_phase() -> None:
     policies = {
         "c1_in8_out4": CasePolicy(all_fail=True),
@@ -406,6 +457,412 @@ def test_fresh_artifact_gives_a_private_copy(
 
     assert copy.read_bytes() == studio_artifacts["empty"].read_bytes()
     assert copy != studio_artifacts["empty"]
+
+
+def _windows(path: Path) -> dict[str, dict[str, Any]]:
+    """Each case's measured phase window."""
+    return {
+        r["case_id"]: r
+        for r in _lines(path)
+        if r.get("event_type") == "infer.phase_window" and r["phase"] == "measured"
+    }
+
+
+def _by_case(path: Path) -> Counter[str]:
+    return Counter(r["case_id"] for r in _measured(path))
+
+
+def test_the_open_loop_artifact_has_a_scheduled_rate_window_per_case(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["open_loop"]
+    windows = _windows(path)
+    populations = case_populations(decoded_records(path))
+
+    assert _by_case(path) == {"fixed40_in8_out4": 12, "fixed40_in8_out16": 12}
+    assert set(windows) == set(populations) == set(_by_case(path))
+    for case_id, window in windows.items():
+        assert window["arrival_mode"] == "fixed-rate"
+        assert window["stopped_early"] is False
+        assert window["scheduled_arrivals"] == 12
+        assert window["scheduled_endpoint_offset_ns"] == 300_000_000  # 12 at 40/s
+        rate = populations[case_id].intervals.rate
+        assert rate is not None and rate.kind == "scheduled_window"
+        # A window over the case's rate interval keeps every one of its rows.
+        for request in _measured(path):
+            if request["case_id"] == case_id:
+                assert rate.started_at_ns <= request["intended_at_ns"]
+                assert request["intended_at_ns"] < rate.ended_at_ns
+
+
+def test_the_stopped_early_artifact_ends_its_window_at_the_stop(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["stopped_early"]
+    (window,) = _windows(path).values()
+    (population,) = case_populations(decoded_records(path)).values()
+    rate = population.intervals.rate
+    sessions = [r for r in _lines(path) if _is_terminal(r)]
+
+    assert window["stopped_early"] is True
+    assert 8 <= window["scheduled_arrivals"] < 40
+    assert window["scheduled_endpoint_offset_ns"] < 2_000_000_000
+    assert _by_case(path) == {"fixed20_in8_out4": window["scheduled_arrivals"]}
+    assert rate is not None and rate.kind == "scheduled_window"
+    assert rate.ended_at_ns - rate.started_at_ns == (
+        window["scheduled_endpoint_offset_ns"]
+    )
+    assert [r["status"] for r in sessions] == ["completed"]
+
+
+def test_the_interrupted_artifact_has_a_case_without_a_window(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["interrupted"]
+    populations = case_populations(decoded_records(path))
+    starts = [
+        r["case_id"]
+        for r in _lines(path)
+        if r.get("event_type") == "infer.phase_start" and r["phase"] == "measured"
+    ]
+    whole, cut = "c2_in8_out4", "c2_in8_out16"
+
+    assert [r["status"] for r in _lines(path) if _is_terminal(r)] == ["interrupted"]
+    assert starts == [whole, cut]
+    assert set(_windows(path)) == {whole}
+    assert _by_case(path)[whole] == 12
+    assert 5 <= _by_case(path)[cut] < 12
+    assert populations[whole].intervals.rate is not None
+    assert populations[cut].intervals.rate is None
+    assert populations[cut].intervals.rate_reason == "phase_window_missing"
+
+
+def test_the_fake_server_reads_open_loop_ids_and_stops_or_interrupts_once() -> None:
+    state = ServerState(
+        policies={"fixed4_in8_out4": CasePolicy(stop_after=2, interrupt_after=3)}
+    )
+    ids = [f"stormlog-r-1-fixed4_in8_out4_measured_{i}" for i in range(4)]
+    warmup = state.answer("stormlog-r-1-fixed4_in8_out4_warmup_0")
+
+    answers = [state.answer(request_id) for request_id in ids]
+
+    assert warmup == Answer()
+    assert [(a.stop, a.interrupt) for a in answers] == [
+        (False, False),
+        (True, False),
+        (False, True),
+        (False, False),
+    ]
+    assert state.measured == {"fixed4_in8_out4": 4}
+    assert state.stopped and state.interrupted
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"arrival": "closed", "rate_per_second": 5.0},
+        {"arrival": "fixed-rate"},
+        {"arrival": "burst", "rate_per_second": 5.0},
+    ],
+)
+def test_profile_config_refuses_arrivals_it_cannot_run(
+    options: dict[str, Any], tmp_path: Path
+) -> None:
+    with pytest.raises(ValueError):
+        profile_config(
+            [CaseSpec(1, 8, 4, 3)],
+            endpoint="http://x",
+            output=tmp_path / "a",
+            warmup=0,
+            seed=0,
+            **options,
+        )
+
+
+def test_an_open_loop_run_has_one_in_flight_limit(tmp_path: Path) -> None:
+    cases = [CaseSpec(1, 8, 4, 3), CaseSpec(2, 8, 4, 3)]
+    with pytest.raises(ValueError, match="in-flight"):
+        profile_config(
+            cases,
+            endpoint="http://x",
+            output=tmp_path / "a",
+            warmup=0,
+            seed=0,
+            arrival="poisson",
+            rate_per_second=3.0,
+        )
+
+    config = profile_config(
+        cases[:1],
+        endpoint="http://x",
+        output=tmp_path / "a",
+        warmup=0,
+        seed=0,
+        arrival="poisson",
+        rate_per_second=3.0,
+    )
+    assert [case.case_id for case in config.cases()] == [
+        cases[0].run_case_id(config.arrival_specs()[0])
+    ]
+
+
+def test_the_timeouts_artifact_has_two_timed_out_requests(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    measured = _measured(studio_artifacts["timeouts"])
+    timed_out = [r for r in measured if r["status"] == "timeout"]
+
+    assert Counter(r["status"] for r in measured) == {"ok": 6, "timeout": 2}
+    for record in timed_out:
+        assert record["http_status"] is None
+        assert record["ttft_ms"] is None
+        assert record["e2e_latency_ms"] >= 250.0
+
+
+def test_the_nan_gap_artifact_writes_one_bare_nan(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["nan_gap"]
+    lines = [line for line in path.read_bytes().split(b"\n") if b"NaN" in line]
+    (line,) = lines
+    record = json.loads(line)
+    gaps = record["chunk_interarrival_ms"]
+
+    assert b"NaN," in line or b"NaN]" in line
+    assert record["request_index"] == 0
+    assert [math.isnan(gap) for gap in gaps].count(True) == 1
+    assert math.isnan(gaps[len(gaps) // 2])
+
+
+def test_nan_gap_needs_a_gap(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        synthetic_artifact(tmp_path, requests=3, gaps_per_request=0, nan_gap=True)
+
+
+def test_the_audio_artifact_is_two_audio_requests(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    records = _lines(studio_artifacts["audio"])
+
+    assert [r["event_type"] for r in records] == ["infer.audio.request"] * 2
+    assert [r["status"] for r in records] == ["ok", "error"]
+    for record in records:
+        assert AudioRequestEvent.from_record(dict(record)).to_record() == record
+
+
+def test_the_non_inference_artifact_is_memory_telemetry(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    records = _lines(studio_artifacts["not_an_inference_artifact"])
+
+    assert len(records) == 4
+    for record in records:
+        validate_telemetry_record(record)
+        assert record["schema_version"] == 4
+        assert record["collector"] == "stormlog.cpu_tracker"
+        assert not str(record["event_type"]).startswith("infer.")
+
+
+def test_the_unsupported_version_artifact_ends_with_a_v2_client_request(
+    studio_artifacts: StandardArtifacts, tmp_path: Path
+) -> None:
+    path = studio_artifacts["unsupported_version"]
+    records = _lines(path)
+    last = records[-1]
+    v1 = [r for r in _measured(path) if r["request_id"] == last["request_id"]]
+
+    assert _is_terminal(records[-2])
+    assert last["event_type"] == "infer.request"
+    assert last["schema_version"] == 2
+    assert "context" not in last and "context_id" not in last
+    assert [dict(r, schema_version=2) for r in v1] == [last]
+    with JsonlEventWriter(tmp_path / "refused.jsonl") as writer:
+        with pytest.raises(ValueError):
+            writer.append(last)
+
+
+def test_problem_lines_name_problem_codes_of_the_contract() -> None:
+    assert set(PROBLEM_LINES.values()) <= set(get_args(ProblemCode))
+    assert set(PROBLEM_LINES) | set(UNSUPPORTED) <= set(STANDARD_ARTIFACTS)
+
+
+def test_the_fake_server_holds_every_nth_measured_request() -> None:
+    state = ServerState(
+        policies={"c1_in8_out4": CasePolicy(slow_every=2, delay_seconds=0.5)}
+    )
+    warmup = state.answer("stormlog-r-1-c1_in8_out4_warmup_0_0")
+    delays = [
+        state.answer(f"stormlog-r-1-c1_in8_out4_measured_0_{i}").delay_seconds
+        for i in range(4)
+    ]
+
+    assert warmup.delay_seconds == 0.0
+    assert delays == [0.0, 0.5, 0.0, 0.5]
+    with pytest.raises(ValueError):
+        CasePolicy(delay_seconds=-1.0)
+
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+
+
+def _generate(name: str, directory: Path, **env: str) -> list[dict[str, Any]]:
+    """``name``'s records, as a fresh Python process writes them."""
+    environment = {**os.environ, "PYTHONPATH": str(REPOSITORY), **env}
+    result = subprocess.run(
+        [sys.executable, "-m", "tests.studio.artifacts", name, str(directory)],
+        cwd=REPOSITORY,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    return _lines(Path(result.stdout.strip()))
+
+
+def test_two_generations_differ_only_in_the_varying_fields(tmp_path: Path) -> None:
+    # Two processes, one with an extra proxy variable, as two CI jobs would.
+    first = _generate("samples", tmp_path / "a")
+    second = _generate("samples", tmp_path / "b", studio_fixture_proxy="x.invalid")
+    differing = {
+        path for one, other in zip(first, second) for path in varying_paths(one, other)
+    }
+    keys = [{key.removesuffix("[]") for key in path.split(".")} for path in differing]
+
+    assert len(first) == len(second) and first != second
+    # Every difference is at or under a varying field, and these did vary.
+    assert all(path_keys & VARYING_FIELDS for path_keys in keys)
+    assert {"context_id", "pid", "environment_proxies"} <= set().union(*keys)
+    assert normalised(first) == normalised(second)
+
+
+def test_normalised_masks_varying_fields_at_any_depth() -> None:
+    record = {
+        "pid": 1,
+        "summary": {"host": "a", "pid": 2, "ended_at_ns": 5},
+        "items": [{"index_id": "x", "count": 3}],
+        "timestamp": 9,
+    }
+
+    assert normalised(record) == {
+        "pid": VARYING,
+        "summary": {"host": VARYING, "pid": VARYING, "ended_at_ns": 5},
+        "items": [{"index_id": VARYING, "count": 3}],
+        "timestamp": 9,
+    }
+    assert normalised(record, timestamps=True)["summary"]["ended_at_ns"] == VARYING
+    assert normalised(record, timestamps=True)["timestamp"] == VARYING
+    assert varying_paths(record, normalised(record)) == {
+        "pid",
+        "summary.host",
+        "summary.pid",
+        "items[].index_id",
+    }
+
+
+def _samples(path: Path) -> list[dict[str, Any]]:
+    return [r for r in _lines(path) if r.get("event_type") == "infer.system_sample"]
+
+
+def _series(path: Path) -> dict[tuple[str, int | None], list[int]]:
+    """Each ``(sampler, device_id)`` series' timestamps, in file order."""
+    series: dict[tuple[str, int | None], list[int]] = {}
+    for sample in _samples(path):
+        key = (sample["sampler"], sample["device_id"])
+        series.setdefault(key, []).append(sample["timestamp_ns"])
+    return series
+
+
+def test_the_samples_artifact_has_client_rss_and_two_devices(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    series = _series(path)
+
+    assert set(series) == {("psutil", None), ("nvidia-smi", 0), ("nvidia-smi", 1)}
+    assert len(series[("psutil", None)]) == len(series[("nvidia-smi", 0)]) > 24
+    for sample in _samples(path):
+        assert sample["observation_scope"] == "client_local"
+        if sample["sampler"] == "psutil":
+            assert sample["process_rss_bytes"] > 0
+            assert sample["device_used_bytes"] is None
+        else:
+            assert sample["process_rss_bytes"] is None
+            assert sample["device_used_bytes"] + sample["device_free_bytes"] == (
+                sample["device_total_bytes"]
+            )
+
+
+def test_the_samples_artifact_has_a_gap_and_a_stale_device(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    series = _series(path)
+    steady, stale = series[("nvidia-smi", 0)], series[("nvidia-smi", 1)]
+    plan = SamplePlan()
+    step = plan.interval_ms * 1_000_000
+    gaps = [later - earlier for earlier, later in zip(stale, stale[1:])]
+
+    # More than observers.SCRAPE_GAP_FACTOR (2.0) times the median interval.
+    assert max(gaps) == (plan.gap_ticks[1] - plan.gap_ticks[0] + 1) * step
+    assert max(gaps) > 2 * sorted(gaps)[len(gaps) // 2]
+    # The device goes quiet well before the run ends: its last value is stale.
+    assert steady[-1] - stale[-1] >= 4 * step
+    assert len(stale) == plan.stop_tick - (plan.gap_ticks[1] - plan.gap_ticks[0])
+
+
+def test_samples_lie_inside_the_measured_phase_in_time_order(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    path = studio_artifacts["samples"]
+    (window,) = [r for r in _lines(path) if r["event_type"] == "infer.phase_window"]
+    times = [sample["timestamp_ns"] for sample in _samples(path)]
+
+    assert times == sorted(times)
+    assert window["started_at_ns"] <= times[0]
+    assert times[-1] <= window["drained_at_ns"]
+
+
+def test_synthetic_samples_equal_what_the_dataclass_writes_and_repeat(
+    tmp_path: Path,
+) -> None:
+    def samples(directory: str) -> list[dict[str, Any]]:
+        (tmp_path / directory).mkdir()
+        return _samples(
+            synthetic_artifact(
+                tmp_path / directory, requests=30, gaps_per_request=2, samples=True
+            )
+        )
+
+    first = samples("a")
+    names = {field.name for field in fields(InferenceSystemSample)}
+
+    assert first == samples("b")
+    for record in first:
+        event = InferenceSystemSample(**{k: v for k, v in record.items() if k in names})
+        assert event.to_record() == record
+
+
+def test_the_real_psutil_samples_have_the_synthetic_shape(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    real = _samples(studio_artifacts["samples_psutil"])
+    synthetic = [
+        s for s in _samples(studio_artifacts["samples"]) if s["sampler"] == "psutil"
+    ]
+
+    assert len(real) >= 2
+    shape = {(k, type(v)) for k, v in synthetic[0].items()}
+    for sample in real:
+        assert {(k, type(v)) for k, v in sample.items()} == shape
+        assert sample["process_rss_bytes"] > 0
+
+
+def test_artifacts_without_samples_have_none(
+    studio_artifacts: StandardArtifacts,
+) -> None:
+    for name in ("mixed", "synthetic", "empty"):
+        assert _samples(studio_artifacts[name]) == []
 
 
 @pytest.mark.studio_large

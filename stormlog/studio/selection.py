@@ -35,6 +35,7 @@ import threading
 import weakref
 from array import array
 from bisect import bisect_left
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -49,6 +50,7 @@ from stormlog.infer.populations import (
     populations_from_records,
 )
 from stormlog.infer.report_stats import is_number
+from stormlog.infer.request_columns import SUMMARY_FIELDS
 from stormlog.infer.tokens import TOKEN_SOURCES
 from stormlog.studio.contracts import (
     ConflictError,
@@ -64,6 +66,8 @@ from stormlog.studio.contracts import (
     SortKey,
     TimeWindow,
     UsageError,
+    columnar,
+    identity_text,
     selection_fingerprint,
 )
 
@@ -71,6 +75,7 @@ __all__ = [
     "FILTER_PARAMETERS",
     "SORT_KEYS",
     "TEXT_FIELDS",
+    "WARM_COLUMNS",
     "CaseFacts",
     "arrival_ns",
     "canonical_params",
@@ -80,6 +85,7 @@ __all__ = [
     "parse_filter",
     "request_row",
     "select",
+    "warm",
     "without_latency",
 ]
 
@@ -403,40 +409,124 @@ POPULATION_FIELDS = (
     "intended_at_ns",
 )
 
+
+@dataclass(frozen=True)
+class _Held:
+    """One cached ``CaseFacts``: the table it was computed over (weakly,
+    so the id is not reused while held), and the kept records and
+    inventory it read, which a ``replace`` shares and a new snapshot does
+    not."""
+
+    table: weakref.ref[Any]
+    kept: Mapping[str, Any]
+    inventory: Mapping[str, Any]
+    facts: CaseFacts
+
+    def serves(self, snapshot: IndexSnapshot) -> bool:
+        return (
+            self.table() is snapshot.table
+            and self.kept is snapshot.kept
+            and self.inventory is snapshot.inventory
+        )
+
+
 _FACTS_LOCK = threading.Lock()
-_FACTS: dict[int, tuple[weakref.ref[IndexSnapshot], CaseFacts]] = {}
+_FACTS: dict[int, _Held] = {}
 _FACTS_KEPT = 8
+#: Tables that died, from their weakref callbacks: (key, reference). A
+#: callback runs on whichever thread the collector interrupts, between two
+#: bytecodes, so it must neither take _FACTS_LOCK (that thread may hold
+#: it: a deadlock) nor change _FACTS (an open iteration breaks). It only
+#: appends here; case_facts drains the queue under the lock.
+_DEAD: deque[tuple[int, weakref.ref[Any]]] = deque()
 
 
 def case_facts(snapshot: IndexSnapshot) -> CaseFacts:
-    """The snapshot's case facts, computed on first use and kept with it.
+    """The snapshot's case facts, computed on first use and kept with its
+    table.
 
     The cost is linear in the measured rows (about 2 s at 500,000 on the
     cloud box, most of it in ``populations_from_records``), so the caller
-    that publishes a snapshot should warm it on the builder pool (§2.1);
-    otherwise the first selection of the snapshot pays it.
+    that publishes a snapshot warms it on the builder pool with
+    :func:`warm` (§2.1); otherwise the first selection pays it. The key is
+    ``id(snapshot.table)`` (Fable's F-7): a snapshot republished with
+    ``dataclasses.replace`` for a touch or a ``growing`` flip shares its
+    table, kept records and inventory, so it finds the facts; new rows or
+    a new index make a new table. A table that cannot be referenced
+    weakly is not cached.
     """
-    key = id(snapshot)
+    table = snapshot.table
+    key = id(table)
     with _FACTS_LOCK:
+        _drop_dead()
         held = _FACTS.get(key)
-        if held is not None and held[0]() is snapshot:
-            return held[1]
+        if held is not None and held.serves(snapshot):
+            return held.facts
     facts = _compute_facts(snapshot)
+    try:
+        reference = weakref.ref(table, _forget(key))
+    except TypeError:
+        return facts
     with _FACTS_LOCK:
-        if len(_FACTS) >= _FACTS_KEPT:
-            _FACTS.pop(next(iter(_FACTS)))
-        _FACTS[key] = (weakref.ref(snapshot, _forget(key)), facts)
+        _drop_dead()
+        if key not in _FACTS and len(_FACTS) >= _FACTS_KEPT:
+            _FACTS.pop(list(_FACTS)[0], None)
+        _FACTS[key] = _Held(reference, snapshot.kept, snapshot.inventory, facts)
     return facts
 
 
-def _forget(key: int) -> Callable[[weakref.ref[IndexSnapshot]], None]:
-    def drop(reference: weakref.ref[IndexSnapshot]) -> None:
-        with _FACTS_LOCK:
-            held = _FACTS.get(key)
-            if held is not None and held[0] is reference:
-                del _FACTS[key]
+# What a first select (the default filter), page and summary read by
+# column, besides case_facts' POPULATION_FIELDS; a test pins that the
+# summary reads nothing else.
+WARM_COLUMNS = (
+    "phase",
+    "timestamp_ns",
+    *SUMMARY_FIELDS,
+)
+
+
+def warm(snapshot: IndexSnapshot) -> None:
+    """Compute what the first select and summary of ``snapshot`` need.
+
+    ``case_facts``, then the columns in :data:`WARM_COLUMNS` and, for a
+    columnar table, its client arrays, gap counts and (when resident) gap
+    pool; each is cached on the snapshot's table. C4 registers it as a
+    publish listener (``contracts.publish_hook``), so it runs on the
+    builder pool after each publish, never on a request (Fable's F-7).
+    A snapshot without rows warms nothing.
+    """
+    if not len(snapshot.table):
+        return
+    case_facts(snapshot)
+    for name in WARM_COLUMNS:
+        snapshot.column(name)
+    table = columnar(snapshot.table)
+    if table is None:
+        return
+    for metric in CLIENT_METRICS:
+        table.client_values(metric)
+    table.gap_counts()
+    if snapshot.gaps_resident:
+        try:
+            table.gap_pool()
+        except NotResident:
+            pass
+
+
+def _forget(key: int) -> Callable[[weakref.ref[Any]], None]:
+    def drop(reference: weakref.ref[Any]) -> None:
+        _DEAD.append((key, reference))
 
     return drop
+
+
+def _drop_dead() -> None:
+    """Forget the facts of the tables whose callbacks ran; under the lock."""
+    while _DEAD:
+        key, reference = _DEAD.popleft()
+        held = _FACTS.get(key)
+        if held is not None and held.table is reference:
+            del _FACTS[key]
 
 
 def _compute_facts(snapshot: IndexSnapshot) -> CaseFacts:
@@ -445,7 +535,7 @@ def _compute_facts(snapshot: IndexSnapshot) -> CaseFacts:
     cases = snapshot.column("case_id")
     by_case: dict[str, array[int]] = {}
     for i in measured:
-        by_case.setdefault(_case_name(cases[i]), array("q")).append(i)
+        by_case.setdefault(identity_text(cases[i]), array("q")).append(i)
     rows = _cohort_records(snapshot, measured)
     windows = [
         record
@@ -515,12 +605,10 @@ def _missing_kept(snapshot: IndexSnapshot) -> tuple[str, ...]:
     return tuple(missing)
 
 
-def _case_name(value: Any) -> str:
-    """``str(record.get("case_id", "unknown"))`` from a column cell.
-
-    A column gives None where the record lacks the key, so None is read as
-    the missing key's ``"unknown"``.
-    """
+def _source_name(value: Any) -> str:
+    """An ``output_token_source`` cell as the filter matches it: None (the
+    key absent or null) is ``"unknown"``, as ``tokens.TOKEN_SOURCES`` names
+    it."""
     return _UNKNOWN if value is None else str(value)
 
 
@@ -534,7 +622,7 @@ def select(snapshot: IndexSnapshot, f: RequestFilter) -> Selection:
         rows = [i for i in rows if keep(i)]
     selected = array("q", rows)
     case_column = snapshot.column("case_id")
-    cases = tuple(sorted({_case_name(case_column[i]) for i in selected}))
+    cases = tuple(sorted({identity_text(case_column[i]) for i in selected}))
     rate, whole_case = _rate_scope(snapshot, f, selected, cases)
     params = canonical_params(f)
     return Selection(
@@ -566,7 +654,7 @@ def _conditions(snapshot: IndexSnapshot, f: RequestFilter) -> list[Keep]:
         keeps.append(lambda i: phases[i] == f.phase)
     if f.cases:
         cases, wanted = column("case_id"), frozenset(f.cases)
-        keeps.append(lambda i: _case_name(cases[i]) in wanted)
+        keeps.append(lambda i: identity_text(cases[i]) in wanted)
     if f.statuses:
         statuses, allowed = column("status"), frozenset(f.statuses)
         keeps.append(lambda i: str(statuses[i]) in allowed)
@@ -575,7 +663,7 @@ def _conditions(snapshot: IndexSnapshot, f: RequestFilter) -> list[Keep]:
         keeps.append(lambda i: bool(streams[i]) is stream)
     if f.token_sources:
         sources, chosen = column("output_token_source"), frozenset(f.token_sources)
-        keeps.append(lambda i: _case_name(sources[i]) in chosen)
+        keeps.append(lambda i: _source_name(sources[i]) in chosen)
     keeps.extend(_time_conditions(snapshot, f))
     if f.latency is not None:
         keeps.append(_latency_condition(snapshot, f.latency))
@@ -788,7 +876,11 @@ def page(
     if order not in ("asc", "desc"):
         raise _bad("order", f"unknown value {order!r}", allowed=["asc", "desc"])
     _check_limit(limit)
-    last = None if cursor is None else _read_cursor(cursor, sel, sort, order)
+    last = (
+        None
+        if cursor is None
+        else _read_cursor(cursor, sel, sort, order, len(snapshot.table))
+    )
     ordered, keys = _ordered(snapshot, sel.rows, sort, order)
     start = 0 if last is None else _after(keys, last["key"], order)
     chosen = tuple(ordered[start : start + limit])
@@ -888,7 +980,15 @@ def _cursor(sel: Selection, sort: str, order: str, key: SortKeyValue) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def _read_cursor(cursor: str, sel: Selection, sort: str, order: str) -> dict[str, Any]:
+def _read_cursor(
+    cursor: str, sel: Selection, sort: str, order: str, size: int
+) -> dict[str, Any]:
+    """The cursor's payload, its key a :data:`SortKeyValue` of ``sort``.
+
+    The key is checked against the sort, as :func:`_ordered` makes keys,
+    and its row against the snapshot's ``size`` rows, so a forged key is
+    a 400 and never reaches a comparison it would break (Fable's F-6).
+    """
     payload = _decode_cursor(cursor)
     if payload["index_id"] != sel.index_id:
         raise _mismatch("index_rebuilt", "the index was rebuilt; restart paging")
@@ -897,8 +997,27 @@ def _read_cursor(cursor: str, sel: Selection, sort: str, order: str) -> dict[str
     if payload["sort"] != sort or payload["order"] != order:
         raise _mismatch("other_sort", "the cursor belongs to another sort")
     key = payload["key"]
+    if not _key_fits(sort, key, size):
+        raise _bad("cursor", "not a cursor this server issued")
     payload["key"] = (key[0], key[1], key[2])
     return payload
+
+
+def _key_fits(sort: str, key: Sequence[Any], size: int) -> bool:
+    """Whether ``key`` is one :func:`_ordered` could have made for ``sort``
+    over ``size`` rows: ``(1, None, row)`` for a null; ``(0, row, row)``
+    in file order; else ``(0, value, row)`` with text for a text sort and
+    a finite number for any other."""
+    flag, value, row = key
+    if not 0 <= row < size:
+        return False
+    if sort == "artifact":
+        return flag == 0 and value == row and _is_int(value)
+    if flag == 1:
+        return value is None
+    if sort in _TEXT_SORTS:
+        return isinstance(value, str)
+    return is_number(value)
 
 
 def _decode_cursor(cursor: str) -> dict[str, Any]:
@@ -920,9 +1039,15 @@ def _check_cursor(payload: Any) -> None:
             raise ValueError(name)
     if not _is_int(payload.get("generation")):
         raise ValueError("generation")
-    key = payload.get("key")
-    if not isinstance(key, list) or len(key) != 3 or key[0] not in (0, 1):
+    _check_key_shape(payload.get("key"))
+
+
+def _check_key_shape(key: Any) -> None:
+    """Three items: an int flag of 0 or 1, a value, an int row."""
+    if not isinstance(key, list) or len(key) != 3:
         raise ValueError("key")
+    if not _is_int(key[0]) or key[0] not in (0, 1):
+        raise ValueError("key flag")
     if not _is_int(key[2]):
         raise ValueError("key row")
 

@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from stormlog.infer.latency_report import CHUNK_NOTE, CLIENT_METRICS, SERVER_METRICS
+from stormlog.infer.observers import SCRAPE_GAP_FACTOR
 from stormlog.infer.report_stats import is_number
 from stormlog.infer.slo import CRITERIA
 from stormlog.studio.contracts import AnalysisState, IndexSnapshot
@@ -357,6 +358,27 @@ def _memory_entries() -> list[dict[str, Any]]:
             collector=_COLLECTORS["client_memory"],
         )
         for field in ("process_rss_bytes", "device_used_bytes")
+    ] + [
+        _entry(
+            "samples.gaps",
+            "where one series of system samples breaks",
+            "ns",
+            scope="client_local_host",
+            sources=["infer.system_sample timestamp_ns"],
+            computed_by="sample_report.sample_gaps",
+            formula=(
+                "consecutive samples more than SCRAPE_GAP_FACTOR "
+                f"({SCRAPE_GAP_FACTOR:g}) times the series' median interval apart"
+            ),
+            missing_rule="none when the median interval is 0 or under two samples",
+            applies_to="one series of system samples, by (sampler, device_id)",
+            aggregation_window="the samples route's window",
+            notes=[
+                "the series' own median interval stands in for a configured "
+                "sampling interval, which the artifact does not record"
+            ],
+            collector=_COLLECTORS["client_memory"],
+        )
     ]
 
 
@@ -540,9 +562,13 @@ def _memory_panel(snapshot: IndexSnapshot) -> dict[str, Any]:
 def _server_panel(snapshot: IndexSnapshot) -> dict[str, Any]:
     held = _held(snapshot, SERVER_EVIDENCE_TYPES)
     server_view = snapshot.inventory.get("infer.request", {})
-    server_requests = sum(
+    other_versions = sum(
         count for version, count in server_view.items() if version != 1
     )
+    # Client requests at another version are no server evidence: C1 counts
+    # them as unsupported_version problems, apart (§4.4, Fable's F-9).
+    unsupported = snapshot.problem_counts.get("unsupported_version", 0)
+    server_requests = max(0, other_versions - unsupported)
     if server_requests:
         held["infer.request (server view)"] = server_requests
     if not held:
