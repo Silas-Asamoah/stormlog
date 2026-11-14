@@ -1384,6 +1384,7 @@ def _forged(cursor: str, **changes: Any) -> str:
 # and raised TypeError (a 500). Each is (sort, key).
 FORGED_KEYS: list[tuple[str, list[Any]]] = [
     ("client.e2e", [0, {"a": 1}, 3]),
+    ("client.e2e", [0, {}, 0]),
     ("client.e2e", [0, [1, 2], 3]),
     ("client.e2e", [0, "abc", 3]),
     ("client.e2e", [0, None, 3]),

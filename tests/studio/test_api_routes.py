@@ -779,6 +779,27 @@ def test_a_cursor_from_another_filter_is_a_409(served: Served) -> None:
     assert error["details"]["reason"] == "other_filter"
 
 
+def _with_key(cursor: str, key: list[Any]) -> str:
+    """``cursor`` as issued, with its ``key`` replaced."""
+    payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    payload["key"] = key
+    text = json.dumps(payload, separators=(",", ":"))
+    return base64.urlsafe_b64encode(text.encode()).decode("ascii").rstrip("=")
+
+
+@pytest.mark.parametrize("sort", sorted(selection.SORT_KEYS))
+def test_a_forged_cursor_key_is_a_400_on_every_sort(served: Served, sort: str) -> None:
+    """Codex's case through the route: a well-formed cursor whose key holds
+    an object where the sort's value goes is a 400, never a 500."""
+    served.ready(MIXED)
+    route = "/api/v1/artifact/requests"
+    first = served.get(route, artifact=MIXED, sort=sort, limit=2).json()
+    forged = _with_key(first["next_cursor"], [0, {}, 0])
+    reply = served.get(route, artifact=MIXED, sort=sort, limit=2, cursor=forged)
+    error = assert_error(reply, 400, "bad_parameter")
+    assert error["field"] == "cursor"
+
+
 def test_a_repeated_single_parameter_is_refused(served: Served) -> None:
     reply = served.get("/api/v1/artifact", artifact=[MIXED, MIXED])
     assert_error(reply, 400, "bad_parameter")
