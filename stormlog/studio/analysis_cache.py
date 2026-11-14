@@ -21,10 +21,16 @@ Rules:
 - **Truncated last line (decision 12).** ``infer analyze`` fails the whole
   file on one bad line (``correlation_codec.py:270-273``), which hits exactly
   the killed runs people investigate. When the file does not end with a
-  newline, the runner copies its complete lines to a private temporary file
-  under ``<state>/analysis/<instance_id>/`` and analyses that; the result
-  says so (``input.kind: complete_line_prefix``, the bytes left out).
-  Otherwise the subprocess reads the resolved path (§7.4).
+  newline, the analysis covers its complete lines only; the result says so
+  (``input.kind: complete_line_prefix``, the bytes left out).
+- **Verified bytes only.** The subprocess never opens the artifact's path,
+  which a writer can grow, rewrite or replace (or a directory on the way
+  swap, §7.4) after the identity check. The runner copies the complete
+  lines (the whole file when it ends with a newline) from the descriptor
+  it checked to a private temporary file under
+  ``<state>/analysis/<instance_id>/``, checks the identity again, and
+  analyses the copy; a file that changed by then is ``unavailable`` with
+  ``changed``, so no report is cached under a key it does not describe.
 - **Cache.** Results are keyed by path, index ID, generation and file
   identity, and kept for the last 8 keys. A failure is cached like a result,
   so a key is analysed once; a new generation or a rewrite is a new key.
@@ -359,6 +365,12 @@ class AnalyzerRunner:
     def _run(self, entry: _Entry) -> _Outcome:
         token = secrets.token_hex(16)
         prefix = self._dir / f"{token}.jsonl"
+        try:  # the copy goes however the run ends, a skip included
+            return self._run_copy(entry, prefix, token)
+        finally:
+            _remove(prefix)
+
+    def _run_copy(self, entry: _Entry, prefix: Path, token: str) -> _Outcome:
         try:
             for directory in (self._state_dir, self._dir.parent, self._dir):
                 directory.mkdir(mode=0o700, exist_ok=True)
@@ -369,13 +381,16 @@ class AnalyzerRunner:
             return _Outcome(
                 _state("failed", "unreadable"), detail=_scrubbed(str(error))
             )
-        try:
-            return self._analyse(source, analysed, token)
-        finally:
-            _remove(prefix)
+        return self._analyse(source, analysed, token)
 
     def _prepare(self, entry: _Entry, prefix: Path) -> tuple[Path, _Input]:
-        """The path to analyse and what it holds; copies a prefix if needed."""
+        """A private copy of the verified bytes to analyse, and what it holds.
+
+        The copy is read from the descriptor whose identity matched the
+        key, and that identity is checked again once it is written: the
+        subprocess then analyses exactly the bytes the key names, never a
+        path that a writer or a directory swap has changed since.
+        """
         with self._root.open(entry.rel) as handle:
             info = os.fstat(handle.fileno())
             if _identity(info) != entry.key[3:]:
@@ -384,10 +399,11 @@ class AnalyzerRunner:
             complete = _complete_prefix(handle, size)
             if complete == 0:
                 raise _Skip(_state("unavailable", "no_complete_lines"))
-            if complete == size:
-                return self._root.resolve(entry.rel), _Input("file", size, size)
             _copy_prefix(handle, prefix, complete)
-        return prefix, _Input("complete_line_prefix", size, complete)
+            if _identity(os.fstat(handle.fileno())) != entry.key[3:]:
+                raise _Skip(_state("unavailable", "changed"))
+        kind = "file" if complete == size else "complete_line_prefix"
+        return prefix, _Input(kind, size, complete)
 
     def _analyse(self, source: Path, analysed: _Input, token: str) -> _Outcome:
         output = self._dir / f"{token}.json"

@@ -82,7 +82,7 @@
           ],
           "properties": {
             "kind": {
-              "description": "file: the artifact itself. complete_line_prefix: a private copy of its complete lines, because its last line had no newline; the report is about those lines only.",
+              "description": "file: the whole artifact. complete_line_prefix: its complete lines only, because its last line had no newline; the report is about those lines only. Either way the analyzer reads a private copy of the bytes the runner verified, never the artifact's path.",
               "enum": [
                 "file",
                 "complete_line_prefix"

@@ -195,6 +195,21 @@ import json, os, sys, time
 behaviour = json.loads({behaviour!r})
 args = sys.argv[1:]
 source, output = args[0], args[args.index("--output") + 1]
+change = behaviour.get("change")
+if change:  # a writer changes the artifact after the runner checked it
+    target, how = change
+    line = json.dumps({{"event_type": "note", "how": how}}).encode() + b"\\n"
+    if how == "grow":
+        with open(target, "ab") as handle:
+            handle.write(line)
+    elif how == "rewrite":
+        with open(target, "r+b") as handle:
+            handle.truncate(0)
+            handle.write(line)
+    else:
+        with open(target + ".new", "wb") as handle:
+            handle.write(line)
+        os.replace(target + ".new", target)
 log = behaviour.get("log")
 if log:
     with open(log, "a") as handle:
@@ -526,7 +541,57 @@ def test_the_subprocess_runs_in_the_private_analysis_directory(
     analysis_dir = state_dir / "analysis" / INSTANCE
     assert os.path.realpath(run["cwd"]) == os.path.realpath(analysis_dir)
     assert stat.S_IMODE(analysis_dir.stat().st_mode) == 0o700
-    assert run["source"] == str(Root(workspace).resolve("run.jsonl"))
+    # A private 0600 copy of the verified bytes, never the artifact's path.
+    assert Path(run["source"]).parent == Path(run["cwd"])
+    assert run["mode"] == 0o600 and run["bytes"] == path.read_text()
+
+
+@pytest.mark.parametrize("how", ["grow", "rewrite", "replace"])
+def test_the_analyzer_reads_the_verified_bytes_not_the_path(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    how: str,
+) -> None:
+    """A writer that changes the artifact after the identity check must not
+    get a report of its new bytes cached under the old snapshot's key
+    (Codex's review of #345)."""
+    log = tmp_path / "runs.log"
+    path = write_artifact(workspace / "run.jsonl")
+    verified = path.read_text()
+    command = fake_analyzer(tmp_path, log=str(log), change=[str(path), how])
+    runner = make(runners, workspace, state_dir, command=command)
+    snapshot = snapshot_of(path, "run.jsonl")
+    state = settle(runner, "run.jsonl", snapshot)
+    [run] = log_lines(log)
+    assert path.read_text() != verified  # the writer did change it
+    assert state.status == "ready" and run["bytes"] == verified
+    assert leftovers(state_dir) == []
+
+
+def test_an_artifact_changed_during_the_copy_is_not_analysed(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = tmp_path / "runs.log"
+    path = write_artifact(workspace / "run.jsonl")
+    copy_prefix = analysis_cache._copy_prefix
+
+    def copy_then_grow(handle: BinaryIO, target: Path, length: int) -> None:
+        copy_prefix(handle, target, length)
+        with path.open("ab") as grow:
+            grow.write(b'{"event_type": "note"}\n')
+
+    monkeypatch.setattr(analysis_cache, "_copy_prefix", copy_then_grow)
+    command = fake_analyzer(tmp_path, log=str(log))
+    runner = make(runners, workspace, state_dir, command=command)
+    state = settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
+    assert (state.status, state.reason) == ("unavailable", "changed")
+    assert log_lines(log) == [] and leftovers(state_dir) == []
 
 
 SECRET_NAMES = (
