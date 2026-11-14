@@ -190,17 +190,19 @@ def numbers_at(cells: Sequence[Any]) -> list[int]:
     which is ``is_number``'s rule for those types (``type(v) is int``
     already leaves bools out).
     """
-    kinds = set(map(type, cells))
-    low, high = -FLOAT_INT_LIMIT, FLOAT_INT_LIMIT
-    if kinds <= _INTS:
-        return [k for k, v in enumerate(cells) if v is not None and low < v < high]
-    if kinds <= _REALS:
-        return [
-            k
-            for k, v in enumerate(cells)
-            if v is not None and v - v == 0 and low < v < high
-        ]
+    if set(map(type, cells)) <= _REALS:
+        return _finite_reals_at(cells)
     return [k for k, v in enumerate(cells) if is_number(v)]
+
+
+def _finite_reals_at(cells: Sequence[int | float | None]) -> list[int]:
+    """:func:`numbers_at` for a column of JSON ints, floats and nulls."""
+    low, high = -FLOAT_INT_LIMIT, FLOAT_INT_LIMIT
+    return [
+        k
+        for k, v in enumerate(cells)
+        if v is not None and v - v == 0 and low < v < high
+    ]
 
 
 def int_sum(cells: Sequence[Any]) -> int:
