@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_workspace_v1.schema.json",
+  "title": "Stormlog Studio workspace v1",
+  "description": "GET /api/v1/workspace and POST /api/v1/workspace/scan (design §5.4), written by workspace.ArtifactScanner.state: the state of the last workspace scan, the count of listed items by kind, and the scan's bounds (§8.1). The items themselves are in stormlog.studio.items.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "scan",
+    "counts",
+    "limits"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.workspace"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "scan": {
+      "$ref": "#/$defs/scan"
+    },
+    "counts": {
+      "description": "Items of the last finished scan, by kind.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inference_artifact",
+        "audio_artifact",
+        "report",
+        "run_envelope",
+        "total"
+      ],
+      "properties": {
+        "inference_artifact": {
+          "$ref": "#/$defs/count"
+        },
+        "audio_artifact": {
+          "description": "Listed; unsupported in slice 1.",
+          "$ref": "#/$defs/count"
+        },
+        "report": {
+          "$ref": "#/$defs/count"
+        },
+        "run_envelope": {
+          "$ref": "#/$defs/count"
+        },
+        "total": {
+          "$ref": "#/$defs/count"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "depth",
+        "entries",
+        "seconds",
+        "sniff_bytes"
+      ],
+      "properties": {
+        "depth": {
+          "description": "Directory levels below the root a scan descends.",
+          "$ref": "#/$defs/count"
+        },
+        "entries": {
+          "description": "Directory entries one scan reads.",
+          "$ref": "#/$defs/count"
+        },
+        "seconds": {
+          "description": "Wall time one scan may take.",
+          "type": "number",
+          "minimum": 0
+        },
+        "sniff_bytes": {
+          "description": "Bytes read of each candidate file to classify it.",
+          "$ref": "#/$defs/count"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "scan": {
+      "description": "The last finished scan, and whether another runs now. Its items stay listed while the next scan runs.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "running",
+        "scans",
+        "started_at_utc",
+        "finished_at_utc",
+        "duration_s",
+        "entries",
+        "files_read",
+        "skipped",
+        "limits_hit",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "description": "Of the last finished scan: complete; partial when a bound was reached; failed when the root could not be read. not_started and scanning before the first scan finishes.",
+          "enum": [
+            "not_started",
+            "scanning",
+            "complete",
+            "partial",
+            "failed"
+          ]
+        },
+        "running": {
+          "description": "A scan runs now.",
+          "type": "boolean"
+        },
+        "scans": {
+          "description": "Scans finished since Studio started.",
+          "$ref": "#/$defs/count"
+        },
+        "started_at_utc": {
+          "$ref": "#/$defs/utc_or_null"
+        },
+        "finished_at_utc": {
+          "$ref": "#/$defs/utc_or_null"
+        },
+        "duration_s": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "entries": {
+          "description": "Directory entries read.",
+          "$ref": "#/$defs/count"
+        },
+        "files_read": {
+          "description": "Candidate files opened and classified (.jsonl and .json).",
+          "$ref": "#/$defs/count"
+        },
+        "skipped": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "symlinks",
+            "excluded_dirs",
+            "unreadable"
+          ],
+          "properties": {
+            "symlinks": {
+              "description": "Symlinks, never followed or listed (§7.4).",
+              "$ref": "#/$defs/count"
+            },
+            "excluded_dirs": {
+              "description": ".git, node_modules, __pycache__, virtual environments and the like.",
+              "$ref": "#/$defs/count"
+            },
+            "unreadable": {
+              "$ref": "#/$defs/count"
+            }
+          }
+        },
+        "limits_hit": {
+          "description": "Bounds the scan reached, sorted.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "depth",
+              "entries",
+              "time"
+            ]
+          }
+        },
+        "reason": {
+          "description": "Why a scan failed; null otherwise.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "utc_or_null": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}
