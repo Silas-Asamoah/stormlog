@@ -26,7 +26,7 @@ from referencing import Registry, Resource
 
 from stormlog.infer.analysis import analyze_inference_events
 from stormlog.infer.events import InferenceSystemSample
-from stormlog.infer.latency_report import CLIENT_METRICS, spread
+from stormlog.infer.latency_report import CLIENT_METRICS, spread, streaming_summary
 from stormlog.studio import summaries
 from stormlog.studio.contracts import (
     AnalysisState,
@@ -520,6 +520,40 @@ def test_points_draw_all_rows_up_to_the_bound_then_bucket_extremes() -> None:
     xs = [(p["x_ns"], p["line"]) for p in bounded["points"]]
     assert xs == sorted(xs)
     assert schema_errors("points", _wire("points", bounded, snapshot)) == []
+
+
+@pytest.mark.parametrize(
+    "gaps",
+    [[5.0, "x", 1.0], [5.0, math.inf, 1.0], [5.0, None], [math.nan], [5.0, 1.0]],
+)
+@pytest.mark.parametrize("built", ["dict_rows", "index"])
+def test_chunk_counts_count_numeric_gaps_as_the_analyzer_does(
+    tmp_path: Path, gaps: list[Any], built: str
+) -> None:
+    """A gap that is not a finite number is no chunk to the analyzer, so
+    the rows, the points and the request detail say what the summary and
+    ``streaming_summary`` say (Codex: ``[5.0, "x", 1.0]`` gave 4, not 3)."""
+    record = request(0, chunk_interarrival_ms=gaps)
+    records = [session_record(), record]
+    want = streaming_summary([record])["content_chunks_per_response"]["max"]
+    if built == "index":
+        (tmp_path / "run.jsonl").write_text(
+            "".join(json.dumps(r) + "\n" for r in records)
+        )
+        snapshot = Harness(tmp_path).build("run.jsonl")
+    else:
+        snapshot = snapshot_from_records(records)
+    sel = select(snapshot, RequestFilter())
+    got = page(snapshot, sel, sort="artifact", order="asc", cursor=None, limit=5)
+    [row] = summaries.requests_page(snapshot, sel, got)["rows"]
+    [point] = summaries.points(
+        snapshot, sel, x="end", y="chunk_count", max_points=10, keep=[]
+    )["points"]
+    detail = summaries.request_detail(snapshot, sel.rows[0], sel)
+    streaming = summaries.summary(snapshot, sel)["streaming"]
+    assert want == streaming["content_chunks_per_response"]["max"]
+    assert row["chunk_count"] == point["y"] == detail["row"]["chunk_count"] == want
+    assert detail["gaps"]["n"] + 1 == want and row["gap_count"] == len(gaps)
 
 
 def test_points_count_rows_without_a_value() -> None:

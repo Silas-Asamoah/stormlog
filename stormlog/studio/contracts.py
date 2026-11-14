@@ -236,6 +236,17 @@ class RequestRow(Mapping[str, Any]):
         """``len(chunk_interarrival_ms)`` as written; 0 without a list."""
         raise NotImplementedError
 
+    @property
+    @abstractmethod
+    def numeric_gap_count(self) -> int:
+        """The gaps that are finite numbers (``report_stats.is_number``).
+
+        The analyzer's chunk statistics keep only these, so a streamed
+        response's content-chunk count is this plus 1, not
+        ``gap_count + 1``. Known without reading the line.
+        """
+        raise NotImplementedError
+
     @abstractmethod
     def load_gaps(self) -> Sequence[float]:
         """The chunk gaps in written order; one line read if not resident.
@@ -280,6 +291,9 @@ class DictRow(RequestRow):
         self._client = MappingProxyType(client_values(record))
         gaps = record.get("chunk_interarrival_ms")
         self._gap_count = len(gaps) if isinstance(gaps, list) else 0
+        self._numeric_gap_count = (
+            sum(map(_is_finite_number, gaps)) if isinstance(gaps, list) else 0
+        )
 
     @property
     def index(self) -> int:
@@ -316,6 +330,10 @@ class DictRow(RequestRow):
     @property
     def gap_count(self) -> int:
         return self._gap_count
+
+    @property
+    def numeric_gap_count(self) -> int:
+        return self._numeric_gap_count
 
     def __getitem__(self, key: str) -> Any:
         return self._record[key]
@@ -976,6 +994,13 @@ def _wire_key(key: Any) -> str:
 
 
 _BYTE_FORMATS = frozenset({"B", "b", "c"})
+
+
+def _is_finite_number(value: Any) -> bool:
+    """``report_stats.is_number``, which the contract does not import."""
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_bytes(value: Any) -> bool:

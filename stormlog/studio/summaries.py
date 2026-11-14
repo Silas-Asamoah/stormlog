@@ -475,7 +475,7 @@ def row_record(snapshot: IndexSnapshot, index: int) -> dict[str, Any]:
         "stream": _bool_or_none(row.get("stream")),
         "gap_count": row.gap_count,
         "chunk_count": _chunk_count(
-            row.get("stream"), row.get("ttft_ms"), row.gap_count
+            row.get("stream"), row.get("ttft_ms"), row.numeric_gap_count
         ),
         "finish_reason": _text_or_none(row.get("finish_reason")),
     }
@@ -489,10 +489,11 @@ def _token_fields(row: RequestRow, kind: str) -> dict[str, Any]:
     }
 
 
-def _chunk_count(stream: Any, ttft_ms: Any, gap_count: int) -> int | None:
-    """``gap_count + 1`` for a streamed response with a TTFT, as the
-    analyzer counts content chunks; else None."""
-    return gap_count + 1 if stream and is_number(ttft_ms) else None
+def _chunk_count(stream: Any, ttft_ms: Any, numeric_gaps: int) -> int | None:
+    """``numeric_gaps + 1`` for a streamed response with a TTFT, as the
+    analyzer counts content chunks (a gap that is not a finite number is
+    no chunk); else None."""
+    return numeric_gaps + 1 if stream and is_number(ttft_ms) else None
 
 
 def _ms_from_origin(ns: int | None, origin_ns: int | None) -> float | None:
@@ -826,7 +827,9 @@ def _y_values(snapshot: IndexSnapshot, rows: Sequence[int], y: str) -> Sequence[
     ttfts = snapshot.column("ttft_ms")
     counts: dict[int, int | None] = {}
     for i in rows:
-        counts[i] = _chunk_count(streams[i], ttfts[i], snapshot.requests[i].gap_count)
+        counts[i] = _chunk_count(
+            streams[i], ttfts[i], snapshot.requests[i].numeric_gap_count
+        )
     return _Sparse(counts)
 
 
