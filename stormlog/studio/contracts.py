@@ -373,9 +373,11 @@ def _synthetic_ref(record: Mapping[str, Any], line: int) -> LineRef:
 
 
 def _gap_value(gap: Any) -> float:
-    if isinstance(gap, (int, float)) and not isinstance(gap, bool):
-        return float(gap)
-    return math.nan
+    """``gap`` as a float, or NaN for what is not a number: a string, a
+    bool, None, or an int too large for a float, which would overflow."""
+    if isinstance(gap, float):
+        return gap
+    return float(gap) if _is_finite_number(gap) else math.nan
 
 
 def _request_record_id(record: Mapping[str, Any]) -> str | None:
@@ -996,11 +998,17 @@ def _wire_key(key: Any) -> str:
 _BYTE_FORMATS = frozenset({"B", "b", "c"})
 
 
+#: ``report_stats.FLOAT_INT_LIMIT``: the smallest int ``float()`` overflows.
+_FLOAT_INT_LIMIT = 2**1024 - 2**970
+
+
 def _is_finite_number(value: Any) -> bool:
     """``report_stats.is_number``, which the contract does not import."""
     if isinstance(value, float):
         return math.isfinite(value)
-    return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return -_FLOAT_INT_LIMIT < value < _FLOAT_INT_LIMIT
+    return False
 
 
 def _is_bytes(value: Any) -> bool:

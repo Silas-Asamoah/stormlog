@@ -35,13 +35,15 @@ import jsonschema  # type: ignore[import-untyped, unused-ignore]
 import pytest
 from referencing import Registry, Resource
 
+from stormlog.infer.cli import main as infer_main
 from stormlog.infer.diagnosis_inputs import MAX_NESTING
 from stormlog.report import build_report
-from stormlog.studio import api, app, selection
+from stormlog.studio import api, app, selection, summaries
 from stormlog.studio.contracts import (
     IndexSnapshot,
     LaunchOptions,
     Limits,
+    RequestFilter,
     StudioContext,
     publish_hook,
 )
@@ -49,6 +51,13 @@ from stormlog.studio.httpd import StudioServer
 from tests.studio.artifacts import GrowingCopy
 from tests.studio.conftest import StandardArtifacts
 from tests.studio.test_httpd import Reply
+from tests.studio.test_selection import (
+    ORIGIN,
+    closed_case,
+    request,
+    snapshot_from_records,
+)
+from tests.test_infer_request_columns import HUGE_FIELDS
 
 SCHEMA_DIR = Path(__file__).resolve().parents[2] / "docs" / "schemas"
 REPO = Path(__file__).resolve().parents[2]
@@ -1076,6 +1085,33 @@ def test_a_partial_index_shows_its_cut(
     panels = studio.get("/api/v1/artifact/capabilities", artifact="big.jsonl").json()
     assert panels["panels"]["requests"]["state"] == "partial"
     assert panels["panels"]["requests"]["reason"] == "index_budget"
+
+
+@pytest.mark.parametrize("field", HUGE_FIELDS)
+@pytest.mark.parametrize("huge", [10**400, -(10**400)], ids=["e400", "-e400"])
+def test_an_int_past_a_floats_range_is_analyzed_indexed_and_served(
+    private: Callable[..., Served], tmp_path: Path, field: str, huge: int
+) -> None:
+    """Fable's P2-2: such an int in a token count or a latency field made
+    ``infer analyze`` exit 1 and the summary a 500, or failed the index
+    (``slo._number`` called ``float()`` on it). The summary served from
+    the index's columns is the one built from the records."""
+    timed: dict[str, Any] = {"intended_at_ns": ORIGIN, "dispatch_lag_ms": 1.0}
+    records = closed_case(4, **timed)
+    records[3] = request(1, **{**timed, field: huge})
+    studio = private()
+    path = studio.root / "run.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    report = tmp_path / "report.json"
+    assert infer_main(["analyze", str(path), "--output", str(report)]) == 0
+    assert studio.ready("run.jsonl").status == "ready"
+    served = assert_document(
+        studio.get("/api/v1/artifact/summary", artifact="run.jsonl"), "summary"
+    )
+    rows = snapshot_from_records(records)
+    want = summaries.summary(rows, selection.select(rows, RequestFilter()))
+    for key in ("counts", "latency", "streaming", "tokens", "throughput"):
+        assert served[key] == json.loads(json.dumps(want[key])), key
 
 
 # --- End to end: `stormlog studio <fixture>` as a subprocess -----------------------------
