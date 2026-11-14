@@ -191,12 +191,16 @@ def test_sorted_floats_is_sorted_bit_for_bit(seed: int) -> None:
 
 
 def test_the_cell_rules_are_is_number_and_int_value() -> None:
-    cells = list(ODD) + [1, -3, 2**70, 4.0]
+    huge = 2**1024 - 2**970  # the first int float() overflows on
+    assert is_number(huge - 1) and not is_number(huge) and not is_number(-huge)
+    cells = list(ODD) + [1, -3, 2**70, 4.0, huge, -huge, huge - 1, 10**400]
     assert numbers_at(cells) == [k for k, v in enumerate(cells) if is_number(v)]
     assert int_sum(cells) == sum(int_value(v) for v in cells)
-    ints = [1, None, 2**70, -4, None]
-    assert numbers_at(ints) == [0, 2, 3]
-    assert int_sum(ints) == 1 + 2**70 - 4
+    ints = [1, None, 2**70, -4, None, 10**400, -huge, huge - 1]
+    assert numbers_at(ints) == [0, 2, 3, 7]
+    reals = [1.5, None, huge, -(huge - 1)]
+    assert numbers_at(reals) == [0, 3]
+    assert int_sum(ints) == sum(int_value(v) for v in ints)
 
 
 def test_records_and_columns_are_never_mixed() -> None:

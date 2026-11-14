@@ -37,8 +37,19 @@ def int_value(value: Any) -> int:
     return 0
 
 
+#: The smallest int that ``float()`` cannot convert: halfway from the
+#: largest float to 2**1024, which rounds up and overflows.
+FLOAT_INT_LIMIT = 2**1024 - 2**970
+
+
 def is_number(value: Any) -> TypeGuard[int | float]:
-    """A finite real number; NaN and infinities in an artifact are no value."""
+    """A finite real number; NaN and infinities in an artifact are no value.
+
+    JSON integers have no size limit, and one past a float's range (a
+    400-digit gap) is no value either: ``float()`` would raise on it.
+    """
     if isinstance(value, float):
         return math.isfinite(value)
-    return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return -FLOAT_INT_LIMIT < value < FLOAT_INT_LIMIT
+    return False

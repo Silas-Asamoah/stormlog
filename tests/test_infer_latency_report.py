@@ -116,6 +116,28 @@ def test_chunk_gaps_that_are_not_a_list_are_no_gaps(gaps: Any) -> None:
     assert streaming_summary(hostile)["mean_tokens_per_chunk"] == 256 / 9
 
 
+@pytest.mark.parametrize(
+    "huge", [10**400, -(10**400), 2**1024 - 2**970], ids=["e400", "-e400", "limit"]
+)
+def test_an_int_gap_past_a_floats_range_is_no_gap_and_analyze_still_runs(
+    tmp_path: Path, huge: int, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Fable's P2-1: float() of a 400-digit JSON integer raised
+    # OverflowError and failed `infer analyze`. Like NaN or a string, an
+    # int no float can hold is no gap, so it is no chunk either.
+    hostile = [_streamed(0), _streamed(1, chunk_interarrival_ms=[huge, 1.0])]
+    text = [_streamed(0), _streamed(1, chunk_interarrival_ms=["x", 1.0])]
+    assert streaming_summary(hostile) == streaming_summary(text)
+    reports = []
+    for name, requests in (("hostile", hostile), ("text", text)):
+        records = [{"event_type": "infer.session", "session_id": "s1"}, *requests]
+        path = tmp_path / f"{name}.jsonl"
+        path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+        assert infer_main(["analyze", str(path), "--format", "json"]) == 0
+        reports.append(json.loads(capsys.readouterr().out)["cases"])
+    assert reports[0] == reports[1]
+
+
 def test_no_inter_token_latency_appears_outside_vllms_own_block(tmp_path: Path) -> None:
     path = tmp_path / "infer.jsonl"
     records = [{"event_type": "infer.session", "session_id": "s1"}] + [
