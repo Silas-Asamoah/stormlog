@@ -73,9 +73,9 @@ def _columnar_coverage(
         "known": len(known),
         "exact": sum(1 for j in known if exact[j] is True),
         "by_source": dict(sorted(_columnar_sources(columns, ok, kind).items())),
-        # int_value is 0 for every cell that is not a number, so the sum
-        # over all cells is the sum over the known ones.
-        "known_sum": int_sum(counts),
+        # The sum over the known cells only: int_value keeps an int past
+        # a float's range, which is_number (and so `known`) leaves out.
+        "known_sum": int_sum(pick(counts, known)),
         "partial": len(known) < len(ok),
     }
 
