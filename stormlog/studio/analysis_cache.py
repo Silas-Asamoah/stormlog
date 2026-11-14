@@ -601,7 +601,12 @@ def _complete_prefix(handle: BinaryIO, size: int) -> int:
 
 
 def _copy_prefix(handle: BinaryIO, target: Path, length: int) -> None:
-    """Copy the first ``length`` bytes of ``handle`` to a new 0600 file."""
+    """Copy the first ``length`` bytes of ``handle`` to a new 0600 file.
+
+    A file that ends before ``length`` was truncated after its identity
+    was checked: it changed, as a grown or rewritten one does, and is no
+    failure to read it.
+    """
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
     handle.seek(0)
     with os.fdopen(os.open(target, flags, 0o600), "wb") as out:
@@ -609,7 +614,7 @@ def _copy_prefix(handle: BinaryIO, target: Path, length: int) -> None:
         while remaining > 0:
             block = handle.read(min(_COPY_BLOCK, remaining))
             if not block:
-                raise OSError("the artifact shrank while it was copied")
+                raise _Skip(_state("unavailable", "changed"))
             out.write(block)
             remaining -= len(block)
 
