@@ -35,6 +35,7 @@ import threading
 import weakref
 from array import array
 from bisect import bisect_left
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from decimal import Decimal
@@ -437,6 +438,12 @@ class _Held:
 _FACTS_LOCK = threading.Lock()
 _FACTS: dict[int, _Held] = {}
 _FACTS_KEPT = 8
+#: Tables that died, from their weakref callbacks: (key, reference). A
+#: callback runs on whichever thread the collector interrupts, between two
+#: bytecodes, so it must neither take _FACTS_LOCK (that thread may hold
+#: it: a deadlock) nor change _FACTS (an open iteration breaks). It only
+#: appends here; case_facts drains the queue under the lock.
+_DEAD: deque[tuple[int, weakref.ref[Any]]] = deque()
 
 
 def case_facts(snapshot: IndexSnapshot) -> CaseFacts:
@@ -456,6 +463,7 @@ def case_facts(snapshot: IndexSnapshot) -> CaseFacts:
     table = snapshot.table
     key = id(table)
     with _FACTS_LOCK:
+        _drop_dead()
         held = _FACTS.get(key)
         if held is not None and held.serves(snapshot):
             return held.facts
@@ -465,8 +473,9 @@ def case_facts(snapshot: IndexSnapshot) -> CaseFacts:
     except TypeError:
         return facts
     with _FACTS_LOCK:
+        _drop_dead()
         if key not in _FACTS and len(_FACTS) >= _FACTS_KEPT:
-            _FACTS.pop(next(iter(_FACTS)))
+            _FACTS.pop(list(_FACTS)[0], None)
         _FACTS[key] = _Held(reference, snapshot.kept, snapshot.inventory, facts)
     return facts
 
@@ -511,12 +520,18 @@ def warm(snapshot: IndexSnapshot) -> None:
 
 def _forget(key: int) -> Callable[[weakref.ref[Any]], None]:
     def drop(reference: weakref.ref[Any]) -> None:
-        with _FACTS_LOCK:
-            held = _FACTS.get(key)
-            if held is not None and held.table is reference:
-                del _FACTS[key]
+        _DEAD.append((key, reference))
 
     return drop
+
+
+def _drop_dead() -> None:
+    """Forget the facts of the tables whose callbacks ran; under the lock."""
+    while _DEAD:
+        key, reference = _DEAD.popleft()
+        held = _FACTS.get(key)
+        if held is not None and held.table is reference:
+            del _FACTS[key]
 
 
 def _compute_facts(snapshot: IndexSnapshot) -> CaseFacts:

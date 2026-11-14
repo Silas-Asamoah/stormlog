@@ -11,12 +11,15 @@ for the 500,000-request timings. ``tests/studio/test_summaries.py`` and
 from __future__ import annotations
 
 import base64
+import gc
 import hashlib
 import json
 import math
 import random
+import threading
 import time
-from collections import Counter
+import weakref
+from collections import Counter, deque
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -1096,6 +1099,86 @@ def test_case_facts_survive_a_republish_that_shares_the_table() -> None:
     assert case_facts(replace(snapshot, table=DictTable(snapshot.requests))) is not (
         facts
     )
+
+
+@pytest.fixture
+def fresh_facts(monkeypatch: pytest.MonkeyPatch) -> dict[int, Any]:
+    """An empty facts cache, queue and lock of this test's own: a test that
+    fails by deadlocking leaves only its own lock held."""
+    facts: dict[int, Any] = {}
+    monkeypatch.setattr(selection, "_FACTS", facts)
+    monkeypatch.setattr(selection, "_DEAD", deque(), raising=False)
+    monkeypatch.setattr(selection, "_FACTS_LOCK", threading.Lock())
+    return facts
+
+
+def test_a_table_that_dies_inside_the_facts_lock_does_not_deadlock(
+    fresh_facts: dict[int, Any],
+) -> None:
+    # Fable's P1: an index snapshot's table sits in a reference cycle, so
+    # it dies in the cyclic collector, which runs on whichever thread
+    # allocates; case_facts allocates while it holds _FACTS_LOCK. The
+    # table's weakref callback took that Lock, so on the holding thread it
+    # waited on itself for good, and so did every later select. Here the
+    # table dies inside the lock on purpose, on a thread of its own.
+    snapshots = [snapshot_from_records(closed_case())]
+    case_facts(snapshots[0])
+    table = weakref.ref(snapshots[0].table)
+    returned = threading.Event()
+
+    def die_inside_the_lock() -> None:
+        with selection._FACTS_LOCK:
+            snapshots.clear()
+            gc.collect()
+        returned.set()
+
+    worker = threading.Thread(target=die_inside_the_lock, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+    assert returned.is_set(), "the weakref callback blocked on _FACTS_LOCK"
+    assert table() is None
+    # The next select on any thread takes the lock and forgets the facts.
+    later = snapshot_from_records(closed_case())
+    case_facts(later)
+    assert list(fresh_facts) == [id(later.table)]
+    assert not selection._DEAD
+
+
+def test_a_dead_tables_facts_are_forgotten(fresh_facts: dict[int, Any]) -> None:
+    snapshots = [snapshot_from_records(closed_case())]
+    other = snapshot_from_records(closed_case())
+    case_facts(snapshots[0])
+    key = id(snapshots[0].table)
+    assert key in fresh_facts
+    snapshots.clear()
+    gc.collect()
+    # The callback only queues the key; it leaves the cache to the lock.
+    assert [entry[0] for entry in selection._DEAD] == [key]
+    assert key in fresh_facts
+    case_facts(other)
+    assert key not in fresh_facts
+    assert list(fresh_facts) == [id(other.table)]
+    assert not selection._DEAD
+
+
+def test_the_facts_cache_keeps_eight_and_drains_the_dead_before_evicting(
+    fresh_facts: dict[int, Any],
+) -> None:
+    kept = selection._FACTS_KEPT
+    snapshots = [snapshot_from_records(closed_case()) for _ in range(kept + 2)]
+    for snapshot in snapshots:
+        case_facts(snapshot)
+    # Full: each new table evicts the oldest.
+    assert list(fresh_facts) == [id(s.table) for s in snapshots[2:]]
+    # A dead table frees its slot, so a new one evicts no live table.
+    dead = snapshots.pop(5)
+    del dead
+    gc.collect()
+    newcomer = snapshot_from_records(closed_case())
+    case_facts(newcomer)
+    assert list(fresh_facts) == [id(s.table) for s in [*snapshots[2:], newcomer]]
+    assert len(fresh_facts) == kept
+    assert not selection._DEAD
 
 
 class _AskedTable(DictTable):
