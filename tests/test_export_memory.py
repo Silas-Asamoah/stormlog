@@ -38,9 +38,33 @@ def _registry(series: int) -> Registry:
 def test_renders_with_a_stuck_textfile_writer_stay_within_three_renders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Astra's staggered history with the real parts: the registry's render,
-    # the render cache, a textfile writer stuck inside its file write, and
-    # four scrapes that start on successive ticks and hold their renders.
+    # The first history runs every code path the measured one runs, so
+    # what those paths allocate once per process falls outside the
+    # measurement. Under coverage that is the tracer's entry for each code
+    # object it first sees: its dict of them was about to pass 21,845 (2**15
+    # slots) at this test on CI's 3.15 run, and the 2**16-slot table it
+    # grew to inside the measurement added 1.3 MB to both values.
+    _staggered_history(tmp_path / "warm", monkeypatch)
+    current, peak, size = _staggered_history(tmp_path / "measured", monkeypatch)
+    # Three renders of exactly their size; at the peak, the snapshot of the
+    # one being built too, which holds references to the rendered prefixes
+    # and one float per value: about a sixth of a render. The margins allow
+    # for other Pythons and allocators; the unfixed code held 5-7.3 renders.
+    assert current <= MAX_GENERATIONS * size * 1.15
+    assert peak <= MAX_GENERATIONS * size + 0.5 * size
+
+
+def _staggered_history(
+    directory: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, int, int]:
+    """Astra's staggered history with the real parts: the registry's render,
+    the render cache, a textfile writer stuck inside its file write, and
+    four scrapes that start on successive ticks and hold their renders.
+
+    Returns the bytes traced while the renders are held and at the peak,
+    both above the baseline, and the size of one render.
+    """
+    directory.mkdir()
     registry = _registry(20_000)
     size = len(render(registry.snapshot()))
     clock = _Clock()
@@ -73,7 +97,7 @@ def test_renders_with_a_stuck_textfile_writer_stay_within_three_renders(
 
     monkeypatch.setattr(textfile, "open", stuck_open, raising=False)
     writer = TextfileWriter(
-        tmp_path, "alpha", cache, const_labels=registry.const_labels, interval=3600
+        directory, "alpha", cache, const_labels=registry.const_labels, interval=3600
     )
     tracemalloc.start()
     try:
@@ -92,12 +116,7 @@ def test_renders_with_a_stuck_textfile_writer_stay_within_three_renders(
         cache.release(generation)
     writer.close()
     assert cache.alive() <= MAX_GENERATIONS
-    # Three renders of exactly their size; at the peak, the snapshot of the
-    # one being built too, which holds references to the rendered prefixes
-    # and one float per value: about a sixth of a render. The margins allow
-    # for other Pythons and allocators; the unfixed code held 5-7.3 renders.
-    assert (current - baseline) <= MAX_GENERATIONS * size * 1.15
-    assert (peak - baseline) <= MAX_GENERATIONS * size + 0.5 * size
+    return current - baseline, peak - baseline, size
 
 
 _RANDOM = random.Random(1)
