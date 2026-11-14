@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
-from .report_stats import int_value, is_number
+from .report_stats import FLOAT_INT_LIMIT, int_value, is_number
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -186,14 +186,20 @@ def numbers_at(cells: Sequence[Any]) -> list[int]:
 
     Columns of JSON ints, floats and nulls take a path without a call per
     cell: ``v - v == 0`` holds for an int and for a finite float, and not
-    for an infinity or NaN, which is ``is_number``'s rule for those types
-    (``type(v) is int`` already leaves bools out).
+    for an infinity or NaN, and an int must be within ``FLOAT_INT_LIMIT``,
+    which is ``is_number``'s rule for those types (``type(v) is int``
+    already leaves bools out).
     """
     kinds = set(map(type, cells))
+    low, high = -FLOAT_INT_LIMIT, FLOAT_INT_LIMIT
     if kinds <= _INTS:
-        return [k for k, v in enumerate(cells) if v is not None]
+        return [k for k, v in enumerate(cells) if v is not None and low < v < high]
     if kinds <= _REALS:
-        return [k for k, v in enumerate(cells) if v is not None and v - v == 0]
+        return [
+            k
+            for k, v in enumerate(cells)
+            if v is not None and v - v == 0 and low < v < high
+        ]
     return [k for k, v in enumerate(cells) if is_number(v)]
 
 

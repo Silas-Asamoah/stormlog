@@ -31,6 +31,7 @@ from stormlog.studio import summaries
 from stormlog.studio.contracts import (
     AnalysisState,
     LatencyRange,
+    Limits,
     NotResident,
     RequestFilter,
     TimeWindow,
@@ -524,23 +525,35 @@ def test_points_draw_all_rows_up_to_the_bound_then_bucket_extremes() -> None:
 
 @pytest.mark.parametrize(
     "gaps",
-    [[5.0, "x", 1.0], [5.0, math.inf, 1.0], [5.0, None], [math.nan], [5.0, 1.0]],
+    [
+        [5.0, "x", 1.0],
+        [5.0, math.inf, 1.0],
+        [5.0, None],
+        [math.nan],
+        [5.0, 1.0],
+        [10**400, 1.0],
+        [5.0, -(10**400), 1.0],
+    ],
 )
-@pytest.mark.parametrize("built", ["dict_rows", "index"])
+@pytest.mark.parametrize("built", ["dict_rows", "index", "index_without_gap_pool"])
 def test_chunk_counts_count_numeric_gaps_as_the_analyzer_does(
     tmp_path: Path, gaps: list[Any], built: str
 ) -> None:
     """A gap that is not a finite number is no chunk to the analyzer, so
     the rows, the points and the request detail say what the summary and
-    ``streaming_summary`` say (Codex: ``[5.0, "x", 1.0]`` gave 4, not 3)."""
+    ``streaming_summary`` say (Codex: ``[5.0, "x", 1.0]`` gave 4, not 3).
+    A 400-digit integer is no number either: ``float()`` overflows on it,
+    and it failed the index and ``infer analyze`` (Fable's P2-1)."""
     record = request(0, chunk_interarrival_ms=gaps)
     records = [session_record(), record]
     want = streaming_summary([record])["content_chunks_per_response"]["max"]
-    if built == "index":
+    if built != "dict_rows":
         (tmp_path / "run.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in records)
         )
-        snapshot = Harness(tmp_path).build("run.jsonl")
+        limits = Limits(gap_bytes=0) if built == "index_without_gap_pool" else None
+        snapshot = Harness(tmp_path, limits).build("run.jsonl")
+        assert snapshot.status == "ready"
     else:
         snapshot = snapshot_from_records(records)
     sel = select(snapshot, RequestFilter())
@@ -551,7 +564,10 @@ def test_chunk_counts_count_numeric_gaps_as_the_analyzer_does(
     )["points"]
     detail = summaries.request_detail(snapshot, sel.rows[0], sel)
     streaming = summaries.summary(snapshot, sel)["streaming"]
-    assert want == streaming["content_chunks_per_response"]["max"]
+    if built == "index_without_gap_pool":
+        assert streaming == summaries.STREAMING_UNAVAILABLE
+    else:
+        assert want == streaming["content_chunks_per_response"]["max"]
     assert row["chunk_count"] == point["y"] == detail["row"]["chunk_count"] == want
     assert detail["gaps"]["n"] + 1 == want and row["gap_count"] == len(gaps)
 
