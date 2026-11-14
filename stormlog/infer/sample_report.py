@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from .observers import SCRAPE_GAP_FACTOR
 from .quantiles import quantile
-from .report_stats import int_value, is_number
+from .report_stats import FLOAT_INT_LIMIT, int_value, is_number
 from .request_columns import no_records
 
 if TYPE_CHECKING:
@@ -57,9 +57,14 @@ def request_window(
 
 
 def _all_ints(cells: Sequence[Any]) -> bool:
-    """Every cell a JSON int: then ``is_number`` holds and ``int_value``
-    is the cell itself, so the window is the plain minimum and maximum."""
-    return set(map(type, cells)) == {int}
+    """Every cell a JSON int within a float's range: then ``is_number``
+    holds and ``int_value`` is the cell itself, so the window is the plain
+    minimum and maximum."""
+    return (
+        set(map(type, cells)) == {int}
+        and -FLOAT_INT_LIMIT < min(cells)
+        and max(cells) < FLOAT_INT_LIMIT
+    )
 
 
 def samples_in_window(
