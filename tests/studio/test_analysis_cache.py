@@ -594,6 +594,31 @@ def test_an_artifact_changed_during_the_copy_is_not_analysed(
     assert log_lines(log) == [] and leftovers(state_dir) == []
 
 
+def test_an_artifact_that_shrinks_during_the_copy_changed_and_never_failed(
+    workspace: Path,
+    state_dir: Path,
+    tmp_path: Path,
+    runners: list[AnalyzerRunner],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Fable's P3-1: a truncate after the identity check ended the copy
+    # early, and the run was cached as failed/unreadable.
+    log = tmp_path / "runs.log"
+    path = write_artifact(workspace / "run.jsonl")
+    copy_prefix = analysis_cache._copy_prefix
+
+    def shrink_then_copy(handle: BinaryIO, target: Path, length: int) -> None:
+        os.truncate(path, length // 2)
+        copy_prefix(handle, target, length)
+
+    monkeypatch.setattr(analysis_cache, "_copy_prefix", shrink_then_copy)
+    command = fake_analyzer(tmp_path, log=str(log))
+    runner = make(runners, workspace, state_dir, command=command)
+    state = settle(runner, "run.jsonl", snapshot_of(path, "run.jsonl"))
+    assert (state.status, state.reason) == ("unavailable", "changed")
+    assert log_lines(log) == [] and leftovers(state_dir) == []
+
+
 SECRET_NAMES = (
     "OPENAI_API_KEY",
     "openai_api_key",
