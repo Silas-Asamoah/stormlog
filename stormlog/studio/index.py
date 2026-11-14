@@ -70,6 +70,7 @@ from stormlog.studio.contracts import (
     IndexFailure,
     IndexSnapshot,
     IndexStatus,
+    InvalidInputError,
     LimitHit,
     Limits,
     LineProblem,
@@ -95,6 +96,7 @@ __all__ = [
     "ArtifactIndexes",
     "ColumnRow",
     "ColumnTable",
+    "refuse_oversized",
 ]
 
 _LOG = logging.getLogger(__name__)
@@ -574,9 +576,11 @@ class _Links:
 
 
 def _gap_value(gap: Any) -> float:
-    if isinstance(gap, (int, float)) and not isinstance(gap, bool):
-        return float(gap)
-    return math.nan
+    """``gap`` as a float, or NaN for what is not a number: a string, a
+    bool, None, or an int too large for a float, which would overflow."""
+    if isinstance(gap, float):
+        return gap
+    return float(gap) if is_number(gap) else math.nan
 
 
 def _non_numeric(gaps: list[Any]) -> int:
@@ -1318,14 +1322,23 @@ class _State:
         )
 
 
+# What a republish of the same lines takes from the fresh snapshot. The
+# whole-file ``sha256`` and the pending tail derive from the identity and
+# the offset, so they move with the identity (Fable's P2-2).
 _SNAPSHOT_REFRESH_KEYS = (
     "growing",
     "identity",
+    "pending_tail_bytes",
     "problems",
     "problem_count",
     "problem_counts",
+    "sha256",
     "status",
 )
+
+
+class _Rewritten(Exception):
+    """The file was rewritten while a batch was read past its last stat."""
 
 
 class _Index:
@@ -1403,7 +1416,11 @@ class _Index:
         after = self.reader.identity
         if before is not None and after is not None and before.size != after.size:
             self.last_growth = self.last_stat
-        progressed = self._read_all()
+        try:
+            progressed = self._read_all()
+        except _Rewritten:
+            self._restart()
+            return True
         if self.cancelled.is_set():
             return False  # a cancelled build is not built (F-14)
         self.state.built = True
@@ -1427,8 +1444,25 @@ class _Index:
             if self.reader.offset == before:
                 break
             progressed = True
+            self._catch_up_identity()
             self._publish(new_lines=True)
         return progressed
+
+    def _catch_up_identity(self) -> None:
+        """Stat again when a batch read past the size the last stat saw.
+
+        Bytes written between a round's stat and its read are read too, so
+        without this the snapshot says ``bytes_read > size`` and, the file
+        being wholly read but not by its stale identity, no ``sha256``
+        (Fable's P2-2). A file rewritten meanwhile raises
+        :class:`_Rewritten`; the round restarts the index.
+        """
+        identity = self.reader.identity
+        if identity is None or self.reader.offset <= identity.size:
+            return
+        if self.reader.identity_change() == "changed":
+            raise _Rewritten
+        self.last_growth = self.options.clock()
 
     def _unreadable(self, exc: BaseException) -> None:
         """The file could not be read.
@@ -1783,6 +1817,25 @@ def _stale_reason(data: bytes, ref: LineRef) -> str | None:
     return None
 
 
+def refuse_oversized(ref: LineRef, line_bytes: int) -> None:
+    """422 ``unreadable`` (``details.reason`` ``oversized``) for a line
+    longer than ``line_bytes``: the reader never parsed it, and nothing
+    reads it into memory whole (Fable's P2-1)."""
+    if ref.length > line_bytes:
+        raise InvalidInputError(
+            "unreadable",
+            f"line {ref.line} is {ref.length} bytes, over the {line_bytes}-byte "
+            "line limit",
+            field="line",
+            details={
+                "line": ref.line,
+                "reason": "oversized",
+                "length": ref.length,
+                "limit": line_bytes,
+            },
+        )
+
+
 def _read_ref(handle: BinaryIO, ref: LineRef) -> bytes:
     handle.seek(ref.offset)
     data = handle.read(ref.length + 1)
@@ -1861,7 +1914,9 @@ class ArtifactIndexes:
 
     def read_line(self, rel: str, ref: LineRef) -> bytes:
         """One line's bytes without its newline; ``stale_line`` (409) when
-        its bytes no longer hash to ``ref.sha256``."""
+        its bytes no longer hash to ``ref.sha256``; 422 ``unreadable``
+        (``oversized``) for a line over ``limits.line_bytes``, unread."""
+        refuse_oversized(ref, self._limits.line_bytes)
         with self._root.open(rel) as handle:
             return _read_ref(handle, ref)
 
@@ -1869,16 +1924,20 @@ class ArtifactIndexes:
         """Each line with its newline, read as the caller iterates.
 
         The file is opened now, so a missing or forbidden path raises here;
-        a line whose bytes changed raises ``stale_line`` when reached, which
-        ends the stream.
+        a line whose bytes changed raises ``stale_line`` when reached, and
+        one over ``limits.line_bytes`` ``unreadable``, either of which ends
+        the stream.
         """
         handle = self._root.open(rel)
-        return self._lines(handle, refs)
+        return self._lines(handle, refs, self._limits.line_bytes)
 
     @staticmethod
-    def _lines(handle: BinaryIO, refs: Iterable[LineRef]) -> Iterator[bytes]:
+    def _lines(
+        handle: BinaryIO, refs: Iterable[LineRef], line_bytes: int
+    ) -> Iterator[bytes]:
         with handle:
             for ref in refs:
+                refuse_oversized(ref, line_bytes)
                 yield _read_ref(handle, ref) + b"\n"
 
     def add_publish_listener(self, fn: Callable[[IndexSnapshot], None]) -> None:

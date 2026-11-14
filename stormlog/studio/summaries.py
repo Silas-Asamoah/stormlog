@@ -28,6 +28,7 @@ report's values are shown, labelled, in Sources (C4).
 from __future__ import annotations
 
 import math
+from array import array
 from bisect import bisect_left
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
@@ -75,6 +76,7 @@ from stormlog.studio.selection import (
     case_facts,
     in_selection,
     select,
+    selection_of,
     without_latency,
 )
 
@@ -396,6 +398,12 @@ def _freshness(snapshot: IndexSnapshot) -> dict[str, Any]:
 # --- Cases ------------------------------------------------------------------------
 
 
+def case_ids(snapshot: IndexSnapshot) -> list[str]:
+    """The cases :func:`cases` lists, sorted: planned or measured."""
+    facts = case_facts(snapshot)
+    return sorted(set(facts.planned) | set(facts.by_case))
+
+
 def cases(snapshot: IndexSnapshot) -> dict[str, Any]:
     """One summary per measured case, planned cases included, no deltas.
 
@@ -403,12 +411,17 @@ def cases(snapshot: IndexSnapshot) -> dict[str, Any]:
     request names it. A planned case with no observations gets the
     empty-selection summary (choice 16); an all-failed case keeps its
     failures and its 0.0 rate (choice 21).
+
+    Each case's rows are its measured rows as :func:`case_facts` grouped
+    them once, which are the rows ``select`` finds for ``case=<id>``, so
+    no case scans the whole table again (Fable's P3-2).
     """
     facts = case_facts(snapshot)
     planned = set(facts.planned)
     entries = []
-    for case_id in sorted(planned | set(facts.by_case)):
-        sel = select(snapshot, RequestFilter(cases=(case_id,)))
+    for case_id in case_ids(snapshot):
+        rows = array("q", facts.by_case.get(case_id, ()))
+        sel = selection_of(snapshot, RequestFilter(cases=(case_id,)), rows)
         entries.append(
             {
                 "case_id": case_id,
@@ -491,7 +504,9 @@ def _ms_from_origin(ns: int | None, origin_ns: int | None) -> float | None:
 
 
 def _is_int(value: Any) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+    """A JSON int that is a number: not a bool, and within a float's range
+    (an int past it is no number anywhere Stormlog reads one)."""
+    return isinstance(value, int) and is_number(value)
 
 
 def _ns(value: Any) -> int | None:

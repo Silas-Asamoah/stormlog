@@ -13,6 +13,7 @@ import json
 import math
 import shutil
 import time
+from array import array
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
@@ -30,6 +31,7 @@ from stormlog.studio import summaries
 from stormlog.studio.contracts import (
     AnalysisState,
     LatencyRange,
+    Limits,
     NotResident,
     RequestFilter,
     TimeWindow,
@@ -39,7 +41,14 @@ from stormlog.studio.contracts import (
     to_wire,
 )
 from stormlog.studio.metric_catalog import metric_catalog, panels
-from stormlog.studio.selection import case_facts, page, parse_filter, select, warm
+from stormlog.studio.selection import (
+    case_facts,
+    page,
+    parse_filter,
+    select,
+    selection_of,
+    warm,
+)
 from tests.studio.artifacts import (
     ANALYZE_FAILS,
     MULTI_SESSION,
@@ -516,23 +525,35 @@ def test_points_draw_all_rows_up_to_the_bound_then_bucket_extremes() -> None:
 
 @pytest.mark.parametrize(
     "gaps",
-    [[5.0, "x", 1.0], [5.0, math.inf, 1.0], [5.0, None], [math.nan], [5.0, 1.0]],
+    [
+        [5.0, "x", 1.0],
+        [5.0, math.inf, 1.0],
+        [5.0, None],
+        [math.nan],
+        [5.0, 1.0],
+        [10**400, 1.0],
+        [5.0, -(10**400), 1.0],
+    ],
 )
-@pytest.mark.parametrize("built", ["dict_rows", "index"])
+@pytest.mark.parametrize("built", ["dict_rows", "index", "index_without_gap_pool"])
 def test_chunk_counts_count_numeric_gaps_as_the_analyzer_does(
     tmp_path: Path, gaps: list[Any], built: str
 ) -> None:
     """A gap that is not a finite number is no chunk to the analyzer, so
     the rows, the points and the request detail say what the summary and
-    ``streaming_summary`` say (Codex: ``[5.0, "x", 1.0]`` gave 4, not 3)."""
+    ``streaming_summary`` say (Codex: ``[5.0, "x", 1.0]`` gave 4, not 3).
+    A 400-digit integer is no number either: ``float()`` overflows on it,
+    and it failed the index and ``infer analyze`` (Fable's P2-1)."""
     record = request(0, chunk_interarrival_ms=gaps)
     records = [session_record(), record]
     want = streaming_summary([record])["content_chunks_per_response"]["max"]
-    if built == "index":
+    if built != "dict_rows":
         (tmp_path / "run.jsonl").write_text(
             "".join(json.dumps(r) + "\n" for r in records)
         )
-        snapshot = Harness(tmp_path).build("run.jsonl")
+        limits = Limits(gap_bytes=0) if built == "index_without_gap_pool" else None
+        snapshot = Harness(tmp_path, limits).build("run.jsonl")
+        assert snapshot.status == "ready"
     else:
         snapshot = snapshot_from_records(records)
     sel = select(snapshot, RequestFilter())
@@ -543,9 +564,37 @@ def test_chunk_counts_count_numeric_gaps_as_the_analyzer_does(
     )["points"]
     detail = summaries.request_detail(snapshot, sel.rows[0], sel)
     streaming = summaries.summary(snapshot, sel)["streaming"]
-    assert want == streaming["content_chunks_per_response"]["max"]
+    if built == "index_without_gap_pool":
+        assert streaming == summaries.STREAMING_UNAVAILABLE
+    else:
+        assert want == streaming["content_chunks_per_response"]["max"]
     assert row["chunk_count"] == point["y"] == detail["row"]["chunk_count"] == want
     assert detail["gaps"]["n"] + 1 == want and row["gap_count"] == len(gaps)
+
+
+def test_a_token_count_past_a_floats_range_is_unknown_to_studio_as_to_analyze(
+    tmp_path: Path,
+) -> None:
+    """Fable's P2-1: the column path summed every cell, so a 400-digit
+    ``prompt_tokens`` gave the index's summary ``known_sum`` 10**400 where
+    ``infer analyze`` (and the row path) gave 24 from the three known."""
+    records = closed_case(4)
+    records[3] = request(1, prompt_tokens=10**400, prompt_token_source="tokenizer")
+    (tmp_path / "run.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    (case,) = analyze_inference_events(tmp_path / "run.jsonl")["cases"].values()
+    want = case["tokens"]["coverage"]["prompt"]
+    assert (want["known"], want["known_sum"], want["partial"]) == (3, 24, True)
+    built = {
+        "rows": snapshot_from_records(records),
+        "index": Harness(tmp_path).build("run.jsonl"),
+        "index_without_gap_pool": Harness(tmp_path, Limits(gap_bytes=0)).build(
+            "run.jsonl"
+        ),
+    }
+    for name, snapshot in built.items():
+        assert snapshot.status == "ready", name
+        got = summaries.summary(snapshot, select(snapshot, RequestFilter()))
+        assert got["tokens"]["prompt"] == want, name
 
 
 def test_points_count_rows_without_a_value() -> None:
@@ -973,6 +1022,54 @@ def test_every_case_summary_equals_the_analyzers_case_block(
             ), f"{name} {case} {key}"
         assert body["counts"]["server_evidence"] == "not_indexed"
         assert body["counts"]["server_admitted"] is None
+
+
+def _cases_by_select(snapshot: Any) -> dict[str, Any]:
+    """``summaries.cases`` as it was: one ``select`` per case."""
+    facts = case_facts(snapshot)
+    planned = set(facts.planned)
+    entries = []
+    for case_id in sorted(planned | set(facts.by_case)):
+        sel = select(snapshot, RequestFilter(cases=(case_id,)))
+        entries.append(
+            {
+                "case_id": case_id,
+                "planned": case_id in planned,
+                "observed": case_id in facts.by_case,
+                "summary": summaries.summary(snapshot, sel),
+            }
+        )
+    return {"comparison_scope": "full_measured_case", "cases": entries}
+
+
+@pytest.mark.parametrize("name", STUDIO_ARTIFACTS)
+@pytest.mark.parametrize("kind", ["rows", "columns"])
+def test_cases_group_rows_once_and_equal_a_select_per_case(
+    name: str,
+    kind: str,
+    studio_artifacts: StandardArtifacts,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fable's P3-2: the case facts' grouping replaces a whole-table scan
+    per case, and every fixture's cases document is the same JSON text."""
+    path = studio_artifacts[name]
+    snapshot = snapshot_of(path) if kind == "rows" else column_snapshot_of(path)
+    expected = _cases_by_select(snapshot)
+    facts = case_facts(snapshot)
+    for case_id in summaries.case_ids(snapshot):
+        f = RequestFilter(cases=(case_id,))
+        rows = array("q", facts.by_case.get(case_id, ()))
+        assert selection_of(snapshot, f, rows) == select(snapshot, f), case_id
+    scans: list[RequestFilter] = []
+
+    def counted(snapshot: Any, f: RequestFilter) -> Any:
+        scans.append(f)
+        return select(snapshot, f)
+
+    monkeypatch.setattr(summaries, "select", counted)
+    document = summaries.cases(snapshot)
+    assert scans == []
+    assert json.dumps(document, sort_keys=True) == json.dumps(expected, sort_keys=True)
 
 
 def test_parity_covers_every_fixture_studio_reads_whole() -> None:

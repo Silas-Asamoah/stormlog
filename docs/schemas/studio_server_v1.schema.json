@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_server_v1.schema.json",
+  "title": "Stormlog Studio server v1",
+  "description": "GET /api/v1/server (design §5.4), written by api.py: the Stormlog version, the API version, this instance, the workspace root's real path and every bound of §8.1 (contracts.Limits, sizes in bytes, times in seconds). The port is not here: the context is built before the launcher binds, and only the server knows the port it bound.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "version",
+    "api_version",
+    "instance_id",
+    "root",
+    "limits"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.server"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "version": {
+      "type": "string"
+    },
+    "api_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "instance_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "root": {
+      "description": "The workspace root's real path.",
+      "type": "string"
+    },
+    "limits": {
+      "description": "contracts.Limits as configured.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_connections",
+        "head_bytes",
+        "body_bytes",
+        "deadline_s",
+        "long_deadline_s",
+        "open_indexes",
+        "index_memory_bytes",
+        "row_bytes",
+        "gap_bytes",
+        "error_message_bytes",
+        "sample_bytes",
+        "kept_bytes",
+        "kept_record_bytes",
+        "context_bytes",
+        "line_bytes",
+        "scan_depth",
+        "scan_entries",
+        "scan_seconds",
+        "analysis_bytes",
+        "analysis_seconds",
+        "report_bytes",
+        "page_rows",
+        "points",
+        "bins",
+        "chunk_page",
+        "text_chars",
+        "cached_documents",
+        "cached_selections",
+        "max_cases"
+      ],
+      "properties": {
+        "max_connections": {
+          "type": "number",
+          "minimum": 0
+        },
+        "head_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "body_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "deadline_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "long_deadline_s": {
+          "type": "number",
+          "minimum": 0
+        },
+        "open_indexes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "index_memory_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "row_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "gap_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "error_message_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "sample_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "kept_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "kept_record_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "context_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "line_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "scan_depth": {
+          "type": "number",
+          "minimum": 0
+        },
+        "scan_entries": {
+          "type": "number",
+          "minimum": 0
+        },
+        "scan_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "analysis_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "analysis_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "report_bytes": {
+          "type": "number",
+          "minimum": 0
+        },
+        "page_rows": {
+          "type": "number",
+          "minimum": 0
+        },
+        "points": {
+          "type": "number",
+          "minimum": 0
+        },
+        "bins": {
+          "type": "number",
+          "minimum": 0
+        },
+        "chunk_page": {
+          "type": "number",
+          "minimum": 0
+        },
+        "text_chars": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cached_documents": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cached_selections": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_cases": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

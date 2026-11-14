@@ -18,7 +18,7 @@ from stormlog.infer.latency_report import (
     latency_summary,
     streaming_summary,
 )
-from stormlog.infer.report_stats import int_value, is_number
+from stormlog.infer.report_stats import FLOAT_INT_LIMIT, int_value, is_number
 from stormlog.infer.request_columns import (
     ColumnRows,
     int_sum,
@@ -28,12 +28,20 @@ from stormlog.infer.request_columns import (
 from stormlog.infer.sample_report import request_window
 from stormlog.infer.slo import client_values
 from stormlog.infer.token_report import successful_throughput, token_coverage
+from tests.test_infer_latency_report import _streamed
 
 SECOND = 1_000_000_000
 NAN, INF = float("nan"), float("inf")
 ODD: tuple[Any, ...] = (
     NAN, INF, -INF, -0.0, 0.0, 0, 2**53 + 1, 2**64, True, False, None, "7", [], {},
-    5e-324, 1e308, 7.5,
+    5e-324, 1e308, 7.5, 10**400,
+)  # fmt: skip
+#: Every field where an int past a float's range once failed a path, or
+#: made the record and column paths disagree (Fable's P2-1 and P2-2).
+HUGE_FIELDS = (
+    "output_tokens", "total_tokens", "prompt_tokens", "e2e_latency_ms", "ttft_ms",
+    "started_at_ns", "ended_at_ns", "intended_at_ns", "dispatch_lag_ms",
+    "request_index",
 )  # fmt: skip
 
 
@@ -88,8 +96,12 @@ class RecordColumns:
 
 
 def _float_like(value: Any) -> bool:
+    """What the index stores as a float: NaN and infinities too, but not an
+    int past a float's range, which it stores as NaN like a string."""
     return isinstance(value, float) or (
-        isinstance(value, int) and not isinstance(value, bool)
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and -FLOAT_INT_LIMIT < value < FLOAT_INT_LIMIT
     )
 
 
@@ -191,12 +203,43 @@ def test_sorted_floats_is_sorted_bit_for_bit(seed: int) -> None:
 
 
 def test_the_cell_rules_are_is_number_and_int_value() -> None:
-    cells = list(ODD) + [1, -3, 2**70, 4.0]
+    huge = 2**1024 - 2**970  # the first int float() overflows on
+    assert is_number(huge - 1) and not is_number(huge) and not is_number(-huge)
+    cells = list(ODD) + [1, -3, 2**70, 4.0, huge, -huge, huge - 1, 10**400]
     assert numbers_at(cells) == [k for k, v in enumerate(cells) if is_number(v)]
     assert int_sum(cells) == sum(int_value(v) for v in cells)
-    ints = [1, None, 2**70, -4, None]
-    assert numbers_at(ints) == [0, 2, 3]
-    assert int_sum(ints) == 1 + 2**70 - 4
+    ints = [1, None, 2**70, -4, None, 10**400, -huge, huge - 1]
+    assert numbers_at(ints) == [0, 2, 3, 7]
+    reals = [1.5, None, huge, -(huge - 1)]
+    assert numbers_at(reals) == [0, 3]
+    assert int_sum(ints) == sum(int_value(v) for v in ints) == 1 + 2**70 - 4 + huge - 1
+    # A column sum over every cell is the sum over the numbers only if
+    # int_value reads what is_number refuses as 0 (Fable's P2-1).
+    for cell in cells + ints + reals:
+        assert is_number(cell) or int_value(cell) == 0, cell
+    assert int_sum([10**400]) == int_sum([-huge, None]) == 0
+
+
+@pytest.mark.parametrize("field", HUGE_FIELDS)
+@pytest.mark.parametrize("huge", [10**400, -(10**400)], ids=["e400", "-e400"])
+def test_an_int_past_a_floats_range_is_no_number_by_record_or_by_column(
+    field: str, huge: int
+) -> None:
+    # Fable's P2-1 and P2-2: such an int raised OverflowError in a token
+    # rate or slo._number, or counted in a column sum and a window while
+    # the record path left it out.
+    records = [_streamed(0), _streamed(1, **{field: huge}), _streamed(2)]
+    whole = ColumnRows(RecordColumns(records), range(len(records)))
+    assert _text(_by_columns(whole)) == _text(_by_records(records))
+
+
+def test_a_window_over_int_columns_skips_an_int_past_a_floats_range() -> None:
+    # Fable's P2-1: _all_ints took the plain maximum, 10**400, while the
+    # record path left the cell out of the window.
+    records = [_streamed(0), _streamed(1, ended_at_ns=10**400), _streamed(2)]
+    columns = ColumnRows(RecordColumns(records), range(len(records)))
+    assert request_window(records) == (0, 2 * SECOND + SECOND // 2)
+    assert request_window((), columns=columns) == request_window(records)
 
 
 def test_records_and_columns_are_never_mixed() -> None:
