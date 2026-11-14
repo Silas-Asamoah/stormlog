@@ -576,9 +576,11 @@ class _Links:
 
 
 def _gap_value(gap: Any) -> float:
-    if isinstance(gap, (int, float)) and not isinstance(gap, bool):
-        return float(gap)
-    return math.nan
+    """``gap`` as a float, or NaN for what is not a number: a string, a
+    bool, None, or an int too large for a float, which would overflow."""
+    if isinstance(gap, float):
+        return gap
+    return float(gap) if is_number(gap) else math.nan
 
 
 def _non_numeric(gaps: list[Any]) -> int:
