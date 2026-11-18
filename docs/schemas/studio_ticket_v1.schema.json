@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_ticket_v1.schema.json",
   "title": "Stormlog Studio ticket v1",
-  "description": "POST /api/v1/tickets, bearer: a single-use credential for one exact URL of a bearer_or_ticket route (design §5.4, §7.2).",
+  "description": "POST /api/v1/tickets, bearer: a single-use credential for one exact URL of a bearer_or_ticket route.",
   "type": "object",
   "additionalProperties": false,
   "required": [
