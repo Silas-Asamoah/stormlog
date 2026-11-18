@@ -119,6 +119,8 @@ The export buttons only work after timeline samples exist. If you have not start
 - rebuilds rank-level diagnostics
 - supports rank filters such as `all`, `0,2,4-7`
 - highlights anomaly indicators and focused rank timelines
+- compares the focused rank with the other ranks and ranks the fields that
+  differ most (`Compare Rank`)
 - surfaces phase paths for first anomalies and earliest indicators when phase telemetry is present
 
 ![Diagnostics tab](tui-diagnostics-current.png)
@@ -172,6 +174,8 @@ Use this tab when you want to kick off a CLI flow and keep the output attached t
 5. Click `Refresh`.
 6. Narrow the result set with the rank filter if needed.
 7. Select a rank from the table to focus the timeline.
+8. Click `Compare Rank` to see which fields set that rank apart from the
+   others; see [Outlier Comparison](outlier_comparison.md).
 
 ### Workflow: run the release smoke path from the UI
 

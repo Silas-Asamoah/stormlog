@@ -425,10 +425,44 @@ alerts, OOM bundles, diagnose bundles, rollup windows, and local attachment
 sidecars. Use `--record-id` instead of `--at-ns` to anchor on a projected
 telemetry record id.
 
+Rank the fields that separate a selection from its baseline:
+
+```bash
+# One rank against the other ranks of a session
+stormlog query compare rank ./live_sink --rank 3 --session-id session-123
+
+# One time window against the rest of the session
+stormlog query compare window ./live_sink \
+  --session-id session-123 \
+  --time-start-ns 1800000000000000000 \
+  --time-end-ns 1800000060000000000
+
+# One session against chosen sessions (or every other session when omitted)
+stormlog query compare session ./runs \
+  --session-id run-oom \
+  --baseline-session run-ok-1 \
+  --baseline-session run-ok-2
+
+# The events behind one grouped issue against their neighbors
+stormlog query compare fingerprint ./live_sink \
+  --fingerprint-id issue:3f2a9c1e0b7d4a5e6f708192 \
+  --window-ns 30000000000 \
+  --json
+```
+
+Each field gets a score from 0 to 1, with a confidence and the largest
+difference behind it. `--field` (repeatable) restricts the comparison,
+`--limit` keeps the top fields, `--min-events` sets the support below which
+results are low confidence, and `--max-values` sets the distinct-value count
+above which a categorical field is skipped. A scope without its required flags
+exits 2. See [Outlier Comparison](outlier_comparison.md) for the scoring and
+its failure modes.
+
 Supported output formats:
 
 - `--table`: readable table output, used by default
-- `--json`: machine-readable rows
+- `--json`: machine-readable rows (a single result object for `correlate` and
+  `compare`)
 - `--csv`: row-query exports for `runs`, `attachments`, `sessions`, `events`,
   and `ooms`
 
@@ -444,6 +478,7 @@ sessions = store.list_sessions()
 events = store.query_events()
 ooms = store.list_oom_bundles()
 issues = store.list_issues()
+comparison = store.compare(stormlog.query.ComparisonFilter(scope="rank", rank=3))
 ```
 
 For engine-choice details and follow-on work, see

@@ -131,23 +131,20 @@ _REQUIRED_SCOPE_ARGUMENTS: Mapping[ComparisonScope, tuple[str, ...]] = {
 class ComparisonFilter:
     """Selection, baseline and tuning knobs for one outlier comparison.
 
-    Attributes:
-        scope: Which selection to compare against its baseline.
-        session_id: The session to select (``window``, ``session``) or to
-            limit the comparison to (``rank``).
-        job_id: Limits ``rank`` and ``session`` comparisons to one job.
-        rank: The rank to select (``rank``) or to limit a window to.
-        time_start_ns: Inclusive start of the selected ``window``.
-        time_end_ns: Exclusive end of the selected ``window``.
-        baseline_session_ids: Explicit baseline sessions for ``session``
-            scope. Empty means every other loaded session.
-        fingerprint_id: The grouped issue to select (``fingerprint``).
-        window_ns: How far around each issue hit the ``fingerprint``
-            baseline reaches.
-        fields: Restricts the comparison to these eligible fields.
-        max_values: Categorical fields with more distinct values are skipped.
-        min_events: Support below this marks results as low confidence.
-        limit: Keeps only the highest scoring fields.
+    ``scope`` picks the selection. ``rank`` selects ``rank`` against the other
+    ranks, optionally within ``session_id`` and ``job_id``. ``window`` selects
+    ``[time_start_ns, time_end_ns)`` of ``session_id`` (and ``rank``) against
+    the rest of it. ``session`` selects ``session_id`` against
+    ``baseline_session_ids``, or every other session (within ``job_id``) when
+    that is empty. ``fingerprint`` selects the events behind the grouped issue
+    ``fingerprint_id`` against the events of the same session within
+    ``window_ns`` of a hit.
+
+    ``fields`` restricts the comparison to some eligible fields,
+    ``max_values`` is the distinct-value count above which a categorical field
+    is skipped, ``min_events`` the support below which a result is low
+    confidence, and ``limit`` keeps only the highest scoring fields. Invalid
+    combinations raise ``ValueError``.
     """
 
     scope: ComparisonScope

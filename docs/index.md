@@ -67,6 +67,7 @@ query_layer
 run_envelopes
 issue_fingerprinting
 correlation
+outlier_comparison
 pytorch_testing_guide
 tensorflow_testing_guide
 jax_testing_guide

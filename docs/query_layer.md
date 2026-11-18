@@ -128,6 +128,10 @@ custom aggregation language:
 These cover the immediate operational questions while leaving room for a DuckDB
 adapter or richer aggregation API later.
 
+To ask which fields separate one rank, window, session or grouped issue from
+a baseline, use `QueryStore.compare` or `stormlog query compare`; see
+[Outlier Comparison](outlier_comparison.md).
+
 ## Follow-On Tasks
 
 - Add an optional DuckDB adapter behind the same row model for very large JSONL
