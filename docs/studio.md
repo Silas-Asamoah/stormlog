@@ -8,9 +8,9 @@ every number with Stormlog's own code, and serves a browser frontend that
 only formats and draws what the server sent.
 
 This page covers starting Studio, signing in, and the security model. The
-frontend and the artifact API are still being built: in this release the
-server, its security layer and a placeholder page ship, and the routes that
-read artifacts arrive with the next components.
+frontend is still being built: this release ships the server, its security
+layer, the artifact routes in the [API reference](studio_api.md), and a
+placeholder page.
 
 ## Platforms
 
@@ -188,3 +188,9 @@ Studio bounds what any client can hold:
 Errors come back as `stormlog.studio.error` documents
 (`docs/schemas/studio_error_v1.schema.json`). Their messages are scrubbed
 of credentials and cut to 512 bytes.
+
+## API reference
+
+Every route Studio serves, with its auth, parameters, response document,
+errors and an example, is listed in the
+[Stormlog Studio API reference](studio_api.md).
