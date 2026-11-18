@@ -426,3 +426,95 @@ def test_stormlog_dispatcher_routes_query(
 
     assert excinfo.value.code == 0
     assert json.loads(capsys.readouterr().out)[0]["session_id"] == "session-cli"
+
+
+def _write_rank_split(path: Path, *, per_rank: int = 40) -> None:
+    records = [_event_record(timestamp_ns=index) for index in range(per_rank)]
+    for index in range(per_rank):
+        record = _event_record(timestamp_ns=1_000 + index, rank=1)
+        record["allocator_reserved_bytes"] = 900
+        record["metadata"] = {"backend": "cuda", "collector_health_status": "degraded"}
+        records.append(record)
+    _write_json_events(path, records)
+
+
+def test_query_compare_rank_json_output(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "track.json"
+    _write_rank_split(path)
+
+    assert query_main(["compare", "rank", str(path), "--rank", "1", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["format"] == "stormlog.outlier_comparison"
+    assert payload["scope"] == "rank"
+    assert payload["selection"]["ranks"] == [1]
+    assert payload["baseline"]["event_count"] == 40
+    fields = {row["field"]: row for row in payload["fields"]}
+    assert fields["collector_health_status"]["score"] == pytest.approx(1.0)
+    assert fields["allocator_reserved_bytes"]["selection_median"] == 900.0
+
+
+def test_query_compare_table_lists_fields_and_warns_on_stderr(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "track.json"
+    _write_rank_split(path, per_rank=5)
+
+    assert (
+        query_main(
+            [
+                "compare",
+                "rank",
+                str(path),
+                "--rank",
+                "1",
+                "--field",
+                "allocator_reserved_bytes",
+                "--field",
+                "collector_health_status",
+            ]
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert lines[0] == "Selection: 5 events; baseline: 5 events"
+    assert lines[1].split()[:4] == ["Field", "Kind", "Score", "Confidence"]
+    assert "allocator_reserved_bytes" in lines[3]
+    assert "median 900 vs 150" in captured.out
+    assert "degraded: 100% vs 0%" in captured.out
+    assert "small_selection, small_baseline" in captured.out
+    assert "Warning: selection has 5 events" in captured.err
+
+
+def test_query_compare_scope_without_required_flags_is_usage_error(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "track.json"
+    _write_rank_split(path, per_rank=1)
+
+    assert query_main(["compare", "window", str(path), "--session", "s"]) == 2
+
+    assert "window scope requires time_start_ns, time_end_ns" in (
+        capsys.readouterr().err
+    )
+
+
+def test_query_compare_rejects_csv_and_unknown_fields(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = tmp_path / "track.json"
+    _write_rank_split(path, per_rank=1)
+
+    for extra in (["--csv"], ["--field", "pid"]):
+        with pytest.raises(SystemExit) as excinfo:
+            query_main(["compare", "rank", str(path), "--rank", "1", *extra])
+        assert excinfo.value.code == 2
+    assert "invalid choice: 'pid'" in capsys.readouterr().err

@@ -627,7 +627,9 @@ def _categorical_comparison(
         )
         for value in values
     ]
-    shares.sort(key=lambda share: (-abs(share.delta), share.value))
+    shares.sort(
+        key=lambda share: (-abs(share.delta), share.value == MISSING_VALUE, share.value)
+    )
     return FieldComparison(
         field=name,
         kind="categorical",
