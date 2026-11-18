@@ -31,6 +31,7 @@ import numpy as np
 
 from .correlation import DEFAULT_CORRELATION_WINDOW_NS
 from .derived_fields import DerivedFields, compute_event_fields
+from .formatting import format_bytes
 from .issues import normalized_error_stem
 from .telemetry import TelemetryEvent
 from .telemetry_classification import event_backend, event_severity, is_alert_event
@@ -112,7 +113,7 @@ ELIGIBLE_FIELDS: tuple[str, ...] = CATEGORICAL_FIELDS + NUMERIC_FIELDS
 
 # The field that defines each scope cannot explain its own selection.
 SCOPE_DEFINING_FIELDS: Mapping[ComparisonScope, tuple[str, ...]] = {
-    "rank": ("rank", "local_rank"),
+    "rank": ("rank", "local_rank", "device_id"),
     "window": (),
     "session": (),
     "fingerprint": (),
@@ -441,6 +442,33 @@ def _near_any(sorted_times: Sequence[int], timestamp_ns: int, window_ns: int) ->
     return index < len(sorted_times) and sorted_times[index] <= timestamp_ns + window_ns
 
 
+def describe_difference(row: FieldComparison) -> str:
+    """Return a one-line, human-readable summary of a field's difference.
+
+    Categorical fields show the value whose share changed most; numeric fields
+    show the two medians, in bytes for byte counters, or the missing ratios
+    when one side has no values.
+    """
+    if row.top_values:
+        top = row.top_values[0]
+        return f"{top.value}: {top.selection_share:.0%} vs {top.baseline_share:.0%}"
+    if row.selection_median is None or row.baseline_median is None:
+        return (
+            f"missing {row.selection_missing_ratio:.0%} "
+            f"vs {row.baseline_missing_ratio:.0%}"
+        )
+    return (
+        f"median {_format_value(row.field, row.selection_median)} "
+        f"vs {_format_value(row.field, row.baseline_median)}"
+    )
+
+
+def _format_value(name: str, value: float) -> str:
+    if name.endswith("_bytes"):
+        return format_bytes(round(value))
+    return f"{value:.3g}"
+
+
 def describe_events(events: Sequence[TelemetryEvent]) -> ComparisonGroup:
     """Summarize which sessions, ranks and time span a set of events covers."""
     if not events:
@@ -628,7 +656,12 @@ def _categorical_comparison(
         for value in values
     ]
     shares.sort(
-        key=lambda share: (-abs(share.delta), share.value == MISSING_VALUE, share.value)
+        key=lambda share: (
+            -abs(share.delta),
+            share.delta < 0,
+            share.value == MISSING_VALUE,
+            share.value,
+        )
     )
     return FieldComparison(
         field=name,
@@ -751,6 +784,7 @@ __all__ = [
     "SkippedField",
     "ValueShare",
     "compare_events",
+    "describe_difference",
     "describe_events",
     "ks_statistic",
     "split_events",

@@ -12,7 +12,9 @@ from stormlog.outliers import (
     ELIGIBLE_FIELDS,
     MISSING_VALUE,
     ComparisonFilter,
+    FieldComparison,
     compare_events,
+    describe_difference,
     describe_events,
     ks_statistic,
     split_events,
@@ -188,6 +190,7 @@ def test_rank_scope_excludes_rank_fields() -> None:
     }
     assert "rank" not in compared
     assert "local_rank" not in compared
+    assert "device_id" not in compared
 
 
 def test_field_restriction_and_limit() -> None:
@@ -330,3 +333,40 @@ def test_split_fingerprint_events_matches_hits_and_neighbors() -> None:
     )
     assert [event.timestamp_ns for event in selection] == [10, 21]
     assert [event.timestamp_ns for event in baseline] == [9, 11]
+
+
+def test_describe_difference_formats_each_kind() -> None:
+    selection = _events(40, reserved=3 * 1024**3, host="b")
+    baseline = _events(40, reserved=1024**3, host="a")
+    result = compare_events(selection, baseline, scope="window")
+    assert describe_difference(_field(result, "host")) == "b: 100% vs 0%"
+    assert (
+        describe_difference(_field(result, "allocator_reserved_bytes"))
+        == "median 3.00 GB vs 1.00 GB"
+    )
+    ratio = FieldComparison(
+        field="utilization_ratio",
+        kind="numeric",
+        score=0.5,
+        confidence="high",
+        reasons=(),
+        selection_present=2,
+        baseline_present=2,
+        selection_missing_ratio=0.0,
+        baseline_missing_ratio=0.0,
+        selection_median=0.91234,
+        baseline_median=0.5,
+    )
+    assert describe_difference(ratio) == "median 0.912 vs 0.5"
+    no_values = FieldComparison(
+        field="device_free_bytes",
+        kind="numeric",
+        score=0.5,
+        confidence="low",
+        reasons=(),
+        selection_present=0,
+        baseline_present=2,
+        selection_missing_ratio=1.0,
+        baseline_missing_ratio=0.5,
+    )
+    assert describe_difference(no_values) == "missing 100% vs 50%"

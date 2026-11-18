@@ -486,7 +486,7 @@ def test_query_compare_table_lists_fields_and_warns_on_stderr(
     assert lines[0] == "Selection: 5 events; baseline: 5 events"
     assert lines[1].split()[:4] == ["Field", "Kind", "Score", "Confidence"]
     assert "allocator_reserved_bytes" in lines[3]
-    assert "median 900 vs 150" in captured.out
+    assert "median 900.00 B vs 150.00 B" in captured.out
     assert "degraded: 100% vs 0%" in captured.out
     assert "small_selection, small_baseline" in captured.out
     assert "Warning: selection has 5 events" in captured.err

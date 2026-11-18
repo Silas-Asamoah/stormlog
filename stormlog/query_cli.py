@@ -16,6 +16,7 @@ from .outliers import (
     DEFAULT_MIN_EVENTS,
     DEFAULT_NEIGHBOR_WINDOW_NS,
     ELIGIBLE_FIELDS,
+    describe_difference,
 )
 
 if TYPE_CHECKING:
@@ -281,31 +282,17 @@ def _query_compare(
 
 
 def _comparison_table_row(row: FieldComparison) -> dict[str, Any]:
-    if row.kind == "categorical":
-        top = row.top_values[0]
-        difference = (
-            f"{top.value}: {top.selection_share:.0%} vs {top.baseline_share:.0%}"
-        )
-    else:
-        difference = (
-            f"median {_number(row.selection_median)} "
-            f"vs {_number(row.baseline_median)}"
-        )
     return {
         "field": row.field,
         "kind": row.kind,
         "score": f"{row.score:.3f}",
         "confidence": row.confidence,
-        "difference": difference,
+        "difference": describe_difference(row),
         "missing": (
             f"{row.selection_missing_ratio:.0%} vs {row.baseline_missing_ratio:.0%}"
         ),
         "reasons": ", ".join(row.reasons),
     }
-
-
-def _number(value: float | None) -> str:
-    return "-" if value is None else f"{value:g}"
 
 
 def _build_parser() -> argparse.ArgumentParser:
