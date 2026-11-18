@@ -313,6 +313,42 @@ def test_diagnostics_buttons_load_live_apply_filter_and_reset() -> None:
     asyncio.run(scenario())
 
 
+def test_diagnostics_compare_rank_ranks_fields_against_other_ranks() -> None:
+    async def scenario() -> None:
+        app = GPUMemoryProfilerTUI()
+        async with app.run_test(headless=True, size=(140, 44)) as pilot:
+            await pilot.pause()
+            app.query_one(TabbedContent).active = _tab_id_by_title(app, "Diagnostics")
+            await pilot.pause()
+
+            await pilot.click("#btn-diag-compare-rank")
+            await pilot.pause()
+            assert "select a rank row first" in _log_text(app.diagnostics_log)
+
+            session = _StubTrackerSession()
+            session.telemetry_events = [
+                _make_event(rank, 1.0 + index) for rank in (0, 1) for index in range(3)
+            ]
+            app.tracker_session = session  # type: ignore[assignment, unused-ignore]
+            app._get_or_create_tracker_session = lambda: session  # type: ignore[assignment, method-assign, return-value, unused-ignore]
+            await pilot.click("#btn-diag-load-live")
+            await pilot.pause()
+            app._diagnostics_active_rank = 1
+
+            await pilot.click("#btn-diag-compare-rank")
+            await pilot.pause()
+
+            table = app.diagnostics_compare_table
+            fields = [table.get_row_at(index)[0] for index in range(table.row_count)]
+            assert "allocator_reserved_bytes" in fields
+            assert "rank" not in fields
+            diagnostics_text = _log_text(app.diagnostics_log)
+            assert "Rank 1: 3 events vs 3 from ranks 0." in diagnostics_text
+            assert "every field is low confidence" in diagnostics_text
+
+    asyncio.run(scenario())
+
+
 def test_diagnostics_refresh_passes_markers_to_timeline_renderer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
