@@ -31,6 +31,17 @@ the flaky benchmark memory gates
 
 ### Added
 
+- Selection-versus-baseline outlier comparison
+  ([#114](https://github.com/Silas-Asamoah/stormlog/issues/114)).
+  `stormlog query compare rank|window|session|fingerprint` and
+  `QueryStore.compare` rank the telemetry fields whose distributions differ
+  most between one rank, time window, session or grouped issue and its
+  baseline. Categorical fields score by total variation distance and numeric
+  fields by the Kolmogorov-Smirnov statistic or the change in missing ratio,
+  so both rank on one 0 to 1 scale. High-cardinality, constant and empty
+  fields are skipped with a reason, and small or sparse sides are marked low
+  confidence. The TUI Diagnostics tab gains `Compare Rank`. See
+  `docs/outlier_comparison.md`.
 - Prometheus export for `stormlog infer profile` (#220). `--prometheus-listen
   HOST:PORT` serves Stormlog's own measurements at `/metrics` while the run
   lasts (with `--prometheus-linger` for a final scrape), and

@@ -11,8 +11,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .correlation import DEFAULT_CORRELATION_WINDOW_NS
+from .outliers import (
+    DEFAULT_MAX_VALUES,
+    DEFAULT_MIN_EVENTS,
+    DEFAULT_NEIGHBOR_WINDOW_NS,
+    ELIGIBLE_FIELDS,
+    describe_difference,
+)
 
 if TYPE_CHECKING:
+    from .outliers import FieldComparison
     from .query import QueryStore
 
 
@@ -231,6 +239,62 @@ def _query_correlate(
     return 0
 
 
+def _query_compare(
+    store: QueryStore, args: argparse.Namespace, output_mode: _OutputMode
+) -> int:
+    from . import query as query_api
+
+    try:
+        filters = query_api.ComparisonFilter(
+            scope=args.scope,
+            session_id=args.session_id,
+            job_id=args.job_id,
+            rank=args.rank,
+            time_start_ns=args.time_start_ns,
+            time_end_ns=args.time_end_ns,
+            baseline_session_ids=tuple(args.baseline_session or ()),
+            fingerprint_id=args.fingerprint_id,
+            window_ns=args.window_ns,
+            fields=tuple(args.field or ()),
+            max_values=args.max_values,
+            min_events=args.min_events,
+            limit=args.limit,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    result = store.compare(filters)
+    if output_mode.json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+        return 0
+    for warning in result.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    print(
+        f"Selection: {result.selection.event_count} events; "
+        f"baseline: {result.baseline.event_count} events"
+    )
+    _emit_rows(
+        [_comparison_table_row(row) for row in result.fields],
+        output_mode,
+        _COMPARISON_COLUMNS,
+    )
+    return 0
+
+
+def _comparison_table_row(row: FieldComparison) -> dict[str, Any]:
+    return {
+        "field": row.field,
+        "kind": row.kind,
+        "score": f"{row.score:.3f}",
+        "confidence": row.confidence,
+        "difference": describe_difference(row),
+        "missing": (
+            f"{row.selection_missing_ratio:.0%} vs {row.baseline_missing_ratio:.0%}"
+        ),
+        "reasons": ", ".join(row.reasons),
+    }
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="stormlog query",
@@ -394,6 +458,50 @@ def _build_parser() -> argparse.ArgumentParser:
         ],
     )
     correlate.add_argument("--limit", type=int)
+
+    compare = subparsers.add_parser(
+        "compare",
+        help="Rank the fields that separate a selection from its baseline",
+        description=(
+            "Compare one rank, time window, session or grouped issue against "
+            "a baseline and rank the fields whose distributions differ most."
+        ),
+    )
+    compare.set_defaults(query_handler=_query_compare)
+    compare.add_argument(
+        "scope",
+        choices=["rank", "window", "session", "fingerprint"],
+        help=(
+            "rank: --rank vs the other ranks; window: --time-start-ns.."
+            "--time-end-ns vs the rest of --session; session: --session vs "
+            "--baseline-session or every other session; fingerprint: an issue's "
+            "events vs their neighbors within --window-ns"
+        ),
+    )
+    _add_paths(compare)
+    _add_output_flags(compare, include_csv=False)
+    compare.add_argument("--session-id", "--session", dest="session_id")
+    compare.add_argument("--job-id")
+    compare.add_argument("--rank", type=int)
+    compare.add_argument("--time-start-ns", type=int)
+    compare.add_argument("--time-end-ns", type=int)
+    compare.add_argument(
+        "--baseline-session",
+        action="append",
+        help="Baseline session for session scope; repeat for several",
+    )
+    compare.add_argument("--fingerprint-id")
+    compare.add_argument("--window-ns", type=int, default=DEFAULT_NEIGHBOR_WINDOW_NS)
+    compare.add_argument(
+        "--field",
+        action="append",
+        choices=ELIGIBLE_FIELDS,
+        metavar="FIELD",
+        help="Compare only this field; repeat for several",
+    )
+    compare.add_argument("--max-values", type=int, default=DEFAULT_MAX_VALUES)
+    compare.add_argument("--min-events", type=int, default=DEFAULT_MIN_EVENTS)
+    compare.add_argument("--limit", type=int)
     return parser
 
 
@@ -598,6 +706,15 @@ _CORRELATION_COLUMNS = (
     "end_ns",
     "source_kind",
     "source_path",
+    "reasons",
+)
+_COMPARISON_COLUMNS = (
+    "field",
+    "kind",
+    "score",
+    "confidence",
+    "difference",
+    "missing",
     "reasons",
 )
 

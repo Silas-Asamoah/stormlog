@@ -29,6 +29,12 @@ from textual.widgets import (
 )
 
 from stormlog.formatting import format_bytes
+from stormlog.outliers import (
+    ComparisonFilter,
+    ComparisonResult,
+    compare_events,
+    split_events,
+)
 from stormlog.session import (
     SESSION_STATUS_COMPLETED,
     SESSION_STATUS_RUNNING,
@@ -89,6 +95,7 @@ from .widgets import (
     GPUStatsTable,
     KeyValueTable,
     MarkdownPanel,
+    OutlierComparisonTable,
     ProfileResultsTable,
     TimelineCanvas,
 )
@@ -253,6 +260,15 @@ def _build_cli_markdown() -> str:
 
 def _build_visual_markdown() -> str:
     return tui_builders.build_visual_markdown()
+
+
+def _compare_rank_with_rest(
+    events: list[TelemetryEvent], rank: int
+) -> ComparisonResult:
+    selection, baseline = split_events(
+        ComparisonFilter(scope="rank", rank=rank), events
+    )
+    return compare_events(selection, baseline, scope="rank", criteria={"rank": rank})
 
 
 def _build_diagnostics_markdown() -> str:
@@ -487,6 +503,9 @@ class GPUMemoryProfilerTUI(App):
         )
         self.diagnostics_anomaly_table = AnomalySummaryTable(
             id="diagnostics-anomaly-table"
+        )
+        self.diagnostics_compare_table = OutlierComparisonTable(
+            id="diagnostics-compare-table"
         )
         self.diagnostics_log = RichLog(
             highlight=True, markup=True, id="diagnostics-log"
@@ -732,12 +751,18 @@ class GPUMemoryProfilerTUI(App):
                             id="btn-diag-apply-session",
                             variant="primary",
                         ),
+                        Button(
+                            "Compare Rank",
+                            id="btn-diag-compare-rank",
+                            variant="warning",
+                        ),
                         id="diagnostics-controls-row2",
                         classes="controls",
                     ),
                     self.diagnostics_rank_table,
                     self.diagnostics_timeline_canvas,
                     self.diagnostics_anomaly_table,
+                    self.diagnostics_compare_table,
                     self.diagnostics_log,
                 )
 
@@ -884,6 +909,7 @@ class GPUMemoryProfilerTUI(App):
             "btn-diag-load-artifacts": self.load_diagnostics_artifacts,
             "btn-diag-refresh": self.refresh_diagnostics,
             "btn-diag-apply-session": self.apply_diagnostics_session_selection,
+            "btn-diag-compare-rank": self.compare_diagnostics_rank,
             "btn-refresh-pt-profiles": self.refresh_pytorch_profiles,
             "btn-clear-pt-profiles": self.clear_pytorch_profiles,
             "btn-refresh-tf-profiles": self.refresh_tensorflow_profiles,
@@ -1580,6 +1606,31 @@ class GPUMemoryProfilerTUI(App):
             f"(session={result.selected_session_id}).",
         )
 
+    async def compare_diagnostics_rank(self) -> None:
+        rank = self._diagnostics_active_rank
+        if rank is None or not self._diagnostics_events:
+            self.log_diagnostics_message(
+                "Compare", "Load diagnostics and select a rank row first."
+            )
+            return
+        visible = self._diagnostics_selected_ranks
+        events = [
+            event
+            for event in self._diagnostics_events
+            if visible is None or event.rank in visible
+        ]
+        result = await asyncio.to_thread(_compare_rank_with_rest, events, rank)
+        self.diagnostics_compare_table.update_rows(list(result.fields))
+        summary = (
+            f"Rank {rank}: {result.selection.event_count} events vs "
+            f"{result.baseline.event_count} from ranks "
+            f"{', '.join(map(str, result.baseline.ranks)) or '-'}."
+        )
+        if result.fields:
+            top = result.fields[0]
+            summary += f" Top field: {top.field} ({top.score:.2f}, {top.confidence})."
+        self.log_diagnostics_message("Compare", "\n".join([summary, *result.warnings]))
+
     async def refresh_diagnostics(self) -> None:
         if self._diagnostics_source == "live":
             session = self.tracker_session
@@ -1915,6 +1966,7 @@ class GPUMemoryProfilerTUI(App):
     def _clear_diagnostics_views(self) -> None:
         self.diagnostics_rank_table.update_rows([])
         self.diagnostics_anomaly_table.update_rows([])
+        self.diagnostics_compare_table.update_rows([])
         self.diagnostics_timeline_canvas.render_placeholder(
             "No distributed timelines yet. Load live or artifact data."
         )

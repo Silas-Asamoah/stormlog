@@ -7,6 +7,7 @@ from .tables import (
     DistributedRankTable,
     GPUStatsTable,
     KeyValueTable,
+    OutlierComparisonTable,
     ProfileResultsTable,
 )
 from .timeline import DistributedTimelineCanvas, TimelineCanvas
@@ -21,6 +22,7 @@ __all__ = [
     "GPUStatsTable",
     "KeyValueTable",
     "MarkdownPanel",
+    "OutlierComparisonTable",
     "ProfileResultsTable",
     "TimelineCanvas",
 ]

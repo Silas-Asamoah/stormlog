@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Sequence
 
 from textual.widgets import DataTable
+
+from stormlog.outliers import FieldComparison, describe_difference
 
 from ..distributed_diagnostics import AnomalyIndicator, RankDiagnosticsRow
 from ..profiles import ProfileRow
@@ -186,6 +188,31 @@ class DistributedRankTable(DataTable):
             size /= 1024.0
             unit_index += 1
         return f"{sign}{size:.2f} {units[unit_index]}"
+
+
+class OutlierComparisonTable(DataTable):
+    """Table ranking the fields that separate one rank from the others."""
+
+    def on_mount(self) -> None:
+        if not self.columns:
+            self.add_columns(
+                "Field", "Kind", "Score", "Confidence", "Largest Difference"
+            )
+
+    def update_rows(self, rows: Sequence[FieldComparison]) -> None:
+        self.clear()
+        if not rows:
+            self.add_row("-", "-", "-", "-", "No comparison yet.")
+            return
+
+        for row in rows:
+            self.add_row(
+                row.field,
+                row.kind,
+                f"{row.score:.3f}",
+                row.confidence,
+                describe_difference(row),
+            )
 
 
 class AnomalySummaryTable(DataTable):

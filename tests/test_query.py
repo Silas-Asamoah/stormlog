@@ -1716,3 +1716,162 @@ def test_list_issues_includes_hidden_memory_anomalies(tmp_path: Path) -> None:
     assert rows[0].kind == "hidden_memory_anomaly"
     assert rows[0].details["classification"] == "persistent_drift"
     assert rows[0].affected_sessions == ("session-gap",)
+
+
+def _comparison_records(
+    session_id: str,
+    *,
+    count: int,
+    start_ns: int = 0,
+    rank: int = 0,
+    reserved: int = 150,
+    health: str = "healthy",
+) -> list[dict[str, Any]]:
+    return [
+        _event_record(
+            session_id=session_id,
+            timestamp_ns=start_ns + index,
+            rank=rank,
+            reserved=reserved,
+            metadata={"backend": "cuda", "collector_health_status": health},
+        )
+        for index in range(count)
+    ]
+
+
+def _top_fields(result: Any, count: int) -> set[str]:
+    return {row.field for row in result.fields[:count]}
+
+
+def test_compare_rank_scope_reads_sink_events(tmp_path: Path) -> None:
+    sink = AppendOnlyTelemetrySink(
+        TelemetrySinkConfig(
+            root_dir=tmp_path, flush_every_events=1, flush_every_seconds=1.0
+        )
+    )
+    records = _comparison_records("session-a", count=40, rank=0)
+    records += _comparison_records(
+        "session-a", count=40, start_ns=100, rank=1, reserved=900, health="degraded"
+    )
+    for record in records:
+        sink.append(record)
+    sink.close()
+
+    result = query_api.open([tmp_path]).compare(
+        query_api.ComparisonFilter(scope="rank", rank=1, session_id="session-a")
+    )
+
+    assert result.selection.ranks == (1,)
+    assert result.baseline.ranks == (0,)
+    assert result.selection.event_count == result.baseline.event_count == 40
+    assert "collector_health_status" in _top_fields(result, 6)
+    assert "allocator_reserved_bytes" in _top_fields(result, 6)
+    assert "rank" not in {row.field for row in result.fields}
+    assert result.criteria == {
+        "scope": "rank",
+        "session_id": "session-a",
+        "rank": 1,
+        "window_ns": query_api.ComparisonFilter(scope="rank", rank=0).window_ns,
+        "max_values": 50,
+        "min_events": 30,
+    }
+
+
+def test_compare_window_scope_uses_rest_of_session(tmp_path: Path) -> None:
+    path = tmp_path / "track.json"
+    records = _comparison_records("session-a", count=40)
+    records += _comparison_records(
+        "session-a", count=30, start_ns=1_000, health="degraded"
+    )
+    records += _comparison_records("session-b", count=10, start_ns=1_000)
+    _write_json_events(path, records)
+
+    result = query_api.open([path]).compare(
+        query_api.ComparisonFilter(
+            scope="window",
+            session_id="session-a",
+            time_start_ns=1_000,
+            time_end_ns=2_000,
+        )
+    )
+
+    assert result.selection.session_ids == result.baseline.session_ids
+    assert result.selection.event_count == 30
+    assert result.baseline.event_count == 40
+    assert result.fields[0].field == "collector_health_status"
+    assert result.fields[0].score == pytest.approx(1.0)
+
+
+def test_compare_session_scope_honors_baseline_sessions(tmp_path: Path) -> None:
+    path = tmp_path / "track.json"
+    records = _comparison_records("session-oom", count=30, reserved=900)
+    records += _comparison_records("session-ok-a", count=30)
+    records += _comparison_records("session-ok-b", count=30, reserved=500)
+    _write_json_events(path, records)
+    store = query_api.open([path])
+
+    explicit = store.compare(
+        query_api.ComparisonFilter(
+            scope="session",
+            session_id="session-oom",
+            baseline_session_ids=("session-ok-a",),
+        )
+    )
+    implicit = store.compare(
+        query_api.ComparisonFilter(scope="session", session_id="session-oom")
+    )
+
+    assert explicit.baseline.session_ids == ("session-ok-a",)
+    assert implicit.baseline.session_ids == ("session-ok-a", "session-ok-b")
+    reserved = {
+        result: next(
+            row for row in outcome.fields if row.field == "allocator_reserved_bytes"
+        )
+        for result, outcome in (("explicit", explicit), ("implicit", implicit))
+    }
+    assert reserved["explicit"].baseline_median == 150.0
+    assert reserved["implicit"].baseline_p95 == 500.0
+
+
+def test_compare_fingerprint_scope_uses_neighboring_events(tmp_path: Path) -> None:
+    path = tmp_path / "track.json"
+    records = _comparison_records("session-a", count=5, start_ns=0)
+    records.append(
+        _event_record(
+            session_id="session-a",
+            timestamp_ns=10,
+            event_type="warning",
+            context="High fragmentation: 40.0%",
+        )
+    )
+    records += _comparison_records("session-a", count=5, start_ns=1_000)
+    _write_json_events(path, records)
+    store = query_api.open([path])
+    issue = store.list_issues(query_api.IssueFilter(kind="alert"))[0]
+
+    result = store.compare(
+        query_api.ComparisonFilter(
+            scope="fingerprint",
+            fingerprint_id=issue.fingerprint.fingerprint_id,
+            window_ns=100,
+        )
+    )
+
+    assert result.selection.event_count == 1
+    assert result.baseline.event_count == 5
+    assert result.baseline.end_ns == 4
+    scores = {row.field: row.score for row in result.fields}
+    assert scores["event_type"] == scores["is_alert"] == pytest.approx(1.0)
+    assert all(row.confidence == "low" for row in result.fields)
+
+
+def test_compare_unknown_fingerprint_warns_without_fields(tmp_path: Path) -> None:
+    path = tmp_path / "track.json"
+    _write_json_events(path, _comparison_records("session-a", count=3))
+
+    result = query_api.open([path]).compare(
+        query_api.ComparisonFilter(scope="fingerprint", fingerprint_id="issue:nope")
+    )
+
+    assert result.fields == []
+    assert "no issue has fingerprint issue:nope" in result.warnings
