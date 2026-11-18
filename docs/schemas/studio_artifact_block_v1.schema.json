@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_artifact_block_v1.schema.json",
   "title": "Stormlog Studio artifact block v1",
-  "description": "The artifact block every artifact-scoped Studio document carries under the key artifact (design §5.1), written by contracts.artifact_block. Not a document of its own: it has no format or schema_version.",
+  "description": "The artifact block every artifact-scoped Studio document carries under the key artifact, written by contracts.artifact_block. Not a document of its own: it has no format or schema_version.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -126,7 +126,7 @@
       "pattern": "^[0-9a-f]{32}$"
     },
     "ns": {
-      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53. A missing value is null, never \"0\".",
       "type": "string",
       "pattern": "^-?(0|[1-9][0-9]*)$"
     },

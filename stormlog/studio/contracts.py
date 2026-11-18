@@ -1,9 +1,9 @@
 """Types shared by Studio's components.
 
-This module is the step-0 contract of Stormlog Studio's server layer: the
-types every component (C1 to C5) produces or consumes, a Protocol for each
-component the application context holds, the error classes and the wire
-encoder. A change goes through the lead.
+This module is the contract of Stormlog Studio's server layer: the
+types every component (the index, selections, the server, the routes and
+the test fixtures) produces or consumes, a Protocol for each component
+the application context holds, the error classes and the wire encoder.
 
 Units:
 
@@ -102,9 +102,9 @@ __all__ = [
     "Composer",
 ]
 
-# Every document's ``format`` is this prefix plus its name (§5.1).
+# Every document's ``format`` is this prefix plus its name.
 FORMAT_PREFIX = "stormlog.studio."
-# Every step-0 document is at version 1; a shape change is a new version.
+# Every document is at version 1; a shape change is a new version.
 SCHEMA_VERSION = 1
 # The largest integer a JavaScript number holds exactly: 2**53 - 1.
 MAX_SAFE_INTEGER = 2**53 - 1
@@ -115,7 +115,7 @@ _DOCUMENT_NAME = re.compile(r"[a-z][a-z0-9_]*")
 _ENVELOPE_KEYS = frozenset({"format", "schema_version", "artifact"})
 
 
-# --- Lines and files -------------------------------------------------- (C1 produces)
+# --- Lines and files ----------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -157,7 +157,7 @@ class FileIdentity:
     mtime_ns: int
 
 
-# --- Rows ------------------------------------------------------ (C1 implements, C2 reads)
+# --- Rows ---------------------------------------------------------------------
 
 
 class NotResident(Exception):
@@ -181,10 +181,10 @@ class RequestRow(Mapping[str, Any]):
 
     The identity properties follow one rule for a record that lacks the
     field: ``str(record.get(key, "unknown"))``, as the analyzer groups
-    ``case_id``. C1's ``index.ColumnRow`` and :class:`DictRow` implement it.
+    ``case_id``. ``index.ColumnRow`` and :class:`DictRow` implement it.
 
     Every attribute is an abstract read-only property, so a subclass may
-    read it from a column store on access (C1) or keep it in a field
+    read it from a column store on access (the index) or keep it in a field
     (:class:`DictRow`), and mypy accepts both.
     """
 
@@ -210,7 +210,7 @@ class RequestRow(Mapping[str, Any]):
     def session_id(self) -> str:
         """``str(record.get("session_id", "unknown"))``.
 
-        ``"unknown"`` never counts as a second session in C1's
+        ``"unknown"`` never counts as a second session in the index's
         ``multiple_sessions`` check.
         """
         raise NotImplementedError
@@ -270,7 +270,7 @@ class RequestRow(Mapping[str, Any]):
 
 
 class DictRow(RequestRow):
-    """A resident row over a plain dict, for C2's tests and for fixtures.
+    """A resident row over a plain dict, for selection tests and for fixtures.
 
     A given ``ref`` is used as is, so a fixture over a real file can carry
     the record's real line reference; ``line`` is then ignored. Without one,
@@ -385,15 +385,15 @@ def _request_record_id(record: Mapping[str, Any]) -> str | None:
     return f"{event_type}/{request_id}"
 
 
-# --- Columns ------------------------------------------- (C1 implements, C2 reads; D-1)
+# --- Columns ------------------------------------------------------------------
 
 
 class RequestTable(Protocol):
-    """Column access to an index snapshot's client requests (Fable's D-1).
+    """Column access to an index snapshot's client requests.
 
-    The path C2 uses to filter, sort and aggregate on arrays, so a selection
-    over 500,000 rows builds no row views: C2 builds :class:`RequestRow`
-    views only for the rows it returns.
+    The path ``selection`` uses to filter, sort and aggregate on arrays, so
+    a selection over 500,000 rows builds no row views: ``selection`` builds
+    :class:`RequestRow` views only for the rows it returns.
 
     ``column(name)`` has one element per row of ``IndexSnapshot.requests``,
     in the same order, and its elements equal what the rows give:
@@ -415,9 +415,9 @@ class RequestTable(Protocol):
 
 
 class DictTable:
-    """A :class:`RequestTable` over resident rows, for C2's tests and fixtures.
+    """A :class:`RequestTable` over resident rows, for selection tests and fixtures.
 
-    It reads the rows one by one, so it is as slow as row access; C1's index
+    It reads the rows one by one, so it is as slow as row access; the index
     keeps real columns.
     """
 
@@ -442,7 +442,7 @@ def _cell(row: RequestRow, name: str) -> Any:
     return row.get(name)
 
 
-# --- Index snapshots --------------------------------------------------- (C1 produces)
+# --- Index snapshots ----------------------------------------------------------
 
 IndexStatus = Literal["building", "ready", "partial", "failed"]
 IndexFailure = Literal[
@@ -465,13 +465,13 @@ class SessionInfo:
 
 @dataclass(frozen=True)
 class IndexSnapshot:
-    """An immutable view of one index after one batch (§4.4).
+    """An immutable view of one index after one batch.
 
     Columns are append-only, so a snapshot shares them with later ones,
     bounded by its own length. ``requests`` gives row views; ``table`` and
-    :meth:`column` give the same values by column (D-1).
+    :meth:`column` give the same values by column.
 
-    C1 passes every kept record (``kept``, and the session ``config`` it
+    The index passes every kept record (``kept``, and the session ``config`` it
     digests) through :func:`finite_copy` once, at index time, so a NaN or
     an infinity that ``json.loads`` accepted cannot make
     :func:`encode_json` refuse a document that embeds one.
@@ -499,7 +499,7 @@ class IndexSnapshot:
     origin_ns: int | None
     session: SessionInfo | None
     requests: Sequence[RequestRow]  # client requests, file order, all phases
-    table: RequestTable  # the same requests by column (D-1)
+    table: RequestTable  # the same requests by column
     by_request_id: Mapping[str, tuple[int, ...]]  # request_id -> indexes into requests
     samples: Sequence[Mapping[str, Any]]  # infer.system_sample rows, no metadata
     kept: Mapping[str, tuple[Mapping[str, Any], ...]]  # event_type -> finite records
@@ -515,15 +515,15 @@ class IndexSnapshot:
     error_messages_resident: bool
 
     def column(self, name: str) -> Sequence[Any]:
-        """One request field for every row, in file order (D-1).
+        """One request field for every row, in file order.
 
-        The path C2 uses to filter and sort on arrays; see
+        The path ``selection`` uses to filter and sort on arrays; see
         :class:`RequestTable` for the names and the guarantees.
         """
         return self.table.column(name)
 
 
-# --- Filters and selections ------------------------------ (C2 produces, C4 passes on)
+# --- Filters and selections ---------------------------------------------------
 
 Phase = Literal["measured", "warmup", "all"]
 SortKey = Literal[
@@ -559,7 +559,7 @@ class LatencyRange:
 
 @dataclass(frozen=True)
 class RequestFilter:
-    """Conditions on client requests, in canonical form (§5.3)."""
+    """Conditions on client requests, in canonical form."""
 
     phase: Phase = "measured"
     cases: tuple[str, ...] = ()  # sorted, unique; () is every case
@@ -574,12 +574,12 @@ class RequestFilter:
 
 @dataclass(frozen=True)
 class RateScope:
-    """Whether a selection has a rate, over which interval, or why not (§3.3)."""
+    """Whether a selection has a rate, over which interval, or why not."""
 
     eligible: bool
     rule: Literal["case", "segment"] | None
     interval: MeasuredInterval | None
-    reason: str | None  # a §3.3 reason or the case's CaseIntervals.rate_reason
+    reason: str | None  # a no-rate reason or the case's CaseIntervals.rate_reason
 
 
 @dataclass(frozen=True)
@@ -625,7 +625,7 @@ class Page:
     generation_moved: bool
 
 
-# --- HTTP ------------------------------------------------- (C3 serves, C3 and C4 route)
+# --- HTTP ---------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -657,22 +657,22 @@ class Route:
     """One exact method and path, its auth and its deadline."""
 
     method: Literal["GET", "POST"]
-    path: str  # exact; no path parameters in slice 1
+    path: str  # exact; no path parameters
     auth: Auth
     handler: Callable[[HttpRequest], HttpResponse]
     deadline_s: float | None = 30.0  # 600 for export and line; None for streams
 
 
-# --- Errors --------------------------------------------------- (anyone raises, C3 renders)
+# --- Errors -------------------------------------------------------------------
 
 
 class StudioError(Exception):
-    """An error with an HTTP status and a ``stormlog.studio.error`` body (§5.2).
+    """An error with an HTTP status and a ``stormlog.studio.error`` body.
 
     ``verdict_status`` is the ``stormlog.exit_codes`` verdict the status
     pairs with, None for security rejections. ``message`` is shown to the
-    user; C3 passes it through ``scrub_text(..., max_bytes=512)`` before
-    rendering (§7.6).
+    user; httpd passes it through ``scrub_text(..., max_bytes=512)`` before
+    rendering.
     """
 
     http_status: ClassVar[int] = 500
@@ -759,9 +759,9 @@ class BusyError(StudioError):
 
 
 class NotReady(Exception):
-    """The analysis is still running: C3 answers 202, not an error.
+    """The analysis is still running: httpd answers 202, not an error.
 
-    Only C4's analysis routes raise it, while the out-of-process analysis
+    Only the analysis routes raise it, while the out-of-process analysis
     of the artifact is ``pending`` or ``running`` (:class:`AnalysisCache`).
     No index raises it: :meth:`IndexRegistry.snapshot` always returns a
     snapshot, a zero-row ``status="building"`` one until the first batch
@@ -769,7 +769,7 @@ class NotReady(Exception):
     ``artifact.status: "building"`` instead.
 
     ``state`` is the complete ``stormlog.studio.analysis`` document, built
-    and enveloped by C4 (``envelope("analysis", body, snapshot)``). C3
+    and enveloped by the route (``envelope("analysis", body, snapshot)``). httpd
     serves it verbatim, through :func:`encode_json`, with status 202 and
     ``Retry-After: retry_after_s``, and adds nothing to it. A ``state``
     whose ``format`` is not ``stormlog.studio.analysis`` raises ValueError.
@@ -783,11 +783,11 @@ class NotReady(Exception):
         self.retry_after_s = retry_after_s
 
 
-# --- Wire ---------------------------------------------------------------- (lead)
+# --- Wire ---------------------------------------------------------------------
 
 
 def to_wire(value: Any) -> Any:
-    """A JSON-ready copy of ``value`` under §5.1's number rules, recursively.
+    """A JSON-ready copy of ``value`` under Studio's number rules, recursively.
 
     An integer whose nearest enclosing key ends in ``_ns`` (alone, or in a
     list or nested list under that key) becomes a decimal string, and so
@@ -914,7 +914,7 @@ def encode_json(document: Mapping[str, Any]) -> bytes:
 
 
 def artifact_block(snapshot: IndexSnapshot) -> dict[str, Any]:
-    """The ``artifact`` block every artifact-scoped document carries (§5.1).
+    """The ``artifact`` block every artifact-scoped document carries.
 
     ``terminal`` is False for a file with no session record: no terminal
     record exists. ``size`` is None when the file was never statted
@@ -969,18 +969,18 @@ def envelope(
 
 
 class IndexRegistry(Protocol):
-    """C1: ``index.ArtifactIndexes``."""
+    """``index.ArtifactIndexes``."""
 
     def snapshot(self, rel: str) -> IndexSnapshot:
         """The current snapshot of ``rel``, without waiting for a build.
 
         Never raises :class:`NotReady`. Resolves ``rel`` (NotFoundError,
-        ForbiddenError). As soon as C1 schedules a build of ``rel``, it
+        ForbiddenError). As soon as the index schedules a build of ``rel``, it
         publishes a zero-row snapshot with ``status="building"`` (no
         requests, ``bytes_read`` 0, ``identity`` None until the first
         ``fstat``), so this always has a snapshot to return and every
         artifact route answers 200 with ``artifact.status: "building"``;
-        the frontend re-reads it every 2 s (§4.4). Schedules a refresh on
+        the frontend re-reads it every 2 s. Schedules a refresh on
         the builder pool when the last ``stat`` is more than 1 s old.
         """
         ...
@@ -1012,7 +1012,7 @@ class IndexRegistry(Protocol):
 
 
 class WorkspaceRoot(Protocol):
-    """C3: ``security.RootDirectory`` (§7.4)."""
+    """``security.RootDirectory``."""
 
     path: Path  # the root's real path
 
@@ -1031,7 +1031,7 @@ class WorkspaceRoot(Protocol):
 
 
 class TokenStore(Protocol):
-    """C3: ``security.SessionTokens`` (§7.2)."""
+    """``security.SessionTokens``."""
 
     def issue_admin(self) -> str:
         """The admin token, once, for the state file."""
@@ -1059,7 +1059,7 @@ class TokenStore(Protocol):
 
 
 class WorkspaceScanner(Protocol):
-    """C4: ``workspace.ArtifactScanner``."""
+    """``workspace.ArtifactScanner``."""
 
     def scan(self) -> None:
         """Queue a scan on the builder pool; BusyError while one runs."""
@@ -1078,7 +1078,7 @@ class WorkspaceScanner(Protocol):
 
 @dataclass(frozen=True)
 class AnalysisState:
-    """Where the out-of-process analyzer is for one artifact (decision 12)."""
+    """Where the out-of-process analyzer is for one artifact."""
 
     status: Literal["pending", "running", "ready", "unavailable", "failed"]
     reason: str | None  # over_size_cap, growing, timeout, nonzero_exit, ...
@@ -1088,12 +1088,12 @@ class AnalysisState:
 
 
 class AnalysisCache(Protocol):
-    """C4: ``analysis_cache.AnalyzerRunner``.
+    """``analysis_cache.AnalyzerRunner``.
 
     The analysis routes read :meth:`get`. While the state is ``pending``
     or ``running`` they raise :class:`NotReady` with the complete
-    ``stormlog.studio.analysis`` document as ``state`` (enveloped by C4,
-    with the snapshot's artifact block), and C3 serves it verbatim with
+    ``stormlog.studio.analysis`` document as ``state`` (enveloped by the route,
+    with the snapshot's artifact block), and httpd serves it verbatim with
     202 and Retry-After. This is the only 202 in Studio's API; every other
     state of the analysis, and every index state, is answered with 200.
     """
@@ -1108,7 +1108,7 @@ class AnalysisCache(Protocol):
 
 
 class DocumentCache(Protocol):
-    """C4: ``cache.Documents``; keys hold path, index ID, generation, params."""
+    """``cache.Documents``; keys hold path, index ID, generation, params."""
 
     def selection(
         self, key: tuple[str, ...], make: Callable[[], Selection]
@@ -1125,7 +1125,7 @@ class DocumentCache(Protocol):
 
 @dataclass(frozen=True)
 class Limits:
-    """The bounds of §8.1; sizes in bytes."""
+    """Studio's bounds; sizes in bytes."""
 
     max_connections: int = 16
     head_bytes: int = 16 * 2**10
@@ -1158,7 +1158,7 @@ class Limits:
 
 @dataclass(frozen=True)
 class LaunchOptions:
-    """What C3's cli builds from argv."""
+    """What ``cli`` builds from argv."""
 
     root: Path
     open_path: str | None
@@ -1173,7 +1173,7 @@ class LaunchOptions:
 
 @dataclass(frozen=True)
 class StudioContext:
-    """Everything a route needs; built only by ``app.build_context`` (C4)."""
+    """Everything a route needs; built only by ``app.build_context``."""
 
     instance_id: str  # 32 hex characters
     version: str  # stormlog.__version__
@@ -1187,5 +1187,5 @@ class StudioContext:
     pool: Executor  # the builder pool
 
 
-# C3's cli.main(argv, *, compose=None) takes one; the default imports app.
+# cli.main(argv, *, compose=None) takes one; the default imports app.
 Composer = Callable[[LaunchOptions], tuple[StudioContext, list[Route]]]

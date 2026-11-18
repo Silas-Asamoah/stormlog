@@ -190,7 +190,7 @@ def test_rewrite_in_place_keeps_the_inode_and_changes_the_leading_bytes(
 
     after = path.stat()
     assert (after.st_dev, after.st_ino) == (before.st_dev, before.st_ino)
-    # Line 0, the anchor C1 re-checks, is a new infer.session record.
+    # Line 0, the anchor the index re-checks, is a new infer.session record.
     assert path.read_bytes()[: len(first_line)] != first_line
     old_session = json.loads(first_line)["session_id"]
     assert _sessions(path) == {_lines(path)[0]["session_id"]} != {old_session}

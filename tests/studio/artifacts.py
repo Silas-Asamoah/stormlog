@@ -8,7 +8,7 @@ events through ``JsonlEventWriter`` and the infer dataclasses, around the
 header, phase and session records of a real ``InferenceProfiler`` that
 never sends. The other helpers cut, grow, concatenate or rewrite those
 files the way a killed run, a running one, ``cat`` or a rerun to the same
-path would (design §4.2, §8.2, §10.3 C5).
+path would.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ MODEL = "fake-model"
 
 @dataclass(frozen=True)
 class CaseSpec:
-    """One workload case of a profile run (design §10.3 C5).
+    """One workload case of a profile run.
 
     ``fail_every`` fails every Nth measured request at the server and
     ``all_fail`` every request; ``usage`` False makes the server leave out
@@ -589,7 +589,7 @@ def truncated_copy(source: Path, target: Path, *, cut: Cut) -> Path:
     ``after_newline`` drops the last line whole, so the copy ends with a
     newline: a run killed before its terminal session record. ``mid_line``
     keeps the first half of the last line's bytes, without its newline: a
-    write cut off part way (design §4.2 hazard 3).
+    write cut off part way.
     """
     data = Path(source).read_bytes()
     start = last_line_start(data)
@@ -652,7 +652,7 @@ def rewrite_in_place(
     path: Path, *, cases: Sequence[CaseSpec], warmup: int = 2, seed: int = 0
 ) -> None:
     """Rerun a profile to ``path``: the writer opens it with ``"w"``, so the
-    same inode is truncated and rewritten with a new session (§4.2 hazard 4)."""
+    same inode is truncated and rewritten with a new session."""
     profile_artifact(
         Path(path).parent, cases, name=Path(path).name, warmup=warmup, seed=seed
     )
@@ -748,7 +748,7 @@ STANDARD_ARTIFACTS: Mapping[str, Builder] = {
 
 # What the rest of the suite may rely on about each standard artifact.
 ANALYZE_FAILS = frozenset({"truncated_mid_line"})  # one bad line fails the file
-MULTI_SESSION = frozenset({"multi_session"})  # Studio refuses it (decision 7)
+MULTI_SESSION = frozenset({"multi_session"})  # Studio refuses it
 NO_TERMINAL_RECORD = frozenset(
     {"truncated_mid_line", "truncated_after_newline", "growing"}
 )
@@ -759,7 +759,7 @@ LARGE_GAPS = 15
 
 def large_artifact(directory: Path) -> Path:
     """The 500,000-request, 15-gap artifact for the 2 s route target and
-    Fable's D-1/F-7 timings: one case at concurrency 64, every 100th
+    the column and warm-up timings: one case at concurrency 64, every 100th
     request failed, token counts mixed."""
     return synthetic_artifact(
         directory,

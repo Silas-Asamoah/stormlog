@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_request_v1.schema.json",
   "title": "Stormlog Studio request v1",
-  "description": "GET /api/v1/artifact/request (design §5.4): one request in full, with its record, gap statistics and links, and whether it is in the selection given.",
+  "description": "GET /api/v1/artifact/request: one request in full, with its record, gap statistics and links, and whether it is in the selection given.",
   "type": "object",
   "additionalProperties": false,
   "required": [
