@@ -478,24 +478,31 @@ class ArtifactScanner:
         return self._idle.wait(timeout_s)
 
     def _run(self) -> None:
+        """One walk; whatever happens, the scanner is idle again after it.
+
+        An error other than OSError (a bug, MemoryError) fails the scan
+        with a scrubbed reason instead of leaving it ``running``, which
+        made every later ``scan()`` a 503 ``busy``.
+        """
         started = self._clock()
         started_utc = _utc_now()
         walk = _Walk(self._limits, started + self._limits.scan_seconds, self._clock)
-        reason = None
+        result: _ScanResult | None = None
         try:
-            fd = os.open(self._root.path, _DIR_FLAGS)
             try:
-                walk.directory(fd, "", 0)
-            finally:
-                os.close(fd)
-        except OSError as error:
-            reason = scrub_text(
-                f"cannot read the root: {error.strerror}", max_bytes=200
-            )
-        status = "failed" if reason else ("partial" if walk.limits_hit else "complete")
-        self._finish(
-            _ScanResult(
-                status=status,
+                reason = self._walk_root(walk)
+            except Exception as error:
+                reason = scrub_text(
+                    f"the scan stopped on an unexpected error: "
+                    f"{type(error).__name__}: {error}",
+                    max_bytes=200,
+                )
+            result = _ScanResult(
+                status=(
+                    "failed"
+                    if reason
+                    else ("partial" if walk.limits_hit else "complete")
+                ),
                 items=tuple(sorted(walk.items, key=lambda item: item.path)),
                 started_at_utc=started_utc,
                 finished_at_utc=_utc_now(),
@@ -506,7 +513,20 @@ class ArtifactScanner:
                 limits_hit=tuple(sorted(walk.limits_hit)),
                 reason=reason,
             )
-        )
+        finally:
+            self._finish(result)
+
+    def _walk_root(self, walk: _Walk) -> str | None:
+        """Walk the root into ``walk``; the failure reason, or None."""
+        try:
+            fd = os.open(self._root.path, _DIR_FLAGS)
+            try:
+                walk.directory(fd, "", 0)
+            finally:
+                os.close(fd)
+        except OSError as error:
+            return scrub_text(f"cannot read the root: {error.strerror}", max_bytes=200)
+        return None
 
     def _finish(self, result: _ScanResult | None) -> None:
         with self._lock:
@@ -658,7 +678,8 @@ def _decode_cursor(cursor: str, kind: str | None, q: str | None) -> str:
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")))
-    except (ValueError, binascii.Error, UnicodeError):
+    except (ValueError, binascii.Error, UnicodeError, RecursionError):
+        # RecursionError: a cursor of nested brackets is a bad cursor too.
         payload = None
     if (
         not isinstance(payload, dict)
