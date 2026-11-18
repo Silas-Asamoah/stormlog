@@ -1,0 +1,999 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_summary_v1.schema.json",
+  "title": "Stormlog Studio summary v1",
+  "description": "GET /api/v1/artifact/summary (design §5.4): the numbers of one selection, each computed by Stormlog's Python functions (latency_summary, streaming_summary, count_population, token_coverage, throughput). Embedded analyzer blocks follow Studio's wire rule: *_ns integers are decimal strings.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "counts",
+    "failure",
+    "latency",
+    "streaming",
+    "tokens",
+    "intervals",
+    "throughput",
+    "client_memory",
+    "freshness"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.summary"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "$ref": "#/$defs/body/properties/selection"
+    },
+    "counts": {
+      "$ref": "#/$defs/body/properties/counts"
+    },
+    "failure": {
+      "$ref": "#/$defs/body/properties/failure"
+    },
+    "latency": {
+      "$ref": "#/$defs/body/properties/latency"
+    },
+    "streaming": {
+      "$ref": "#/$defs/body/properties/streaming"
+    },
+    "tokens": {
+      "$ref": "#/$defs/body/properties/tokens"
+    },
+    "intervals": {
+      "$ref": "#/$defs/body/properties/intervals"
+    },
+    "throughput": {
+      "$ref": "#/$defs/body/properties/throughput"
+    },
+    "client_memory": {
+      "$ref": "#/$defs/body/properties/client_memory"
+    },
+    "freshness": {
+      "$ref": "#/$defs/body/properties/freshness"
+    }
+  },
+  "$defs": {
+    "body": {
+      "description": "A summary without its envelope; cases embeds one per case.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selection",
+        "counts",
+        "failure",
+        "latency",
+        "streaming",
+        "tokens",
+        "intervals",
+        "throughput",
+        "client_memory",
+        "freshness"
+      ],
+      "properties": {
+        "selection": {
+          "$ref": "studio_selection_block_v1.schema.json"
+        },
+        "counts": {
+          "description": "populations.Population.to_record() plus server_evidence.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "offered",
+            "dropped",
+            "sent",
+            "unreachable",
+            "delivery_unknown",
+            "rejected",
+            "accepted",
+            "successful",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "censored",
+            "scheduled",
+            "other",
+            "server_admitted",
+            "server_evidence_coverage",
+            "cohort_valid",
+            "issues",
+            "server_evidence"
+          ],
+          "properties": {
+            "offered": {
+              "$ref": "#/$defs/count"
+            },
+            "dropped": {
+              "$ref": "#/$defs/count"
+            },
+            "sent": {
+              "$ref": "#/$defs/count"
+            },
+            "unreachable": {
+              "$ref": "#/$defs/count"
+            },
+            "delivery_unknown": {
+              "$ref": "#/$defs/count"
+            },
+            "rejected": {
+              "$ref": "#/$defs/count"
+            },
+            "accepted": {
+              "$ref": "#/$defs/count"
+            },
+            "successful": {
+              "$ref": "#/$defs/count"
+            },
+            "failed": {
+              "$ref": "#/$defs/count"
+            },
+            "timed_out": {
+              "$ref": "#/$defs/count"
+            },
+            "cancelled": {
+              "$ref": "#/$defs/count"
+            },
+            "censored": {
+              "$ref": "#/$defs/count"
+            },
+            "scheduled": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "other": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/count"
+              }
+            },
+            "server_admitted": {
+              "description": "Always null in Studio: see server_evidence.",
+              "type": "null"
+            },
+            "server_evidence_coverage": {
+              "type": "null"
+            },
+            "cohort_valid": {
+              "description": "Null when the selection is not a cohort.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "issues": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "server_evidence": {
+              "description": "The index does not keep the joined spans or execution records; the analyzer report has them (design §3.4).",
+              "enum": [
+                "not_indexed"
+              ]
+            }
+          }
+        },
+        "failure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "share",
+            "numerator",
+            "denominator",
+            "reason"
+          ],
+          "properties": {
+            "share": {
+              "description": "(offered - successful) / offered; null when offered is 0.",
+              "type": [
+                "number",
+                "null"
+              ],
+              "minimum": 0,
+              "maximum": 1
+            },
+            "numerator": {
+              "$ref": "#/$defs/count"
+            },
+            "denominator": {
+              "$ref": "#/$defs/count"
+            },
+            "reason": {
+              "enum": [
+                "empty_selection",
+                null
+              ]
+            }
+          }
+        },
+        "latency": {
+          "$ref": "#/$defs/latency"
+        },
+        "streaming": {
+          "$ref": "#/$defs/streaming"
+        },
+        "tokens": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "output",
+            "prompt"
+          ],
+          "properties": {
+            "output": {
+              "$ref": "#/$defs/coverage"
+            },
+            "prompt": {
+              "$ref": "#/$defs/coverage"
+            }
+          }
+        },
+        "intervals": {
+          "$ref": "#/$defs/intervals"
+        },
+        "throughput": {
+          "$ref": "#/$defs/throughput"
+        },
+        "client_memory": {
+          "description": "sample_report peaks of infer.system_sample, per (sampler, device_id).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "observation_scope",
+            "window",
+            "by_device"
+          ],
+          "properties": {
+            "observation_scope": {
+              "const": "client_local"
+            },
+            "window": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": false,
+              "required": [
+                "started_at_ns",
+                "ended_at_ns"
+              ],
+              "properties": {
+                "started_at_ns": {
+                  "$ref": "#/$defs/ns"
+                },
+                "ended_at_ns": {
+                  "$ref": "#/$defs/ns"
+                }
+              }
+            },
+            "by_device": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "sampler",
+                  "device_id",
+                  "peak_process_rss_bytes",
+                  "peak_device_used_bytes",
+                  "samples"
+                ],
+                "properties": {
+                  "sampler": {
+                    "type": "string"
+                  },
+                  "device_id": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "peak_process_rss_bytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "peak_device_used_bytes": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  },
+                  "samples": {
+                    "$ref": "#/$defs/count"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "freshness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generation",
+            "last_record_ns",
+            "terminal"
+          ],
+          "properties": {
+            "generation": {
+              "$ref": "#/$defs/count"
+            },
+            "last_record_ns": {
+              "$ref": "#/$defs/ns_or_null"
+            },
+            "terminal": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eligible",
+        "known",
+        "exact",
+        "by_source",
+        "known_sum",
+        "partial"
+      ],
+      "properties": {
+        "eligible": {
+          "description": "Successful requests.",
+          "$ref": "#/$defs/count"
+        },
+        "known": {
+          "description": "With a numeric count.",
+          "$ref": "#/$defs/count"
+        },
+        "exact": {
+          "description": "Known and flagged exact.",
+          "$ref": "#/$defs/count"
+        },
+        "by_source": {
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "server_usage",
+              "tiktoken",
+              "transformers",
+              "estimated",
+              "unknown"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/count"
+          }
+        },
+        "known_sum": {
+          "$ref": "#/$defs/count"
+        },
+        "partial": {
+          "description": "known < eligible.",
+          "type": "boolean"
+        }
+      }
+    },
+    "estimate": {
+      "description": "One latency_report quantile estimate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value_ms",
+        "n",
+        "sufficient",
+        "n_min",
+        "n_min_exists",
+        "penalized",
+        "observed_lower_bound_ms",
+        "reason",
+        "interval"
+      ],
+      "properties": {
+        "value_ms": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "n": {
+          "$ref": "#/$defs/count"
+        },
+        "sufficient": {
+          "type": "boolean"
+        },
+        "n_min": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "n_min_exists": {
+          "type": [
+            "integer",
+            "boolean",
+            "null"
+          ]
+        },
+        "penalized": {
+          "type": "boolean"
+        },
+        "observed_lower_bound_ms": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interval": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "lower_rank",
+            "upper_rank",
+            "lower_ms",
+            "upper_ms",
+            "width_ms",
+            "coverage"
+          ],
+          "properties": {
+            "lower_rank": {
+              "type": "integer"
+            },
+            "upper_rank": {
+              "type": "integer"
+            },
+            "lower_ms": {
+              "type": "number"
+            },
+            "upper_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "width_ms": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "coverage": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    },
+    "interval": {
+      "description": "populations.MeasuredInterval.to_record().",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "started_at_ns",
+        "ended_at_ns",
+        "seconds",
+        "numerator_cohort"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "scheduled_window",
+            "measured_span",
+            "dispatch_window",
+            "drain",
+            "request_span",
+            "segment"
+          ]
+        },
+        "started_at_ns": {
+          "$ref": "#/$defs/ns"
+        },
+        "ended_at_ns": {
+          "$ref": "#/$defs/ns"
+        },
+        "seconds": {
+          "description": "Its length; null when empty, never zero.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0
+        },
+        "numerator_cohort": {
+          "enum": [
+            "arrival_cohort",
+            "all_measured",
+            "overlapping"
+          ]
+        }
+      }
+    },
+    "intervals": {
+      "description": "CaseIntervals.to_record() for a whole case, else null.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "rate",
+        "scheduled_window",
+        "dispatch_window",
+        "drain",
+        "measured_span",
+        "configured_rate_per_second",
+        "realized_offered_rate_per_second",
+        "rate_reason"
+      ],
+      "properties": {
+        "rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scheduled_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dispatch_window": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drain": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "measured_span": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/interval"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "configured_rate_per_second": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "realized_offered_rate_per_second": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "rate_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "latency": {
+      "description": "latency_report.latency_summary(rows) with client metrics only.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "metrics",
+        "unsuccessful"
+      ],
+      "properties": {
+        "rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "confidence",
+            "margin",
+            "tails",
+            "assumptions"
+          ],
+          "properties": {
+            "confidence": {
+              "type": "number"
+            },
+            "margin": {
+              "type": "integer"
+            },
+            "tails": {
+              "enum": [
+                "symmetric",
+                "narrowest"
+              ]
+            },
+            "assumptions": {
+              "type": "string"
+            }
+          }
+        },
+        "metrics": {
+          "description": "Client metrics only; server.* are not_indexed (design §3.4).",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "client.ttft",
+            "client.ttft_from_intended",
+            "client.e2e",
+            "client.e2e_from_intended",
+            "client.tpot"
+          ],
+          "properties": {
+            "client.ttft": {
+              "$ref": "#/$defs/metric"
+            },
+            "client.ttft_from_intended": {
+              "$ref": "#/$defs/metric"
+            },
+            "client.e2e": {
+              "$ref": "#/$defs/metric"
+            },
+            "client.e2e_from_intended": {
+              "$ref": "#/$defs/metric"
+            },
+            "client.tpot": {
+              "$ref": "#/$defs/metric"
+            }
+          }
+        },
+        "unsuccessful": {
+          "description": "By status, how long each request that did not succeed ran.",
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "ok",
+              "timeout",
+              "rejected",
+              "error",
+              "dropped",
+              "cancelled",
+              "unreachable",
+              "delivery_unknown"
+            ]
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "count",
+              "elapsed_ms",
+              "elapsed_missing"
+            ],
+            "properties": {
+              "count": {
+                "$ref": "#/$defs/count"
+              },
+              "elapsed_ms": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "min",
+                  "p50",
+                  "max"
+                ],
+                "properties": {
+                  "min": {
+                    "$ref": "#/$defs/ms_or_null"
+                  },
+                  "p50": {
+                    "$ref": "#/$defs/ms_or_null"
+                  },
+                  "max": {
+                    "$ref": "#/$defs/ms_or_null"
+                  }
+                }
+              },
+              "elapsed_missing": {
+                "$ref": "#/$defs/count"
+              }
+            }
+          }
+        }
+      }
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "boundary",
+        "successful_missing",
+        "successful",
+        "failure_penalized"
+      ],
+      "properties": {
+        "boundary": {
+          "enum": [
+            "client"
+          ]
+        },
+        "successful_missing": {
+          "$ref": "#/$defs/count"
+        },
+        "successful": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "p50",
+            "p90",
+            "p95",
+            "p99"
+          ],
+          "properties": {
+            "p50": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p90": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p95": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p99": {
+              "$ref": "#/$defs/estimate"
+            }
+          }
+        },
+        "failure_penalized": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "p50",
+            "p90",
+            "p95",
+            "p99"
+          ],
+          "properties": {
+            "p50": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p90": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p95": {
+              "$ref": "#/$defs/estimate"
+            },
+            "p99": {
+              "$ref": "#/$defs/estimate"
+            }
+          }
+        }
+      }
+    },
+    "ms_or_null": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "ns_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ns"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "spread": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "p50",
+        "p95",
+        "max"
+      ],
+      "properties": {
+        "p50": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "p95": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "max": {
+          "$ref": "#/$defs/ms_or_null"
+        }
+      }
+    },
+    "streaming": {
+      "description": "latency_report.streaming_summary(rows), or unavailable when the index dropped its gap pool.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "granularity",
+            "responses",
+            "content_chunks_per_response",
+            "chunk_interarrival_ms",
+            "mean_tokens_per_chunk",
+            "note"
+          ],
+          "properties": {
+            "granularity": {
+              "const": "chunk"
+            },
+            "responses": {
+              "$ref": "#/$defs/count"
+            },
+            "content_chunks_per_response": {
+              "$ref": "#/$defs/spread"
+            },
+            "chunk_interarrival_ms": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "p50",
+                "p95",
+                "max",
+                "n"
+              ],
+              "properties": {
+                "p50": {
+                  "$ref": "#/$defs/ms_or_null"
+                },
+                "p95": {
+                  "$ref": "#/$defs/ms_or_null"
+                },
+                "max": {
+                  "$ref": "#/$defs/ms_or_null"
+                },
+                "n": {
+                  "$ref": "#/$defs/count"
+                }
+              }
+            },
+            "mean_tokens_per_chunk": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "state",
+            "reason"
+          ],
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "gaps_not_resident"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "throughput": {
+      "description": "token_report.throughput; null when the selection is not rate-eligible.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "interval_seconds",
+        "interval_kind",
+        "numerator_cohort",
+        "requests_per_second",
+        "output_tokens_per_second",
+        "total_tokens_per_second"
+      ],
+      "properties": {
+        "interval_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "interval_kind": {
+          "enum": [
+            "scheduled_window",
+            "measured_span",
+            "dispatch_window",
+            "drain",
+            "request_span",
+            "segment",
+            null
+          ]
+        },
+        "numerator_cohort": {
+          "enum": [
+            "arrival_cohort",
+            "all_measured",
+            "overlapping",
+            null
+          ]
+        },
+        "requests_per_second": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "output_tokens_per_second": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_tokens_per_second": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "path": "runs/042.jsonl",
+  "index_id": "9a3e5b7c1d2f4a6b8c0e2d4f6a8b0c1d",
+  "generation": 7,
+  "status": "ready",
+  "size": 2457600,
+  "bytes_read": 2457600,
+  "sha256": "ccbfb4dcbf7f04b993b7ff2abd8dea341cb89c2909a11473c09201c0b1fe58b7",
+  "growing": false,
+  "session_id": "4e1f0a9c2b7d48e6a3f5c1d9e0b2a7c4",
+  "session_status": "completed",
+  "terminal": true,
+  "origin_ns": "1788609595000000000",
+  "gaps_resident": true,
+  "error_messages_resident": true,
+  "limits_hit": []
+}

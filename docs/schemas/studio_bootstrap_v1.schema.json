@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_bootstrap_v1.schema.json",
+  "title": "Stormlog Studio bootstrap v1",
+  "description": "POST /api/v1/admin/bootstrap, admin token only: a fresh launch URL for stormlog studio url (design §2.4, §5.4). The bootstrap token travels in the URL fragment, which no request line, log or Referer sees.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "url"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.bootstrap"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "url": {
+      "description": "http://<loopback host>:<port>/#/auth?t=<bootstrap token>, with the requested route after it.",
+      "type": "string",
+      "pattern": "^http://(127\\.0\\.0\\.1|localhost|\\[::1\\]):[0-9]{1,5}/#/auth\\?t=[A-Za-z0-9_-]{43,}([&#].*)?$"
+    }
+  }
+}

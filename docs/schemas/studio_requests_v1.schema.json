@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_requests_v1.schema.json",
+  "title": "Stormlog Studio requests v1",
+  "description": "GET /api/v1/artifact/requests (design §5.4): one keyset page of a selection's client requests.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "artifact",
+    "selection",
+    "rows",
+    "next_cursor",
+    "total",
+    "generation_moved"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.requests"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "artifact": {
+      "$ref": "studio_artifact_block_v1.schema.json"
+    },
+    "selection": {
+      "$ref": "studio_selection_block_v1.schema.json"
+    },
+    "rows": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    },
+    "next_cursor": {
+      "description": "Opaque; null on the last page.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "total": {
+      "description": "Rows in the whole selection.",
+      "$ref": "#/$defs/count"
+    },
+    "generation_moved": {
+      "description": "The cursor came from an older generation of the same index; rows added since may be skipped until paging restarts.",
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "criterion": {
+      "description": "slo.CriterionValue: a value in ms, or the reason there is none.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value_ms",
+        "reason",
+        "not_applicable"
+      ],
+      "properties": {
+        "value_ms": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "not_applicable": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ms_or_null": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "ns": {
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)$"
+    },
+    "ns_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ns"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "row": {
+      "description": "One request row (design §5.4): no error_message and no gaps.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session_id",
+        "request_id",
+        "line",
+        "record_id",
+        "line_sha256",
+        "case_id",
+        "phase",
+        "status",
+        "http_status",
+        "error_type",
+        "started_at_ns",
+        "ended_at_ns",
+        "start_ms",
+        "end_ms",
+        "client",
+        "first_chunk_latency_ms",
+        "prompt_tokens",
+        "prompt_token_source",
+        "prompt_token_exact",
+        "output_tokens",
+        "output_token_source",
+        "output_token_exact",
+        "stream",
+        "gap_count",
+        "chunk_count",
+        "finish_reason"
+      ],
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "line": {
+          "description": "0-based line of the record.",
+          "$ref": "#/$defs/count"
+        },
+        "record_id": {
+          "description": "diagnosis_inputs.record_id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "line_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "case_id": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at_ns": {
+          "$ref": "#/$defs/ns_or_null"
+        },
+        "ended_at_ns": {
+          "$ref": "#/$defs/ns_or_null"
+        },
+        "start_ms": {
+          "description": "ms from origin_ns.",
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "end_ms": {
+          "description": "ms from origin_ns.",
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "client": {
+          "description": "slo.client_values of the record, stored at index time.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "client.ttft",
+            "client.ttft_from_intended",
+            "client.e2e",
+            "client.e2e_from_intended",
+            "client.tpot"
+          ],
+          "properties": {
+            "client.ttft": {
+              "$ref": "#/$defs/criterion"
+            },
+            "client.ttft_from_intended": {
+              "$ref": "#/$defs/criterion"
+            },
+            "client.e2e": {
+              "$ref": "#/$defs/criterion"
+            },
+            "client.e2e_from_intended": {
+              "$ref": "#/$defs/criterion"
+            },
+            "client.tpot": {
+              "$ref": "#/$defs/criterion"
+            }
+          }
+        },
+        "first_chunk_latency_ms": {
+          "$ref": "#/$defs/ms_or_null"
+        },
+        "prompt_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prompt_token_source": {
+          "type": "string"
+        },
+        "prompt_token_exact": {
+          "type": "boolean"
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output_token_source": {
+          "type": "string"
+        },
+        "output_token_exact": {
+          "type": "boolean"
+        },
+        "stream": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "gap_count": {
+          "description": "len(chunk_interarrival_ms) as written.",
+          "$ref": "#/$defs/count"
+        },
+        "chunk_count": {
+          "description": "gap_count + 1 when streamed with a TTFT, else null.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "finish_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

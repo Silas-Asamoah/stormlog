@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_error_v1.schema.json",
+  "title": "Stormlog Studio error v1",
+  "description": "The body of every Studio API error (design §5.2), written by contracts.StudioError.document. The HTTP status and the verdict status always pair as the §5.2 table says. httpd (C3) answers two cases before any route runs: route_not_found (404, verdict invalid_input) for a method and path no Route matches, and unsupported_media_type (415, verdict null) for a POST whose Content-Type is not application/json (§7.3 step 5). The examples keyword holds one document for each.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "error"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.error"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "http_status",
+        "verdict_status",
+        "field",
+        "details"
+      ],
+      "properties": {
+        "code": {
+          "description": "Machine-readable code. Known codes (design §5.2): bad_parameter, unknown_parameter, limit_exceeded (400); cursor_mismatch, request_ambiguous, stale_line (409); artifact_not_found, request_not_found, line_out_of_range, route_not_found (404); not_an_inference_artifact, unsupported_artifact, unsupported_version, unreadable, report_too_large (422); unauthorized, bootstrap_invalid, ticket_invalid (401); host_not_allowed, origin_not_allowed, fetch_site_not_allowed, path_not_allowed (403); method_not_allowed (405); body_too_large (413); unsupported_media_type (415); head_too_large (431); busy (503); internal_error (500).",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "description": "Human-readable, scrubbed, at most 512 bytes.",
+          "type": "string",
+          "maxLength": 512
+        },
+        "http_status": {
+          "type": "integer",
+          "enum": [
+            400,
+            401,
+            403,
+            404,
+            405,
+            409,
+            413,
+            415,
+            422,
+            431,
+            500,
+            503
+          ]
+        },
+        "verdict_status": {
+          "description": "The stormlog.exit_codes verdict the status pairs with; null for security rejections, 405, 413, 415, 431 and 503.",
+          "enum": [
+            "usage",
+            "invalid_input",
+            "error",
+            null
+          ]
+        },
+        "field": {
+          "description": "The parameter at fault, when there is one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "description": "Code-specific detail, for example allowed values, or reason for cursor_mismatch and unsupported_artifact. Empty when there is none.",
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "http_status": {
+                "enum": [
+                  400,
+                  409
+                ]
+              }
+            },
+            "required": [
+              "http_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "verdict_status": {
+                "const": "usage"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "http_status": {
+                "enum": [
+                  404,
+                  422
+                ]
+              }
+            },
+            "required": [
+              "http_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "verdict_status": {
+                "const": "invalid_input"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "http_status": {
+                "enum": [
+                  401,
+                  403,
+                  405,
+                  413,
+                  415,
+                  431,
+                  503
+                ]
+              }
+            },
+            "required": [
+              "http_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "verdict_status": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "http_status": {
+                "enum": [
+                  500
+                ]
+              }
+            },
+            "required": [
+              "http_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "verdict_status": {
+                "const": "error"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "examples": [
+    {
+      "format": "stormlog.studio.error",
+      "schema_version": 1,
+      "error": {
+        "code": "route_not_found",
+        "message": "no route for GET /api/v1/nope",
+        "http_status": 404,
+        "verdict_status": "invalid_input",
+        "field": null,
+        "details": {
+          "method": "GET",
+          "path": "/api/v1/nope"
+        }
+      }
+    },
+    {
+      "format": "stormlog.studio.error",
+      "schema_version": 1,
+      "error": {
+        "code": "unsupported_media_type",
+        "message": "POST bodies must be application/json",
+        "http_status": 415,
+        "verdict_status": null,
+        "field": null,
+        "details": {
+          "content_type": "text/plain",
+          "allowed": [
+            "application/json"
+          ]
+        }
+      }
+    }
+  ]
+}

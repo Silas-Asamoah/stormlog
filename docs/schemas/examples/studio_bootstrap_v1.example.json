@@ -1,0 +1,5 @@
+{
+  "format": "stormlog.studio.bootstrap",
+  "schema_version": 1,
+  "url": "http://127.0.0.1:8790/#/auth?t=EXAMPLEbootstrap000000000000000000000000000&route=%2Frequests%3Fartifact%3Druns%252F042.jsonl%26case%3Dc8_in4096_out128"
+}

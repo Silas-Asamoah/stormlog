@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_ticket_v1.schema.json",
+  "title": "Stormlog Studio ticket v1",
+  "description": "POST /api/v1/tickets, bearer: a single-use credential for one exact URL of a bearer_or_ticket route (design §5.4, §7.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "schema_version",
+    "ticket",
+    "url",
+    "expires_in_s"
+  ],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "stormlog.studio.ticket"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "ticket": {
+      "description": "Single use. At least 32 random bytes, base64url without padding.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43,}$"
+    },
+    "url": {
+      "description": "Origin-relative URL to follow: the route, its canonical query and the ticket parameter.",
+      "type": "string",
+      "pattern": "^/api/v1/[^?#]+\\?([^#]*&)?ticket=[A-Za-z0-9_-]{43,}(&[^#]*)?$"
+    },
+    "expires_in_s": {
+      "description": "Seconds until the ticket expires (30).",
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}
