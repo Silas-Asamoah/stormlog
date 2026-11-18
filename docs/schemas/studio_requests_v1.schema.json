@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_requests_v1.schema.json",
   "title": "Stormlog Studio requests v1",
-  "description": "GET /api/v1/artifact/requests (design §5.4): one keyset page of a selection's client requests.",
+  "description": "GET /api/v1/artifact/requests: one keyset page of a selection's client requests.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -90,7 +90,7 @@
       ]
     },
     "ns": {
-      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53 (design §5.1). A missing value is null, never \"0\".",
+      "description": "Integer nanoseconds since the Unix epoch on the client's clock, written as a decimal string because JavaScript numbers lose integer precision above 2^53. A missing value is null, never \"0\".",
       "type": "string",
       "pattern": "^-?(0|[1-9][0-9]*)$"
     },
@@ -105,7 +105,7 @@
       ]
     },
     "row": {
-      "description": "One request row (design §5.4): no error_message and no gaps.",
+      "description": "One request row: no error_message and no gaps.",
       "type": "object",
       "additionalProperties": false,
       "required": [

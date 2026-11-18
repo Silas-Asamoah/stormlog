@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_bootstrap_v1.schema.json",
   "title": "Stormlog Studio bootstrap v1",
-  "description": "POST /api/v1/admin/bootstrap, admin token only: a fresh launch URL for stormlog studio url (design §2.4, §5.4). The bootstrap token travels in the URL fragment, which no request line, log or Referer sees.",
+  "description": "POST /api/v1/admin/bootstrap, admin token only: a fresh launch URL for stormlog studio url. The bootstrap token travels in the URL fragment, which no request line, log or Referer sees.",
   "type": "object",
   "additionalProperties": false,
   "required": [
