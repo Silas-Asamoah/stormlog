@@ -370,3 +370,15 @@ def test_describe_difference_formats_each_kind() -> None:
         baseline_missing_ratio=0.5,
     )
     assert describe_difference(no_values) == "missing 100% vs 50%"
+
+
+def test_non_finite_metadata_counts_as_missing() -> None:
+    selection = _events(40, metadata={"collector_consecutive_failures": float("nan")})
+    baseline = _events(40, metadata={"collector_consecutive_failures": 2})
+    failures = _field(
+        compare_events(selection, baseline, scope="window"),
+        "collector_consecutive_failures",
+    )
+    assert failures.selection_present == 0
+    assert failures.score == pytest.approx(1.0)
+    assert failures.selection_median is None

@@ -21,11 +21,12 @@ of ``high`` or ``low`` with reasons.
 
 from __future__ import annotations
 
+import math
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, get_args
+from typing import Any, Literal, TypedDict, get_args
 
 import numpy as np
 
@@ -664,7 +665,14 @@ def _categorical_comparison(
         field=name,
         kind="categorical",
         score=0.5 * sum(abs(share.delta) for share in shares),
-        **_support(name, selection, baseline, min_events),
+        **_support(
+            selection_size=len(selection),
+            baseline_size=len(baseline),
+            selection_present=sum(value is not None for value in selection),
+            baseline_present=sum(value is not None for value in baseline),
+            min_events=min_events,
+            check_sparse=False,
+        ),
         top_values=tuple(shares[:TOP_VALUE_COUNT]),
     )
 
@@ -673,7 +681,9 @@ def _numeric_values(values: Sequence[object]) -> np.ndarray:
     present = [
         float(value)
         for value in values
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        if isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
     ]
     return np.asarray(present, dtype=float)
 
@@ -688,7 +698,14 @@ def _numeric_comparison(
     reference = _numeric_values(baseline)
     if selected.size == 0 and reference.size == 0:
         return SkippedField(name, "no_data")
-    support = _support(name, selection, baseline, min_events, numeric=True)
+    support = _support(
+        selection_size=len(selection),
+        baseline_size=len(baseline),
+        selection_present=int(selected.size),
+        baseline_present=int(reference.size),
+        min_events=min_events,
+        check_sparse=True,
+    )
     missing_delta = abs(
         support["selection_missing_ratio"] - support["baseline_missing_ratio"]
     )
@@ -710,34 +727,38 @@ def _numeric_comparison(
     )
 
 
+class _Support(TypedDict):
+    confidence: Confidence
+    reasons: tuple[str, ...]
+    selection_present: int
+    baseline_present: int
+    selection_missing_ratio: float
+    baseline_missing_ratio: float
+
+
 def _support(
-    name: str,
-    selection: Sequence[object],
-    baseline: Sequence[object],
-    min_events: int,
     *,
-    numeric: bool = False,
-) -> dict[str, Any]:
-    if numeric:
-        selection_present = int(_numeric_values(selection).size)
-        baseline_present = int(_numeric_values(baseline).size)
-    else:
-        selection_present = sum(value is not None for value in selection)
-        baseline_present = sum(value is not None for value in baseline)
+    selection_size: int,
+    baseline_size: int,
+    selection_present: int,
+    baseline_present: int,
+    min_events: int,
+    check_sparse: bool,
+) -> _Support:
     reasons: list[str] = []
-    if len(selection) < min_events:
+    if selection_size < min_events:
         reasons.append("small_selection")
-    if len(baseline) < min_events:
+    if baseline_size < min_events:
         reasons.append("small_baseline")
-    if numeric and min(selection_present, baseline_present) < min_events:
+    if check_sparse and min(selection_present, baseline_present) < min_events:
         reasons.append("sparse_field")
     return {
         "confidence": "low" if reasons else "high",
         "reasons": tuple(reasons),
         "selection_present": selection_present,
         "baseline_present": baseline_present,
-        "selection_missing_ratio": 1 - selection_present / len(selection),
-        "baseline_missing_ratio": 1 - baseline_present / len(baseline),
+        "selection_missing_ratio": 1 - selection_present / selection_size,
+        "baseline_missing_ratio": 1 - baseline_present / baseline_size,
     }
 
 
