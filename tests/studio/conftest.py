@@ -1,4 +1,4 @@
-"""Fixtures every Studio test file can use (design §9, §10.3 C5).
+"""Fixtures every Studio test file can use.
 
 ``studio_artifacts`` builds each standard artifact once per session, on
 first use; tests that change a file take a copy with ``fresh_artifact``.

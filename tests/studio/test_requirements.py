@@ -1,4 +1,4 @@
-"""Studio's schema tests need jsonschema 4.18+, for referencing (F-6)."""
+"""Studio's schema tests need jsonschema 4.18+, for referencing."""
 
 from __future__ import annotations
 

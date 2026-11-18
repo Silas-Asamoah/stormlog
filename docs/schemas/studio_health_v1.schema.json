@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Silas-Asamoah/stormlog/docs/schemas/studio_health_v1.schema.json",
   "title": "Stormlog Studio health v1",
-  "description": "GET /api/v1/health, public (design §5.4). The page compares instance_id with the one stored beside its token and drops the token when they differ (§7.2).",
+  "description": "GET /api/v1/health, public. The page compares instance_id with the one stored beside its token and drops the token when they differ.",
   "type": "object",
   "additionalProperties": false,
   "required": [

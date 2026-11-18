@@ -1,4 +1,4 @@
-"""The step-0 contract: wire helpers, rows and columns, errors, imports."""
+"""The contract: wire helpers, rows and columns, errors, imports."""
 
 from __future__ import annotations
 
@@ -361,7 +361,7 @@ def test_envelope_refuses_bad_names(name: str) -> None:
         envelope(name, {})
 
 
-def test_artifact_block_lists_the_section_5_1_fields() -> None:
+def test_artifact_block_lists_every_field() -> None:
     block = artifact_block(snapshot())
     assert block == {
         "path": "runs/042.jsonl",
@@ -479,7 +479,7 @@ ERROR_CLASSES: list[tuple[type[StudioError], int, str | None]] = [
 
 
 @pytest.mark.parametrize(("cls", "status", "verdict"), ERROR_CLASSES)
-def test_error_classes_carry_the_section_5_2_status_pairs(
+def test_error_classes_carry_their_status_pairs(
     cls: type[StudioError], status: int, verdict: str | None
 ) -> None:
     error = cls("some_code", "a message", field="status", details={"n": 1})
@@ -537,7 +537,7 @@ def _doc(item: Any) -> str:
 
 
 def test_the_contract_states_who_raises_not_ready() -> None:
-    assert "Only C4's analysis routes raise it" in _doc(NotReady)
+    assert "Only the analysis routes raise it" in _doc(NotReady)
     assert "Never raises :class:`NotReady`" in _doc(IndexRegistry.snapshot)
     assert 'zero-row snapshot with ``status="building"``' in _doc(
         IndexRegistry.snapshot
@@ -686,7 +686,7 @@ def test_every_public_name_is_exported() -> None:
         assert hasattr(contracts, name), name
 
 
-# --- schemas and examples (design §10.2) --------------------------------------
+# --- schemas and examples -----------------------------------------------------
 
 
 def _load(path: Path) -> Any:
@@ -725,7 +725,7 @@ def _walk(node: Any) -> Iterator[Mapping[str, Any]]:
             yield from _walk(value)
 
 
-def test_there_are_step_0_schemas() -> None:
+def test_there_are_the_contract_schemas() -> None:
     assert "studio_error_v1.schema.json" in STUDIO_SCHEMAS
     assert "studio_artifact_block_v1.schema.json" in STUDIO_SCHEMAS
 
@@ -809,7 +809,7 @@ def test_error_schema_names_the_route_and_media_type_codes() -> None:
 
 
 class UnsupportedMediaTypeError(StudioError):
-    """415, as C3's httpd will define it."""
+    """415, as httpd will define it."""
 
     http_status = 415
     verdict_status = None
