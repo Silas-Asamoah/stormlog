@@ -21,8 +21,9 @@ of ``high`` or ``low`` with reasons.
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Callable, Mapping, Sequence
+from bisect import bisect_left
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args
 
@@ -330,6 +331,114 @@ class ComparisonResult:
             "skipped": [row.as_dict() for row in self.skipped],
             "warnings": list(self.warnings),
         }
+
+
+def split_events(
+    filters: ComparisonFilter,
+    events: Sequence[TelemetryEvent],
+) -> tuple[list[TelemetryEvent], list[TelemetryEvent]]:
+    """Split events into the selection and baseline a filter describes.
+
+    Handles the ``rank``, ``window`` and ``session`` scopes. ``fingerprint``
+    scope needs issue evidence; use :func:`split_fingerprint_events`.
+
+    Args:
+        filters: The comparison to run.
+        events: Candidate events, already loaded.
+
+    Returns:
+        The selected events and the baseline events, in input order. Events
+        outside the filter's session, rank or job limits are in neither.
+
+    Raises:
+        ValueError: If called with ``fingerprint`` scope.
+    """
+    if filters.scope == "fingerprint":
+        raise ValueError("fingerprint scope needs issue evidence")
+    selection: list[TelemetryEvent] = []
+    baseline: list[TelemetryEvent] = []
+    for event in events:
+        if not _within_limits(filters, event):
+            continue
+        side = _side(filters, event)
+        if side is not None:
+            (selection if side else baseline).append(event)
+    return selection, baseline
+
+
+def _within_limits(filters: ComparisonFilter, event: TelemetryEvent) -> bool:
+    if filters.job_id is not None and event.job_id != filters.job_id:
+        return False
+    if filters.scope == "rank":
+        return filters.session_id is None or event.session_id == filters.session_id
+    if filters.scope == "window":
+        return event.session_id == filters.session_id and (
+            filters.rank is None or event.rank == filters.rank
+        )
+    return True
+
+
+def _side(filters: ComparisonFilter, event: TelemetryEvent) -> bool | None:
+    """Return True for the selection, False for the baseline, None for neither."""
+    if filters.scope == "rank":
+        return event.rank == filters.rank
+    if filters.scope == "window":
+        start, end = filters.time_start_ns, filters.time_end_ns
+        if start is None or end is None:
+            return None
+        return start <= event.timestamp_ns < end
+    if event.session_id == filters.session_id:
+        return True
+    if filters.baseline_session_ids:
+        return False if event.session_id in filters.baseline_session_ids else None
+    return False
+
+
+def split_fingerprint_events(
+    events: Sequence[TelemetryEvent],
+    hits: Iterable[tuple[str | None, int | None, int | None]],
+    *,
+    window_ns: int = DEFAULT_NEIGHBOR_WINDOW_NS,
+) -> tuple[list[TelemetryEvent], list[TelemetryEvent]]:
+    """Split events into one issue's hits and their neighboring events.
+
+    Args:
+        events: Candidate events, already loaded.
+        hits: ``(session_id, rank, timestamp_ns)`` for each piece of issue
+            evidence. Hits without a session or timestamp cannot be matched to
+            telemetry and are ignored; a ``None`` rank matches any rank.
+        window_ns: How far before and after each hit a neighbor may be.
+
+    Returns:
+        The events that are issue hits, and the other events of the same
+        session that lie within ``window_ns`` of a hit.
+    """
+    hit_keys: set[tuple[str, int | None, int]] = set()
+    hit_times: dict[str, list[int]] = defaultdict(list)
+    for session_id, rank, timestamp_ns in hits:
+        if session_id is None or timestamp_ns is None:
+            continue
+        hit_keys.add((session_id, rank, timestamp_ns))
+        hit_times[session_id].append(timestamp_ns)
+    for times in hit_times.values():
+        times.sort()
+    selection: list[TelemetryEvent] = []
+    baseline: list[TelemetryEvent] = []
+    for event in events:
+        session_times = hit_times.get(event.session_id)
+        if not session_times:
+            continue
+        key = (event.session_id, event.rank, event.timestamp_ns)
+        if key in hit_keys or (event.session_id, None, event.timestamp_ns) in hit_keys:
+            selection.append(event)
+        elif _near_any(session_times, event.timestamp_ns, window_ns):
+            baseline.append(event)
+    return selection, baseline
+
+
+def _near_any(sorted_times: Sequence[int], timestamp_ns: int, window_ns: int) -> bool:
+    index = bisect_left(sorted_times, timestamp_ns - window_ns)
+    return index < len(sorted_times) and sorted_times[index] <= timestamp_ns + window_ns
 
 
 def describe_events(events: Sequence[TelemetryEvent]) -> ComparisonGroup:
@@ -642,4 +751,6 @@ __all__ = [
     "compare_events",
     "describe_events",
     "ks_statistic",
+    "split_events",
+    "split_fingerprint_events",
 ]

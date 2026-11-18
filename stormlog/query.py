@@ -8,7 +8,7 @@ import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -39,6 +39,13 @@ from .issues import (
     normalize_issue_state,
     normalize_text_dimension,
     normalized_error_stem,
+)
+from .outliers import (
+    ComparisonFilter,
+    ComparisonResult,
+    compare_events,
+    split_events,
+    split_fingerprint_events,
 )
 from .phases import (
     PhaseReplayIndex,
@@ -816,6 +823,74 @@ class QueryStore:
             anchor=anchor,
             evidence=evidence,
             warnings=[warning.message for warning in self.catalog.warnings],
+        )
+
+    def compare(self, filters: ComparisonFilter) -> ComparisonResult:
+        """Rank the fields that separate a selection from its baseline.
+
+        Args:
+            filters: The selection, baseline and tuning for the comparison.
+
+        Returns:
+            The ranked comparison over raw telemetry events. Rollups are not
+            used because they keep peaks, not the distributions compared here.
+        """
+        events = [
+            row.event
+            for row in self.query_events(
+                EventFilter(
+                    session_id=(
+                        filters.session_id
+                        if filters.scope in {"rank", "window"}
+                        else None
+                    ),
+                    rank=filters.rank if filters.scope == "window" else None,
+                )
+            )
+        ]
+        warnings = [warning.message for warning in self.catalog.warnings]
+        if filters.scope == "fingerprint":
+            selection, baseline = self._fingerprint_split(filters, events, warnings)
+        else:
+            selection, baseline = split_events(filters, events)
+        return compare_events(
+            selection,
+            baseline,
+            scope=filters.scope,
+            fields=filters.fields,
+            max_values=filters.max_values,
+            min_events=filters.min_events,
+            limit=filters.limit,
+            criteria={
+                key: value
+                for key, value in asdict(filters).items()
+                if value is not None and value != ()
+            },
+            warnings=warnings,
+        )
+
+    def _fingerprint_split(
+        self,
+        filters: ComparisonFilter,
+        events: Sequence[TelemetryEvent],
+        warnings: list[str],
+    ) -> tuple[list[TelemetryEvent], list[TelemetryEvent]]:
+        issues = self.list_issues(IssueFilter(fingerprint_id=filters.fingerprint_id))
+        if not issues:
+            warnings.append(f"no issue has fingerprint {filters.fingerprint_id}")
+            return [], []
+        hits = [
+            (link.session_id, link.rank, link.timestamp_ns)
+            for link in issues[0].evidence
+        ]
+        return split_fingerprint_events(
+            [
+                event
+                for event in events
+                if filters.job_id is None or event.job_id == filters.job_id
+            ],
+            hits,
+            window_ns=filters.window_ns,
         )
 
     def list_issues(
@@ -2794,6 +2869,8 @@ __all__ = [
     "AttachmentStorage",
     "AttachmentFilter",
     "ArtifactCatalog",
+    "ComparisonFilter",
+    "ComparisonResult",
     "CatalogRunEnvelope",
     "CatalogOOMBundle",
     "CatalogSource",

@@ -15,6 +15,8 @@ from stormlog.outliers import (
     compare_events,
     describe_events,
     ks_statistic,
+    split_events,
+    split_fingerprint_events,
 )
 from stormlog.telemetry import TelemetryEvent, telemetry_event_from_record
 
@@ -273,3 +275,58 @@ def test_unknown_field_is_rejected() -> None:
 def test_comparison_filter_validation(kwargs: dict[str, Any], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         ComparisonFilter(**kwargs)
+
+
+def test_split_events_session_scope_ignores_unlisted_sessions() -> None:
+    events = [
+        _event(session_id="pick"),
+        _event(session_id="base"),
+        _event(session_id="other"),
+    ]
+    selection, baseline = split_events(
+        ComparisonFilter(
+            scope="session", session_id="pick", baseline_session_ids=("base",)
+        ),
+        events,
+    )
+    assert [event.session_id for event in selection] == ["pick"]
+    assert [event.session_id for event in baseline] == ["base"]
+
+
+def test_split_events_window_limits_to_session_and_rank() -> None:
+    events = [
+        _event(timestamp_ns=5, rank=0),
+        _event(timestamp_ns=15, rank=0),
+        _event(timestamp_ns=20, rank=0),
+        _event(timestamp_ns=15, rank=1),
+        _event(timestamp_ns=15, session_id="session-b"),
+    ]
+    selection, baseline = split_events(
+        ComparisonFilter(
+            scope="window",
+            session_id="session-a",
+            rank=0,
+            time_start_ns=10,
+            time_end_ns=20,
+        ),
+        events,
+    )
+    assert [event.timestamp_ns for event in selection] == [15]
+    assert [event.timestamp_ns for event in baseline] == [5, 20]
+
+
+def test_split_events_rejects_fingerprint_scope() -> None:
+    with pytest.raises(ValueError, match="issue evidence"):
+        split_events(ComparisonFilter(scope="fingerprint", fingerprint_id="x"), [])
+
+
+def test_split_fingerprint_events_matches_hits_and_neighbors() -> None:
+    events = [_event(timestamp_ns=ts, rank=ts % 2) for ts in (0, 9, 10, 11, 21, 30)]
+    events.append(_event(timestamp_ns=10, session_id="session-b"))
+    selection, baseline = split_fingerprint_events(
+        events,
+        [("session-a", None, 10), ("session-a", 1, 21), (None, 0, 10), ("x", 0, None)],
+        window_ns=1,
+    )
+    assert [event.timestamp_ns for event in selection] == [10, 21]
+    assert [event.timestamp_ns for event in baseline] == [9, 11]
