@@ -14,8 +14,11 @@ so chunk gaps are never called inter-token latency.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
+
+import numpy as np
+import numpy.typing as npt
 
 from .quantiles import (
     OrderStatisticInterval,
@@ -23,6 +26,7 @@ from .quantiles import (
     SufficiencyRule,
     penalized_quantile,
     quantile,
+    quantile_sorted,
     successful_quantile,
 )
 from .report_stats import is_number
@@ -54,20 +58,28 @@ def latency_summary(
     spans: JoinedSpans | None = None,
     rule: SufficiencyRule = SufficiencyRule(),
     levels: Sequence[float] = LEVELS,
+    client_values_of: ValuesOf = client_values,
 ) -> dict[str, Any]:
-    """Quantiles of each latency metric over a case's measured requests."""
-    metrics = {
-        key: _metric(requests, key, client_values, rule, levels)
-        for key in CLIENT_METRICS
-    }
+    """Quantiles of each latency metric over a case's measured requests.
+
+    ``client_values_of`` gives a record's client values. It defaults to
+    ``slo.client_values``; a caller that stored them per row, as Studio's
+    index does, passes a lookup instead. It is called once per successful
+    request, for all the client metrics together.
+    """
+    failures = [r for r in requests if r.get("status") != "ok"]
+    metrics = _metrics(
+        requests, failures, CLIENT_METRICS, client_values_of, rule, levels
+    )
     if spans is not None and spans.by_request:
         joined = spans
 
         def from_span(record: Mapping[str, Any]) -> Mapping[str, CriterionValue]:
             return _server_values(record, joined)
 
-        for key in SERVER_METRICS:
-            metrics[key] = _metric(requests, key, from_span, rule, levels)
+        metrics.update(
+            _metrics(requests, failures, SERVER_METRICS, from_span, rule, levels)
+        )
     return {
         "rule": rule.to_record(),
         "metrics": metrics,
@@ -95,6 +107,22 @@ def unsuccessful_summary(
     }
 
 
+def failure_share(offered: int, successful: int) -> dict[str, Any]:
+    """The share of offered requests that did not succeed, with its counts.
+
+    ``(offered - successful) / offered``; None with the reason
+    ``empty_selection`` when nothing was offered, never 0.0, so an empty
+    selection does not read as a clean one.
+    """
+    failed = offered - successful
+    return {
+        "share": failed / offered if offered else None,
+        "numerator": failed,
+        "denominator": offered,
+        "reason": None if offered else "empty_selection",
+    }
+
+
 def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     """Chunk counts and gaps of the successful streamed responses.
 
@@ -102,13 +130,13 @@ def streaming_summary(requests: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     the server reported; chunk sizes themselves are not recorded.
     """
     streamed = [r for r in requests if _streamed(r)]
-    gaps = [gap for r in streamed for gap in _gaps(r)]
-    chunks = [float(len(_gaps(r)) + 1) for r in streamed]
+    chunks: list[float] = []
+    gaps, largest = _pooled_gaps(streamed, chunks)
     return {
         "granularity": "chunk",
         "responses": len(streamed),
-        "content_chunks_per_response": _spread(chunks),
-        "chunk_interarrival_ms": {**_spread(gaps), "n": len(gaps)},
+        "content_chunks_per_response": spread(chunks),
+        "chunk_interarrival_ms": {**_sorted_spread(gaps, largest), "n": len(gaps)},
         "mean_tokens_per_chunk": _tokens_per_chunk(streamed),
         "note": CHUNK_NOTE,
     }
@@ -122,6 +150,31 @@ def _streamed(record: Mapping[str, Any]) -> bool:
     )
 
 
+def _pooled_gaps(
+    streamed: Sequence[Mapping[str, Any]], chunks: list[float]
+) -> tuple[npt.NDArray[np.float64], float | None]:
+    """Every response's gaps in one sorted float64 array, and the largest gap.
+
+    Appends each response's chunk count to ``chunks``. The array costs 8
+    bytes a gap where a pooled list costs a Python float each. The sort is
+    stable, as ``sorted`` is, and the largest gap is ``max``'s first
+    maximum, so equal values of either sign give the same floats as before.
+    """
+    largest: list[float] = []
+
+    def each() -> Iterator[float]:
+        for record in streamed:
+            gaps = _gaps(record)
+            chunks.append(float(len(gaps) + 1))
+            if gaps:
+                largest.append(max(gaps))
+            yield from gaps
+
+    pooled = np.fromiter(each(), dtype=np.float64)
+    pooled.sort(kind="stable")
+    return pooled, max(largest, default=None)
+
+
 def _gaps(record: Mapping[str, Any]) -> list[float]:
     return [
         float(gap)
@@ -130,30 +183,53 @@ def _gaps(record: Mapping[str, Any]) -> list[float]:
     ]
 
 
-def _metric(
+def _metrics(
     requests: Sequence[Mapping[str, Any]],
-    key: str,
+    failures: Sequence[Mapping[str, Any]],
+    keys: Sequence[str],
     values_of: ValuesOf,
     rule: SufficiencyRule,
     levels: Sequence[float],
-) -> dict[str, Any]:
-    successful: list[float] = []
-    missing = 0
+) -> dict[str, dict[str, Any]]:
+    """Each metric in ``keys``, reading each successful record's values once."""
+    values: dict[str, list[float]] = {key: [] for key in keys}
+    missing = dict.fromkeys(keys, 0)
     for record in requests:
         if record.get("status") != "ok":
             continue
-        value = values_of(record)[key].value_ms
-        if value is None:
-            missing += 1
-        else:
-            successful.append(value)
-    failures = [r for r in requests if r.get("status") != "ok"]
+        criteria = values_of(record)
+        for key in keys:
+            value = criteria[key].value_ms
+            if value is None:
+                missing[key] += 1
+            else:
+                values[key].append(value)
+    return {
+        key: _metric(key, values[key], missing[key], failures, rule, levels)
+        for key in keys
+    }
+
+
+def _metric(
+    key: str,
+    values: list[float],
+    missing: int,
+    failures: Sequence[Mapping[str, Any]],
+    rule: SufficiencyRule,
+    levels: Sequence[float],
+) -> dict[str, Any]:
+    # Sorted once here and passed as presorted, so quantiles reads every
+    # level from this list; only _observed_bound, with timeouts appended,
+    # sorts again.
+    successful = sorted(values)
     timeouts = _timeout_elapsed(failures) if key == "client.e2e" else None
     return {
         "boundary": key.split(".", 1)[0],
         "successful_missing": missing,
         "successful": {
-            _level_key(p): _estimate_record(successful_quantile(successful, p, rule))
+            _level_key(p): _estimate_record(
+                successful_quantile(successful, p, rule, presorted=True)
+            )
             for p in levels
         },
         "failure_penalized": {
@@ -165,6 +241,7 @@ def _metric(
                     rule,
                     timeout_elapsed_ms=timeouts,
                     successful_missing=missing,
+                    presorted=True,
                 )
             )
             for p in levels
@@ -193,7 +270,7 @@ def _timeout_elapsed(failures: Sequence[Mapping[str, Any]]) -> list[float] | Non
 
 
 def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    elapsed = [value for value in map(_elapsed_ms, records) if value is not None]
+    elapsed = [value for value in map(elapsed_ms, records) if value is not None]
     return {
         "count": len(records),
         "elapsed_ms": {
@@ -205,7 +282,7 @@ def _elapsed_record(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _elapsed_ms(record: Mapping[str, Any]) -> float | None:
+def elapsed_ms(record: Mapping[str, Any]) -> float | None:
     """The recorded e2e time, or, for a request sent but abandoned, send to end.
 
     A request cancelled at the drain deadline has no e2e time of its own,
@@ -256,11 +333,22 @@ def _tokens_per_chunk(streamed: Sequence[Mapping[str, Any]]) -> float | None:
     return tokens / chunks if chunks else None
 
 
-def _spread(values: Sequence[float]) -> dict[str, float | None]:
+def spread(values: Sequence[float]) -> dict[str, float | None]:
+    """The median, 95th percentile and maximum of ``values``; None when empty.
+
+    The report's shape for a pool of chunk gaps or chunk counts, and Studio's
+    for one request's gaps.
+    """
+    return _sorted_spread(sorted(values), max(values, default=None))
+
+
+def _sorted_spread(
+    ordered: Sequence[float] | npt.NDArray[np.float64], largest: float | None
+) -> dict[str, float | None]:
     return {
-        "p50": quantile(values, 0.5),
-        "p95": quantile(values, 0.95),
-        "max": max(values, default=None),
+        "p50": quantile_sorted(ordered, 0.5),
+        "p95": quantile_sorted(ordered, 0.95),
+        "max": largest,
     }
 
 
@@ -273,7 +361,10 @@ __all__ = [
     "CLIENT_METRICS",
     "LEVELS",
     "SERVER_METRICS",
+    "elapsed_ms",
+    "failure_share",
     "latency_summary",
+    "spread",
     "streaming_summary",
     "unsuccessful_summary",
 ]

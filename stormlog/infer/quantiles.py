@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Literal
 
+import numpy as np
+import numpy.typing as npt
 from scipy import stats
 
 Tails = Literal["symmetric", "narrowest"]
@@ -118,12 +120,26 @@ def quantile(values: Sequence[float], p: float) -> float | None:
     """
     if not values or not 0 <= p <= 1:
         return None
-    ordered = sorted(values)
-    rank = p * (len(ordered) - 1)
+    return quantile_sorted(sorted(values), p)
+
+
+def quantile_sorted(
+    ordered: Sequence[float] | npt.NDArray[np.float64], p: float
+) -> float | None:
+    """``quantile`` of values already in ascending order, without sorting them.
+
+    A caller that reads several levels from one large sample sorts it once,
+    for example into a float64 array, and reads each level here. The
+    arithmetic is ``quantile``'s, so the result is the same float.
+    """
+    count = len(ordered)
+    if not count or not 0 <= p <= 1:
+        return None
+    rank = p * (count - 1)
     lower = int(rank)
-    upper = min(lower + 1, len(ordered) - 1)
+    upper = min(lower + 1, count - 1)
     weight = rank - lower
-    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+    return float(ordered[lower] * (1.0 - weight) + ordered[upper] * weight)
 
 
 def quantile_minimum_n(
@@ -149,11 +165,14 @@ def quantile_interval(
     rule: SufficiencyRule = SufficiencyRule(),
     *,
     penalized: int = 0,
+    presorted: bool = False,
 ) -> OrderStatisticInterval | None:
     """The rule's order-statistic interval, or None when it does not exist.
 
     ``penalized`` failures rank above every value, so an upper rank among
-    them leaves the upper bound unknown.
+    them leaves the upper bound unknown. With ``presorted`` the caller
+    promises ``values`` are already in ascending order, and they are read
+    as given instead of sorted again.
     """
     _check_level(p)
     n = len(values) + penalized
@@ -161,7 +180,7 @@ def quantile_interval(
     if ranks is None:
         return None
     lower, upper = ranks
-    ordered = sorted(values)
+    ordered = values if presorted else sorted(values)
     if lower > len(ordered):
         return None
     return OrderStatisticInterval(
@@ -174,19 +193,32 @@ def quantile_interval(
 
 
 def successful_quantile(
-    values: Sequence[float], p: float, rule: SufficiencyRule = SufficiencyRule()
+    values: Sequence[float],
+    p: float,
+    rule: SufficiencyRule = SufficiencyRule(),
+    *,
+    presorted: bool = False,
 ) -> QuantileEstimate:
-    """A quantile of the successful requests' latencies."""
+    """A quantile of the successful requests' latencies.
+
+    With ``presorted`` the caller promises ``values`` are in ascending
+    order; the estimate is then the same, without sorting them again.
+    """
     return QuantileEstimate(
         estimand="successful",
         p=p,
-        value_ms=quantile(values, p),
+        value_ms=_quantile(values, p, presorted),
         n=len(values),
         sufficient=len(values) >= _minimum_n(p, rule),
         n_min=_minimum_n(p, rule),
         n_min_exists=_minimum_n(p, _EXISTS),
-        interval=quantile_interval(values, p, rule),
+        interval=quantile_interval(values, p, rule, presorted=presorted),
     )
+
+
+def _quantile(values: Sequence[float], p: float, presorted: bool) -> float | None:
+    """``quantile``, skipping its sort when the caller already sorted."""
+    return quantile_sorted(values, p) if presorted else quantile(values, p)
 
 
 def penalized_quantile(
@@ -197,8 +229,12 @@ def penalized_quantile(
     *,
     timeout_elapsed_ms: Sequence[float] | None = None,
     successful_missing: int = 0,
+    presorted: bool = False,
 ) -> QuantileEstimate:
     """A quantile over every offered request, failures ranked worst.
+
+    With ``presorted`` the caller promises ``successful`` is in ascending
+    order; the estimate is then the same, without sorting it again.
 
     ``successful_missing`` counts successful requests with no value. They
     belong to the offered count but cannot be ranked, so the estimate is
@@ -230,12 +266,14 @@ def penalized_quantile(
     return QuantileEstimate(
         estimand="failure_penalized",
         p=p,
-        value_ms=None if in_failures else quantile(successful, level),
+        value_ms=None if in_failures else _quantile(successful, level, presorted),
         n=offered,
         sufficient=offered >= _minimum_n(p, rule),
         n_min=_minimum_n(p, rule),
         n_min_exists=_minimum_n(p, _EXISTS),
-        interval=quantile_interval(successful, p, rule, penalized=failures),
+        interval=quantile_interval(
+            successful, p, rule, penalized=failures, presorted=presorted
+        ),
         penalized=in_failures,
         observed_lower_bound_ms=(
             _observed_bound(successful, failures, p, timeout_elapsed_ms)
@@ -394,5 +432,6 @@ __all__ = [
     "quantile",
     "quantile_interval",
     "quantile_minimum_n",
+    "quantile_sorted",
     "successful_quantile",
 ]
