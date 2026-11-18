@@ -1,4 +1,4 @@
-"""Stormlog Studio: a local web workspace for inference artifacts (#227).
+"""Stormlog Studio: a local web workspace for inference artifacts.
 
 Studio is one loopback HTTP server that reads Stormlog artifacts under a
 workspace root, computes every displayed value with Stormlog's own Python

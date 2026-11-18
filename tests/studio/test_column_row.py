@@ -1,4 +1,4 @@
-"""A column-backed RequestRow, as C1's index.ColumnRow will be (F-1, F-7).
+"""A column-backed RequestRow, as index.ColumnRow will be.
 
 The pre-commit mypy hook checks this file, so it fails if the contract
 declares a row attribute that a read-only property cannot override.
